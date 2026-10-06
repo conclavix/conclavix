@@ -1,5 +1,7 @@
 import { ObjectId } from 'mongodb';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CommentRepository } from '../src/modules/comments/repository.js';
+import { IssueRepository } from '../src/modules/issues/repository.js';
 import { createTestContext, type TestContext } from './helpers.js';
 import { createFixture, type Fixture } from './scheduler-helpers.js';
 
@@ -256,5 +258,128 @@ describe('scheduler', () => {
     await expect(
       fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd: 0 }),
     ).rejects.toThrow(/already finished/);
+  });
+
+  describe('comments on in_review issues', () => {
+    const inReview = async () => {
+      const agent = await fx.agent();
+      const issue = await fx.issue({ title: 'needs a decision', assigneeAgentId: agent.id });
+      await fx.scheduler.processPendingWakes();
+      await finishLast(new Date());
+      await fx.patch(issue.key, { status: 'in_review' });
+      expect(await fx.pendingWakes()).toBe(0);
+      return { agent, issue };
+    };
+
+    it('moves the issue back to in_progress and wakes the assignee on a board comment', async () => {
+      const { agent, issue } = await inReview();
+      const response = await ctx.request({
+        method: 'POST',
+        url: `/api/issues/${issue.key}/comments`,
+        payload: { body: 'go with option B' },
+      });
+      expect(response.statusCode).toBe(201);
+      expect(await issueDoc(issue.id)).toMatchObject({ status: 'in_progress' });
+      expect(await fx.pendingWakes()).toBe(1);
+      expect(await lastWake(issue.id)).toMatchObject({ reason: 'comment', processedAt: null });
+
+      expect(await fx.scheduler.processPendingWakes()).toEqual({ run: 1, skip: 0, defer: 0 });
+      expect(fx.dispatcher.runs.at(-1)).toMatchObject({ reason: 'comment' });
+      expect(fx.dispatcher.runs.at(-1)?.agentId.toHexString()).toBe(agent.id);
+    });
+
+    it('keeps every answer when two board comments race on the same review', async () => {
+      const { issue } = await inReview();
+      const responses = await Promise.all([comment(issue.key), comment(issue.key)]);
+      expect(responses.map((r) => r.statusCode)).toEqual([201, 201]);
+      expect(
+        await ctx.database.collections.comments.countDocuments({ issueId: new ObjectId(issue.id) }),
+      ).toBe(2);
+      expect(await issueDoc(issue.id)).toMatchObject({ status: 'in_progress' });
+      expect(await fx.pendingWakes()).toBe(1);
+      expect(await lastWake(issue.id)).toMatchObject({ reason: 'comment' });
+    });
+
+    it('posts the comment the ordinary way when the review was answered meanwhile', async () => {
+      const { issue } = await inReview();
+      const update = IssueRepository.prototype.update;
+      const spy = vi
+        .spyOn(IssueRepository.prototype, 'update')
+        .mockImplementationOnce(async function (this: IssueRepository, ...args) {
+          // Another answer lands between create()'s read and its transaction.
+          await ctx.database.collections.issues.updateOne(
+            { _id: new ObjectId(issue.id) },
+            { $set: { status: 'in_progress' } },
+          );
+          return update.apply(this, args);
+        });
+      try {
+        expect((await comment(issue.key)).statusCode).toBe(201);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(
+        await ctx.database.collections.comments.countDocuments({ issueId: new ObjectId(issue.id) }),
+      ).toBe(1);
+      expect(await issueDoc(issue.id)).toMatchObject({ status: 'in_progress' });
+      expect(await fx.pendingWakes()).toBe(1);
+      expect(await lastWake(issue.id)).toMatchObject({ reason: 'comment' });
+    });
+
+    it('posts the comment the ordinary way when the review was closed under a closed parent meanwhile', async () => {
+      const agent = await fx.agent();
+      const parent = await fx.issue({ title: 'parent' });
+      const issue = await fx.issue({
+        title: 'child in review',
+        assigneeAgentId: agent.id,
+        parentId: parent.id,
+      });
+      await fx.scheduler.processPendingWakes();
+      await finishLast(new Date());
+      await fx.patch(issue.key, { status: 'in_review' });
+      expect(await fx.pendingWakes()).toBe(0);
+      const update = IssueRepository.prototype.update;
+      const spy = vi
+        .spyOn(IssueRepository.prototype, 'update')
+        .mockImplementationOnce(async function (this: IssueRepository, ...args) {
+          // The agent finishes the child and the parent closes before the answer's transaction,
+          // so moving the child back to in_progress is no longer allowed.
+          await ctx.database.collections.issues.updateMany(
+            { _id: { $in: [new ObjectId(issue.id), new ObjectId(parent.id)] } },
+            { $set: { status: 'done', closedAt: new Date() } },
+          );
+          return update.apply(this, args);
+        });
+      try {
+        expect((await comment(issue.key)).statusCode).toBe(201);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(
+        await ctx.database.collections.comments.countDocuments({ issueId: new ObjectId(issue.id) }),
+      ).toBe(1);
+      expect(await issueDoc(issue.id)).toMatchObject({ status: 'done' });
+      expect(await fx.pendingWakes()).toBe(0);
+    });
+
+    it('leaves the issue in review and wakes nobody on an agent comment', async () => {
+      const { issue } = await inReview();
+      const other = await fx.agent();
+      await new CommentRepository(ctx.database).create(
+        issue.key,
+        { body: 'I agree with option B' },
+        { type: 'agent', agentId: other.id },
+      );
+      expect(await issueDoc(issue.id)).toMatchObject({ status: 'in_review' });
+      expect(await fx.pendingWakes()).toBe(0);
+    });
+
+    it('keeps an unassigned in_review issue in review on a board comment', async () => {
+      const issue = await fx.issue({ title: 'unassigned' });
+      await fx.patch(issue.key, { status: 'in_review' });
+      await comment(issue.key);
+      expect(await issueDoc(issue.id)).toMatchObject({ status: 'in_review' });
+      expect(await fx.pendingWakes()).toBe(0);
+    });
   });
 });

@@ -152,7 +152,16 @@ export class IssueRepository {
     return toIssue(doc);
   }
 
-  async update(ref: string, input: UpdateIssueInput, within?: WithinUpdate): Promise<Issue> {
+  /**
+   * `wakes: false` leaves the wakes to a `within` that queues its own in the transaction, so a
+   * post-commit wake cannot start a second run after the first one was already picked up.
+   */
+  async update(
+    ref: string,
+    input: UpdateIssueInput,
+    within?: WithinUpdate,
+    { wakes = true }: { wakes?: boolean } = {},
+  ): Promise<Issue> {
     const { id } = await this.resolveId(ref);
     const moves = input.status !== undefined || input.columnId !== undefined;
     const needs = {
@@ -190,7 +199,9 @@ export class IssueRepository {
     if (!after) {
       throw notFound('Issue');
     }
-    await wakeOnIssueChange(this.collections, before, after);
+    if (wakes) {
+      await wakeOnIssueChange(this.collections, before, after);
+    }
     return toIssue(after);
   }
 
