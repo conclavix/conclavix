@@ -83,6 +83,71 @@ describe('CodeWorkspace.commitIssueWork', () => {
     expect(result.stats).toEqual({ files: 0, insertions: 0, deletions: 0 });
   });
 
+  /** One run: commit what is in the clone against the current server tip, then sync. */
+  async function runAndSync(message: string) {
+    const start = await ws.branchTip(PROJECT, ISSUE);
+    const result = await ws.commitIssueWork(PROJECT, ISSUE, {
+      author: AUTHOR,
+      message,
+      base: start,
+    });
+    const sync = await ws.syncIssueBranch(PROJECT, ISSUE, false);
+    return { start, result, sync };
+  }
+
+  it('continues a re-created clone from the synced issue branch', async () => {
+    writeFileSync(join(clone, 'a.txt'), 'a\n');
+    const first = await runAndSync('first');
+    await ws.removeIssueWorkspace(PROJECT, ISSUE, false);
+
+    const again = await ws.createIssueWorkspace(PROJECT, ISSUE);
+    expect(again.created).toBe(true);
+    expect(again.head).toBe(first.sync.after);
+    expect(git(clone, 'rev-parse', 'HEAD')).toBe(first.sync.after);
+    expect(readFileSync(join(clone, 'a.txt'), 'utf8')).toBe('a\n');
+
+    writeFileSync(join(clone, 'b.txt'), 'b\n');
+    const second = await runAndSync('second');
+    expect(second.result.rewritten).toBe(false);
+    expect(git(clone, 'rev-parse', `${second.result.head}^`)).toBe(first.sync.after);
+    expect(second.sync.after).toBe(second.result.head);
+  });
+
+  it('commits on top of the server tip when the agent reset the branch below it', async () => {
+    writeFileSync(join(clone, 'a.txt'), 'a\n');
+    const first = await runAndSync('first');
+    // The agent undoes the synced commit and redoes the work differently.
+    git(clone, 'reset', '--quiet', '--mixed', 'HEAD~1');
+    writeFileSync(join(clone, 'a.txt'), 'a, done differently\n');
+    writeFileSync(join(clone, 'b.txt'), 'b\n');
+    commitAll(clone, 'agent redo');
+
+    const second = await runAndSync('second');
+    expect(second.start).toBe(first.sync.after);
+    expect(second.result.rewritten).toBe(true);
+    expect(second.result.agentCommits).toBe(0);
+    expect(second.result.stats).toEqual({ files: 2, insertions: 2, deletions: 1 });
+    expect(git(clone, 'rev-parse', `${second.result.head}^`)).toBe(first.sync.after);
+    expect(git(clone, 'rev-parse', 'HEAD')).toBe(second.result.head);
+    expect(second.sync.after).toBe(second.result.head);
+    const repo = ws.repoDir(PROJECT);
+    expect(git(repo, 'show', 'cvx/COD-4:a.txt')).toBe('a, done differently');
+    expect(git(repo, 'show', 'cvx/COD-4:b.txt')).toBe('b');
+  });
+
+  it('keeps the server tip when the agent rewrote the branch without changing the tree', async () => {
+    writeFileSync(join(clone, 'a.txt'), 'a\n');
+    const first = await runAndSync('first');
+    git(clone, 'commit', '--quiet', '--amend', '-m', 'reworded');
+
+    const second = await runAndSync('second');
+    expect(second.result.rewritten).toBe(true);
+    expect(second.result.commit).toBeNull();
+    expect(second.result.head).toBe(first.sync.after);
+    expect(git(clone, 'rev-parse', 'HEAD')).toBe(first.sync.after);
+    expect(second.sync.after).toBe(first.sync.after);
+  });
+
   it('replaces the clone configuration, so filters and hooks planted there never run', async () => {
     const marker = join(root.dir, 'pwned');
     const config = join(clone, '.git', 'config');
