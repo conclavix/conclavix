@@ -111,8 +111,9 @@ export class CommentRepository {
       }
       // update() validates the move before `within` runs, so an issue that left in_review
       // meanwhile can fail there (e.g. reopening under a closed parent); fall back in that case too.
-      const now = await findIssueByRef(collections, issue._id.toHexString());
-      if (!answersReview(now, doc.author)) {
+      // A failing re-read (e.g. the same outage) must not hide why the update failed.
+      const now = await findIssueByRef(collections, issue._id.toHexString()).catch(() => null);
+      if (now && !answersReview(now, doc.author)) {
         return false;
       }
       throw error;
