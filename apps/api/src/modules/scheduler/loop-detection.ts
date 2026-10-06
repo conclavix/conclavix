@@ -1,15 +1,22 @@
 import { ObjectId, type ClientSession } from 'mongodb';
-import { DEFAULT_MAX_IDLE_RUNS_PER_ISSUE, FINISHED_RUN_STATUSES } from '@conclavix/core';
+import {
+  DEFAULT_MAX_IDLE_RUNS_PER_ISSUE,
+  FINISHED_RUN_STATUSES,
+  idleLimitFromLegacy,
+} from '@conclavix/core';
 import type { AgentDoc, Collections, Database, RunDoc } from '../../db.js';
 
 /**
- * The agent's idle-run limit. Agents not yet migrated still carry the limit under its old name,
- * which the scheduler process may read before the API has migrated them.
+ * The agent's idle-run limit. Agents not yet migrated still carry the former hourly limit, which
+ * the scheduler process may read before the API has migrated them; it is converted the same way.
  */
 export function idleRunLimit(agent: Pick<AgentDoc, 'limits'>): number {
   const limits = agent.limits as Partial<AgentDoc['limits']> & { maxRunsPerIssuePerHour?: number };
   return (
-    limits.maxIdleRunsPerIssue ?? limits.maxRunsPerIssuePerHour ?? DEFAULT_MAX_IDLE_RUNS_PER_ISSUE
+    limits.maxIdleRunsPerIssue ??
+    (limits.maxRunsPerIssuePerHour === undefined
+      ? DEFAULT_MAX_IDLE_RUNS_PER_ISSUE
+      : idleLimitFromLegacy(limits.maxRunsPerIssuePerHour))
   );
 }
 

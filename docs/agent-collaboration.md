@@ -141,8 +141,11 @@ With `N = maxIdleRunsPerIssue` (per agent, 1 to 60, default 2):
    agent back to active when it can continue; its pending wakes are skipped while it is paused.
 
 With the default of 2 the pause comes after 3 idle runs, as before the backoff existed. Agents
-stored before this limit kept their `maxRunsPerIssuePerHour` value as `maxIdleRunsPerIssue`, and
-the API still accepts the old field name in `limits` (it is ignored when the new one is given).
+stored before this limit had `maxRunsPerIssuePerHour` instead; on the first start it becomes
+`maxIdleRunsPerIssue`, capped at 2 (a value of 1 stays 1). An hourly run count is no idle-run count,
+and the cap keeps the pause of every existing agent at 3 idle runs or fewer, as it was; raise the
+limit in the agent settings where more patience is wanted. The API still accepts the old field name
+in `limits`, converted the same way (it is ignored when the new one is given).
 
 Example: Mr. Green delegates integration to the Integrations Agent, which delegates the review to
 the PR Reviewer. With `PR Reviewer reports to Mr. Green` set to wake, the closed review wakes the

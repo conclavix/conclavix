@@ -37,7 +37,7 @@ describe('agents and org chart', () => {
     });
     expect(created.statusCode).toBe(201);
     expect(created.json().limits).toEqual({
-      maxIdleRunsPerIssue: 6,
+      maxIdleRunsPerIssue: 2,
       maxCostPerRunUsd: 1,
       maxCostPerDayUsd: 5,
     });

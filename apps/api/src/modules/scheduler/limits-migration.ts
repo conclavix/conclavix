@@ -1,3 +1,4 @@
+import { DEFAULT_MAX_IDLE_RUNS_PER_ISSUE } from '@conclavix/core';
 import type { Collections } from '../../db.js';
 
 export interface IdleLimitMigration {
@@ -6,9 +7,11 @@ export interface IdleLimitMigration {
 }
 
 /**
- * Move `limits.maxRunsPerIssuePerHour` to `limits.maxIdleRunsPerIssue`, keeping its value (an
- * agent that already has the new field keeps that one), and release wakes still deferred by the
- * former hourly run window, which no longer exists. Idempotent, so it runs on every start.
+ * Move `limits.maxRunsPerIssuePerHour` to `limits.maxIdleRunsPerIssue`, capped at the default like
+ * `idleLimitFromLegacy` (an hourly value is no idle-run value, and the loop guard of an existing
+ * agent must not get weaker; an agent that already has the new field keeps that one), and release
+ * wakes still deferred by the former hourly run window, which no longer exists. Idempotent, so it
+ * runs on every start.
  */
 export async function migrateIdleRunLimit(collections: Collections): Promise<IdleLimitMigration> {
   const agents = await collections.agents.updateMany(
@@ -17,7 +20,10 @@ export async function migrateIdleRunLimit(collections: Collections): Promise<Idl
       {
         $set: {
           'limits.maxIdleRunsPerIssue': {
-            $ifNull: ['$limits.maxIdleRunsPerIssue', '$limits.maxRunsPerIssuePerHour'],
+            $ifNull: [
+              '$limits.maxIdleRunsPerIssue',
+              { $min: ['$limits.maxRunsPerIssuePerHour', DEFAULT_MAX_IDLE_RUNS_PER_ISSUE] },
+            ],
           },
         },
       },

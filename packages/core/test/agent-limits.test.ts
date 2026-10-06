@@ -15,14 +15,17 @@ describe('agent limits', () => {
     });
   });
 
-  it('takes the former maxRunsPerIssuePerHour as the idle-run limit', () => {
+  it('converts the former maxRunsPerIssuePerHour, capped at the default', () => {
     expect(agentLimitsSchema.parse({ maxRunsPerIssuePerHour: 5 })).toMatchObject({
-      maxIdleRunsPerIssue: 5,
+      maxIdleRunsPerIssue: 2,
+    });
+    expect(agentLimitsSchema.parse({ maxRunsPerIssuePerHour: 1 })).toMatchObject({
+      maxIdleRunsPerIssue: 1,
     });
     expect(
       agentLimitsSchema.parse({ maxRunsPerIssuePerHour: 5, maxIdleRunsPerIssue: 3 }),
     ).toMatchObject({ maxIdleRunsPerIssue: 3 });
-    expect(() => agentLimitsSchema.parse({ maxRunsPerIssuePerHour: 61 })).toThrow();
+    expect(() => agentLimitsSchema.parse({ maxRunsPerIssuePerHour: 0 })).toThrow();
     expect(() => agentLimitsSchema.parse({ maxRunsPerHour: 3 })).toThrow();
   });
 });
