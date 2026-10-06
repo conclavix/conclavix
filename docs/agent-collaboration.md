@@ -67,6 +67,21 @@ delegation, so closing it again wakes the delegator as before.
   that the tool refuses and the agent has to ask the board, which can still reopen it with
   `PATCH /api/issues/:ref`.
 
+## Comments and `in_review`
+
+A comment wakes the assignee (`comment` wake) while the issue is `todo` or `in_progress`, unless
+the assignee wrote it. Agents set `in_review` when they need the board, so a **board or user**
+comment on an `in_review` issue with an assignee is the answer: in one transaction the comment is
+written, the issue moves back to `in_progress` (its board column follows) and the assignee gets a
+`comment` wake for that issue. Moving at comment time keeps one rule for the scheduler (only `todo`
+and `in_progress` issues are run, swept and manually woken) and shows on the board that the ball is
+with the agent again; the agent sets `in_review` again when it needs the board once more. The
+scheduler gates apply as for every wake (paused agent, project access, deferral on the run and cost
+limits). **Agent comments never wake on `in_review`** and leave the status alone, so agents cannot
+ping-pong an issue that waits for the board.
+If the issue left `in_review` between the read and the transaction (two board answers at once, or
+the agent changed the status), the comment is posted the ordinary way instead of being refused.
+
 ## Who is woken when delegated work closes
 
 When an issue that an agent delegated (`delegatedBy`) closes:
