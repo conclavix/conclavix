@@ -147,13 +147,17 @@ export function unitProperties(config, options, ids, { skillsDir } = {}) {
 /**
  * Arguments of systemd-run: a transient service that gets the caller's stdio and is waited for.
  * The unit starts the installed wrapper, which execs claude, or in probe mode the probe script
- * through PROBE_SHELL.
+ * through PROBE_SHELL. The service manager would expand `${NAME}` and `$NAME` in the command line
+ * from the unit's environment, which holds none of the run's variables: the MCP config's
+ * `Bearer ${CONCLAVIX_RUN_BEARER}` would reach claude as `Bearer `. The arguments therefore pass
+ * unexpanded, and claude expands the reference itself from the environment the wrapper sets.
  */
 export function systemdRunArgs(config, options, ids, extra = {}) {
   const program = extra.probe ? [PROBE_SHELL, probePath(config, options)] : [config.claudeBin];
   return [
     `--unit=${unitName(options)}`,
     '--service-type=exec',
+    '--expand-environment=no',
     '--quiet',
     '--pipe',
     '--wait',

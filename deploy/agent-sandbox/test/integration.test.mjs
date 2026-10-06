@@ -47,6 +47,7 @@ bwrap --unshare-all --die-with-parent --ro-bind / / --proc /proc --dev /dev -- /
 if [[ $1 == memory ]]; then head -c 600M /dev/zero | tail > /dev/null; fi
 if [[ $1 == sleep ]]; then sleep 300; fi
 if [[ $1 == grow ]]; then head -c 30M /dev/zero > big.bin; fi
+if [[ $1 == args ]]; then printf 'arg=%s\n' "$2"; fi
 if [[ $1 == stdin ]]; then echo "stdin-type=$(stat -L -c %F /dev/stdin)"; echo "stdin=$(base64 -w0)"; fi
 exit 0
 `;
@@ -139,7 +140,7 @@ describe(
           TAG,
           ...extra,
           '--',
-          mode,
+          ...[mode].flat(),
         ],
         {
           ...(typeof stdin === 'string' ? { input: stdin } : { stdio: [stdin, 'pipe', 'pipe'] }),
@@ -192,6 +193,14 @@ describe(
       } finally {
         closeSync(fd);
       }
+    });
+
+    // systemd would otherwise expand these from the unit's environment before the program starts.
+    it('hands variable references in the arguments to the program unexpanded', () => {
+      const literal = '${CONCLAVIX_RUN_BEARER} $HOME';
+      const result = runProbe('a'.repeat(24), ['args', literal]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(result.stdout.split('\n').includes(`arg=${literal}`), result.stdout);
     });
 
     it('starts units when the policy root is mounted noexec, like /run on Debian', () => {

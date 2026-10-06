@@ -190,6 +190,13 @@ describe('unitProperties', () => {
     assert.equal(args.at(args.indexOf('--') + 3), '-p');
   });
 
+  it('passes the claude flags without environment expansion by the service manager', () => {
+    const args = systemdRunArgs(config, options, ids);
+    const separator = args.indexOf('--');
+    assert.ok(args.indexOf('--expand-environment=no') > -1);
+    assert.ok(args.indexOf('--expand-environment=no') < separator);
+  });
+
   it('starts the probe through its interpreter, never as a program from the policy directory', () => {
     const args = systemdRunArgs(config, options, ids, { probe: true });
     const command = args.slice(args.indexOf('--') + 1);
