@@ -1,0 +1,86 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings", "scope_findings", "summary"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "file",
+          "line",
+          "severity",
+          "rule",
+          "category",
+          "title",
+          "rationale",
+          "evidence",
+          "confidence"
+        ],
+        "properties": {
+          "file": { "type": "string" },
+          "line": { "type": "integer", "minimum": 1 },
+          "end_line": { "type": "integer", "minimum": 1 },
+          "severity": { "type": "string", "enum": ["blocking", "non-blocking"] },
+          "rule": {
+            "type": "string",
+            "enum": ["B1", "B2", "B3", "B4", "B5", "B6", "N1", "N2", "N3"]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "atomicity",
+              "concurrency",
+              "stuck_state",
+              "run_bounds",
+              "wake",
+              "secrets",
+              "validation",
+              "error_handling",
+              "lifecycle",
+              "frontend_requests",
+              "logic",
+              "tests",
+              "scope",
+              "other"
+            ]
+          },
+          "title": { "type": "string" },
+          "rationale": { "type": "string" },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["file", "line", "note"],
+              "properties": {
+                "file": { "type": "string" },
+                "line": { "type": "integer", "minimum": 1 },
+                "note": { "type": "string" }
+              }
+            }
+          },
+          "suggestion": { "type": "string" },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "scope_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "severity", "description"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["out_of_scope", "missing_requirement"] },
+          "severity": { "type": "string", "enum": ["blocking", "non-blocking"] },
+          "file": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "summary": { "type": "string" }
+  }
+}

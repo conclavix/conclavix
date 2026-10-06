@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+deploy/conclavix.env
+deploy/hindsight.env
+deploy/mongo.env
+deploy/redis.env
+deploy/runner.env
+data/

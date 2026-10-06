@@ -1,0 +1,16 @@
+{
+  "codeRoot": "/srv/conclavix/code",
+  "runnerWorkspacesRoot": "/srv/conclavix/workspaces",
+  "agentUser": "cvx-agent",
+  "ownerUser": "cvx-runner",
+  "codeGroup": "cvx-code",
+  "claudeBin": "/usr/bin/claude",
+  "allowedDomains": ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org"],
+  "maxLimits": {
+    "memoryMaxBytes": 17179869184,
+    "cpuQuotaPercent": 800,
+    "tasksMax": 4096,
+    "runtimeMaxSec": 14400,
+    "diskLimitBytes": 53687091200
+  }
+}

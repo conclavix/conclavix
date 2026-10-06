@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision", "repair_edits", "summary"],
+  "properties": {
+    "decision": { "type": "string", "enum": ["repaired", "needs_human"] },
+    "repair_edits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "reason"],
+        "properties": {
+          "path": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "summary": { "type": "string" }
+  }
+}

@@ -1,0 +1,237 @@
+name: Review
+
+# Independent Claude review of pull requests. See docs/review.md.
+# Claude runs in the `review` job with read-only repository access and only the Read, Grep and Glob
+# tools. The `publish` job never runs Claude or PR code; it posts the review and the `review` status.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request to review blind (eval mode, nothing is posted to the PR)
+        required: true
+        type: number
+      head_sha:
+        description: Optional head commit to review instead of the PR's latest head
+        required: false
+        type: string
+        default: ''
+
+permissions: {}
+
+concurrency:
+  group: review-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fork-notice:
+    name: Fork notice
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Explain why fork PRs are not reviewed automatically
+        run: |
+          msg="Pull requests from forks are not reviewed automatically; see docs/review.md (fork policy)."
+          echo "::notice::$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+
+  review:
+    name: Review
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       !github.event.pull_request.draft)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read # check out the PR head and its history
+      pull-requests: read # eval mode reads the PR's title, description and base
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+      blocking: ${{ steps.finalize.outputs.blocking }}
+    steps:
+      - name: Check that the Claude token is configured
+        id: gate
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }} # zizmor: ignore[secrets-outside-env] repository secret by decision, see docs/review.md
+        run: |
+          if [ "$HAS_TOKEN" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::CLAUDE_CODE_OAUTH_TOKEN is not available to this run, skipping the review."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the pull request head
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: >-
+            ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha
+            || inputs.head_sha || format('refs/pull/{0}/head', inputs.pr_number) }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Load the reviewer from the trusted revision
+        if: steps.gate.outputs.enabled == 'true'
+        id: trusted
+        env:
+          TRUSTED_SHA: >-
+            ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha
+            || github.sha }}
+        run: |
+          dest="$RUNNER_TEMP/trusted"
+          mkdir -p "$dest"
+          if git cat-file -e "$TRUSTED_SHA:.github/review/prompt.md" 2>/dev/null; then
+            source_rev="$TRUSTED_SHA"
+          else
+            source_rev="$(git rev-parse HEAD)"
+            echo "::warning::No reviewer on $TRUSTED_SHA yet; using the pull request's own copy (bootstrap)."
+          fi
+          git archive "$source_rev" .github/review | tar -x -C "$dest"
+          echo "dir=$dest/.github/review" >> "$GITHUB_OUTPUT"
+          echo "source=$source_rev" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare diff, context and prompt
+        if: steps.gate.outputs.enabled == 'true'
+        id: prep
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_HEAD_SHA: ${{ inputs.head_sha }}
+          INPUT_DIR: ${{ runner.temp }}/review-input
+          TRUSTED_SOURCE: ${{ steps.trusted.outputs.source }}
+          REVIEW_DIR: ${{ steps.trusted.outputs.dir }}
+        run: node "$REVIEW_DIR/prepare.mjs"
+
+      - name: Review with Claude (read-only tools)
+        if: steps.gate.outputs.enabled == 'true'
+        id: claude
+        uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea # v1.0.241
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }} # zizmor: ignore[secrets-outside-env] see docs/review.md
+          github_token: ${{ github.token }}
+          classify_inline_comments: 'false'
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: >-
+            --model ${{ vars.REVIEW_MODEL || 'claude-opus-5-5' }}
+            --tools Read,Grep,Glob
+            --allowedTools Read,Grep,Glob
+            --disallowedTools "Read(./.git/**)"
+            --permission-mode dontAsk
+            --setting-sources user
+            --strict-mcp-config
+            --add-dir ${{ runner.temp }}/review-input
+            --max-budget-usd ${{ vars.REVIEW_MAX_BUDGET_USD || '30' }}
+            --json-schema '${{ steps.prep.outputs.schema }}'
+
+      - name: Collect findings and metrics
+        if: always() && steps.prep.outcome == 'success'
+        id: finalize
+        env:
+          INPUT_DIR: ${{ runner.temp }}/review-input
+          RESULT_DIR: ${{ runner.temp }}/review-result
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          MIN_BLOCKING_CONFIDENCE: ${{ vars.REVIEW_MIN_BLOCKING_CONFIDENCE || '0.6' }}
+          REVIEW_DIR: ${{ steps.trusted.outputs.dir }}
+        run: node "$REVIEW_DIR/finalize.mjs"
+
+      - name: Upload the review result
+        if: always() && steps.prep.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: review-pr-${{ steps.prep.outputs.pr }}
+          path: ${{ runner.temp }}/review-result
+          retention-days: 30
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: review
+    # Runs for every outcome of the review job except "skipped" (fork, draft, eval) and "no token",
+    # including cancellation and timeout, so the `review` status is always set. An empty `enabled`
+    # means the review job was cancelled before its first step; that still counts as not completed.
+    if: >-
+      always() && github.event_name == 'pull_request' &&
+      needs.review.result != 'skipped' &&
+      needs.review.outputs.enabled != 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write # post the review with inline comments; read the PR's current head
+      statuses: write # set (and read) the commit status "review"
+    steps:
+      - name: Download the review result
+        if: needs.review.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: review-pr-${{ github.event.pull_request.number }}
+          path: ${{ runner.temp }}/review-result
+
+      - name: Set up Node
+        if: needs.review.result == 'success'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Post the review and the review status
+        if: needs.review.result == 'success'
+        id: post
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RESULT_DIR: ${{ runner.temp }}/review-result
+          EXPECTED_PR: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node "$RESULT_DIR/tool/publish.mjs"
+
+      # Only the GitHub API through gh; no checkout, no Node, no Claude, no PR code.
+      - name: Mark the review status as errored
+        if: always() && steps.post.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_RESULT: ${{ needs.review.result }}
+          POST_OUTCOME: ${{ steps.post.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          case "$REVIEW_RESULT/$POST_OUTCOME" in
+            cancelled/*) description="The review was cancelled or timed out" ;;
+            success/*) description="The review could not be published" ;;
+            *) description="The review did not complete" ;;
+          esac
+
+          # A newer push supersedes this run: its head is no longer the PR's head, and the newer
+          # run owns the status of the new head. Leave the old head alone.
+          current_head="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha)"
+          if [ "$current_head" != "$HEAD_SHA" ]; then
+            echo "::notice::$HEAD_SHA is no longer the head of #$PR_NUMBER ($current_head); not setting the status."
+            exit 0
+          fi
+
+          # Same head, newer run (reopened, ready_for_review, re-run): never overwrite its result.
+          latest_url="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/statuses?per_page=100" \
+            --jq '[.[] | select(.context == "review")][0].target_url // ""')"
+          latest_run="$(printf '%s' "$latest_url" | sed -n 's#.*/actions/runs/\([0-9][0-9]*\).*#\1#p')"
+          if [ -n "$latest_run" ] && [ "$latest_run" -gt "$GITHUB_RUN_ID" ]; then
+            echo "::notice::Run $latest_run already set the review status for $HEAD_SHA; not overwriting it."
+            exit 0
+          fi
+
+          echo "::error::$description (review job: $REVIEW_RESULT, publish step: $POST_OUTCOME)."
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+            -f state=error -f context=review \
+            -f description="$description" -f target_url="$RUN_URL" > /dev/null

@@ -1,0 +1,91 @@
+name: conclavix
+
+services:
+  mongo:
+    image: mongo:8
+    entrypoint: ['/conclavix/entrypoint.sh']
+    command: ['--replSet', 'rs0', '--bind_ip_all']
+    env_file: mongo.env
+    ulimits:
+      nofile: { soft: 64000, hard: 64000 }
+    volumes:
+      - mongo-data:/data/db
+      - ./mongo:/conclavix:ro
+      - ./mongo/initdb:/docker-entrypoint-initdb.d:ro
+    tmpfs:
+      - /run/mongo-key:mode=0700
+    ports:
+      - '127.0.0.1:${MONGO_PORT:-27017}:27017'
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--file', '/conclavix/healthcheck.js']
+      interval: 5s
+      timeout: 10s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-alpine
+    entrypoint: ['/conclavix/start.sh']
+    env_file: redis.env
+    volumes:
+      - redis-data:/data
+      - ./redis:/conclavix:ro
+    tmpfs:
+      - /run/redis-conf:mode=0700
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli --no-auth-warning --user "$${REDIS_USERNAME:-conclavix}" ping | grep -q PONG
+      interval: 5s
+      retries: 30
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
+
+  api:
+    image: ${CONCLAVIX_IMAGE:-conclavix:local}
+    build: { context: .., dockerfile: Dockerfile }
+    env_file: conclavix.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3300
+      WORKSPACE_ROOT: /var/lib/conclavix/workspace
+    volumes:
+      # Project repositories and issue clones (docs/workspace.md). Set WORKSPACE_DIR to a host
+      # directory owned by uid 1000 (the image's node user) to keep them outside Docker.
+      - ${WORKSPACE_DIR:-workspace-data}:/var/lib/conclavix/workspace
+    # The group shared with the runner for coding agents (docs/coding-agents.md): set
+    # WORKSPACE_GID to the gid of cvx-code on the host. The default is the node user's own group.
+    group_add:
+      - '${WORKSPACE_GID:-1000}'
+    ports:
+      - '127.0.0.1:${API_PORT:-3300}:3300'
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  scheduler:
+    image: ${CONCLAVIX_IMAGE:-conclavix:local}
+    command: ['node', 'dist/scheduler-main.js']
+    env_file: conclavix.env
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  hindsight:
+    image: ghcr.io/vectorize-io/hindsight:0.10.2
+    profiles: ['hindsight']
+    env_file: hindsight.env
+    volumes:
+      - hindsight-data:/home/hindsight
+    ports:
+      - '127.0.0.1:${HINDSIGHT_PORT:-8888}:8888'
+    restart: unless-stopped
+
+volumes:
+  workspace-data:
+  hindsight-data:
+  mongo-data:
+  redis-data:

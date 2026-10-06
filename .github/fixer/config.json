@@ -1,0 +1,113 @@
+{
+  "trusted_logins": ["ripkens", "conclavix-bot"],
+  "bot_login": "conclavix-bot",
+  "bot_email": "337654366+conclavix-bot@users.noreply.github.com",
+  "escalation_mention": "ripkens",
+  "max_rounds": 3,
+  "round_trailer": "Conclavix-Fixer-Round",
+  "review_context": "review",
+  "review_workflow": "Review",
+  "required_workflows": ["CI"],
+  "labels": {
+    "skip": ["no-autofix", "needs-human"],
+    "escalated": "needs-human",
+    "ready": "merge-ready"
+  },
+  "ci": {
+    "max_steps": 5,
+    "excerpt_lines": 200,
+    "excerpt_line_chars": 400,
+    "excerpt_bytes": 20000,
+    "log_bytes": 8000000,
+    "infra_steps": [
+      "^Set up job$",
+      "^Complete job$",
+      "^Post ",
+      "^Run actions/",
+      "^Run pnpm/action-setup",
+      "^Start MongoDB",
+      "^Start Redis"
+    ],
+    "transient_patterns": [
+      "\\bE(?:CONNRESET|TIMEDOUT|AI_AGAIN|NOTFOUND)\\b",
+      "\\bgetaddrinfo\\b",
+      "socket hang up",
+      "ERR_PNPM_(?:META_FETCH_FAIL|FETCH_\\d+|TARBALL_\\w+)",
+      "No space left on device",
+      "The runner has received a shutdown signal",
+      "toomanyrequests|rate limit exceeded",
+      "\\b(?:502 Bad Gateway|503 Service Unavailable|504 Gateway Time-?out)\\b",
+      "Error response from daemon"
+    ]
+  },
+  "max_fix_lines": 150,
+  "merge": {
+    "union_paths": ["package.json", "**/package.json"],
+    "max_files": 15,
+    "max_conflict_lines": 800,
+    "max_extra_lines": 40,
+    "context_commits": 20,
+    "context_diff_lines": 200,
+    "max_dispatch": 5,
+    "mergeable_polls": 5,
+    "mergeable_poll_ms": 3000
+  },
+  "forbidden_paths": [
+    ".env*",
+    "**/.env*",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    ".npmrc",
+    "**/.npmrc",
+    ".pnpmfile.cjs",
+    ".pnpmfile.mjs",
+    "**/.pnpmfile.cjs",
+    "**/.pnpmfile.mjs"
+  ],
+  "guarded_paths": [
+    ".github/**",
+    "package.json",
+    "**/package.json",
+    "eslint.config.*",
+    ".prettierrc*",
+    ".prettierignore",
+    "tsconfig*.json",
+    "**/tsconfig*.json",
+    "**/vitest.config.*",
+    "**/vite.config.*",
+    "Dockerfile*",
+    "deploy/**",
+    "scripts/**",
+    ".nvmrc"
+  ],
+  "test_paths": ["**/test/**", "**/*.test.*", "**/*.spec.*"],
+  "weakening_patterns": [
+    "eslint-disable",
+    "@ts-ignore",
+    "@ts-nocheck",
+    "@ts-expect-error",
+    "\\b(?:it|test|describe)\\.(?:skip|only|todo)\\b",
+    "\\bx(?:it|describe)\\("
+  ],
+  "workspace_packages": ["@conclavix/api", "@conclavix/web", "@conclavix/core"],
+  "bash_allow": [
+    "pnpm lint *",
+    "pnpm format:check *",
+    "pnpm exec prettier --write *",
+    "pnpm exec prettier --check *",
+    "pnpm exec eslint *",
+    "pnpm build *",
+    "pnpm typecheck *",
+    "pnpm test *",
+    "pnpm test:review *",
+    "pnpm test:fixer *",
+    "pnpm check *",
+    "pnpm smoke *",
+    "git status *",
+    "git diff *",
+    "git log *",
+    "git show *"
+  ],
+  "bash_allow_per_package": ["test *", "build *", "typecheck *", "exec vitest run *"],
+  "denied_tools": ["Edit(./.git/**)", "Write(./.git/**)", "WebFetch", "WebSearch"]
+}

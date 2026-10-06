@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings", "commit_subject", "summary"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "decision", "explanation"],
+        "properties": {
+          "id": { "type": "string" },
+          "decision": {
+            "type": "string",
+            "enum": ["fixed", "already_fixed", "disputed", "needs_human", "not_reproducible"]
+          },
+          "explanation": { "type": "string" },
+          "files": { "type": "array", "items": { "type": "string" } },
+          "proof_test": { "type": "string" },
+          "proof_failed_before": { "type": "boolean" }
+        }
+      }
+    },
+    "commit_subject": { "type": "string" },
+    "summary": { "type": "string" }
+  }
+}

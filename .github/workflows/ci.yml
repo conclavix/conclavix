@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Start MongoDB (single-node replica set on tmpfs)
+        run: scripts/start-test-mongo.sh mongo 27088
+      - name: Start Redis (tmpfs)
+        run: scripts/start-test-redis.sh redis 6390
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm build
+      - name: Smoke-start api, scheduler and runner from the build output
+        run: pnpm smoke
+      - run: pnpm typecheck
+      - run: pnpm test
+        env:
+          TEST_MONGO_URI: mongodb://127.0.0.1:27088/?directConnection=true
+          TEST_REDIS_URL: redis://127.0.0.1:6390

@@ -1,0 +1,31 @@
+{
+  "name": "@conclavix/api",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@conclavix/core": "workspace:*",
+    "@fastify/multipart": "^10.1.2",
+    "@fastify/static": "^10.1.5",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "better-auth": "1.7.7",
+    "bullmq": "^6.3.11",
+    "fastify": "^5.12.5",
+    "ioredis": "^6.0.0",
+    "mongodb": "^7.7.0",
+    "nodemailer": "^10.0.13",
+    "pino": "^10.3.1",
+    "sharp": "^0.35.5",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^8.0.2"
+  }
+}

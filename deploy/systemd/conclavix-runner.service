@@ -1,0 +1,41 @@
+[Unit]
+Description=Conclavix runner (executes agent runs)
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+# The runner holds BOARD_TOKEN and the database URLs; agents run as cvx-agent through sudo.
+User=cvx-runner
+Group=cvx-runner
+# Shared with the API container: project repositories and issue clones (WORKSPACE_ROOT).
+SupplementaryGroups=cvx-code
+WorkingDirectory=/srv/conclavix/workspaces
+EnvironmentFile=/etc/conclavix/conclavix.env
+EnvironmentFile=/etc/conclavix/runner.env
+ExecStart=/usr/bin/node /opt/conclavix/runner/dist/runner-main.js
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=120
+# Workspace files stay readable for the agent group and nobody else.
+UMask=0027
+
+# sudo needs to switch users, so no NoNewPrivileges. The bounding set keeps it to that, plus what
+# the coding-agent root helper needs to hand an issue clone to the agent user and back (chown,
+# chmod and traversal of files it does not own); sudoers allows no other root command.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_AUDIT_WRITE CAP_KILL CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindPaths=/home/cvx-agent
+ReadWritePaths=/srv/conclavix/workspaces /home/cvx-agent -/srv/conclavix/code -/run/conclavix-agent
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+# No RestrictSUIDSGID: shared directories below WORKSPACE_ROOT are setgid (group cvx-code), and
+# the runner, git (core.sharedRepository) and the root helper set that bit.
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

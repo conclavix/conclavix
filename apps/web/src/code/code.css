@@ -1,0 +1,104 @@
+.code-font,
+.code-table {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.8125rem;
+}
+.code-scroll {
+  overflow-x: auto;
+}
+.code-table {
+  border-collapse: collapse;
+  width: 100%;
+  line-height: 1.45;
+}
+.code-num {
+  width: 1%;
+  min-width: 3em;
+  padding: 0 0.75em;
+  text-align: right;
+  vertical-align: top;
+  user-select: none;
+  color: rgba(var(--v-theme-on-surface), 0.45);
+  white-space: nowrap;
+}
+.code-line {
+  padding: 0 0.75em;
+  white-space: pre;
+}
+.code-file-header {
+  border-bottom: thin solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+.code-panel > .v-expansion-panel-text__wrapper {
+  padding: 0;
+}
+.diff-add {
+  background: rgba(var(--v-theme-success), 0.14);
+}
+.diff-del {
+  background: rgba(var(--v-theme-error), 0.14);
+}
+.diff-hunk,
+.diff-note {
+  background: rgba(var(--v-theme-info), 0.1);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+.diff-sign {
+  display: inline-block;
+  width: 1.25em;
+  user-select: none;
+  opacity: 0.7;
+}
+.hljs-comment,
+.hljs-quote,
+.hljs-meta {
+  color: rgba(var(--v-theme-on-surface), 0.55);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-doctag,
+.hljs-section {
+  color: rgb(var(--v-theme-primary));
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-symbol {
+  color: rgb(var(--v-theme-success));
+}
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-attr,
+.hljs-attribute {
+  color: rgb(var(--v-theme-warning));
+}
+.hljs-title,
+.hljs-name,
+.hljs-type,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: rgb(var(--v-theme-info));
+}
+.hljs-deletion {
+  color: rgb(var(--v-theme-error));
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: bold;
+}
+.code-image-box {
+  text-align: center;
+}
+.code-image {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  cursor: zoom-in;
+  background: repeating-conic-gradient(rgba(127, 127, 127, 0.15) 0 25%, transparent 0 50%) 0 0 /
+    16px 16px;
+}

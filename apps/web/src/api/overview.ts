@@ -1,0 +1,92 @@
+export interface DayBucket {
+  date: string;
+  runs: number;
+  failed: number;
+  costUsd: number;
+}
+
+export interface AgentToday {
+  agentId: string;
+  name: string;
+  runs: number;
+  failed: number;
+  costUsd: number;
+}
+
+export interface PausedAgent {
+  agentId: string;
+  name: string;
+  reason: 'loop' | 'manual';
+  since: string;
+  issueId: string | null;
+  issueKey: string | null;
+}
+
+export interface BudgetHeldAgent {
+  agentId: string;
+  name: string;
+  costTodayUsd: number;
+  limitUsd: number;
+}
+
+export interface FailedRun {
+  runId: string;
+  agentId: string;
+  agentName: string;
+  issueId: string;
+  issueKey: string | null;
+  status: string;
+  error: string | null;
+  finishedAt: string | null;
+}
+
+export interface IssueRef {
+  issueId: string;
+  key: string;
+  title: string;
+  assigneeAgentId: string | null;
+  updatedAt: string;
+}
+
+export interface BlockedIssue extends IssueRef {
+  blockers: { issueId: string; key: string; status: string }[];
+}
+
+export interface ActivityItem {
+  kind: 'run_finished' | 'run_failed' | 'comment' | 'issue_closed' | 'issue_created';
+  at: string;
+  issueId: string | null;
+  issueKey: string | null;
+  runId: string | null;
+  agentId: string | null;
+  text: string;
+}
+
+export interface Overview {
+  generatedAt: string;
+  timezone: 'UTC';
+  days: number;
+  kpis: {
+    runsToday: number;
+    failedToday: number;
+    costTodayUsd: number;
+    dailyBudgetUsd: number;
+    issuesDoneToday: number;
+    issuesDone7d: number;
+    activeAgents: number;
+    totalAgents: number;
+    pendingWakes: number;
+  };
+  costPerDay: DayBucket[];
+  runsPerAgentToday: AgentToday[];
+  issuesByStatus: Record<string, number>;
+  attention: {
+    pausedAgents: PausedAgent[];
+    budgetHeld: BudgetHeldAgent[];
+    failedRuns: FailedRun[];
+    failedRuns24h: number;
+    blockedIssues: BlockedIssue[];
+    inReview: IssueRef[];
+  };
+  activity: ActivityItem[];
+}

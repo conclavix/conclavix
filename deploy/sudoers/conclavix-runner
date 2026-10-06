@@ -1,0 +1,16 @@
+# /etc/sudoers.d/conclavix-runner (mode 0440, check with: visudo -cf <file>)
+# The runner (cvx-runner) may start the claude binary as the agent user (cvx-agent), and the
+# coding-agent root helper as root, and nothing else.
+# env_reset drops everything but the variables claude needs; the run token and gateway keys are
+# kept, BOARD_TOKEN, MONGO_URI and REDIS_URL are not. -T bounds a run that ignores SIGTERM.
+# sudo logs the command line; the runner keeps prompt, instructions and tokens out of it
+# (stdin and environment), so the log stays on and only shows flags.
+Defaults:cvx-runner !requiretty, !lecture, env_reset, user_command_timeouts
+Defaults:cvx-runner env_keep = "ANTHROPIC_* CLAUDE_CODE_* CONCLAVIX_RUN_TOKEN ENABLE_TOOL_SEARCH LANG LC_* TZ"
+cvx-runner ALL=(cvx-agent) NOPASSWD: /usr/bin/claude
+
+# Coding agents (docs/coding-agents.md): the root helper starts claude in a transient systemd unit
+# that sees only the issue clone. It gets no environment at all (the runner sends the variables
+# claude needs on stdin) and validates every argument itself.
+Defaults!/usr/local/libexec/conclavix/agent-run.mjs !env_keep
+cvx-runner ALL=(root) NOPASSWD: /usr/local/libexec/conclavix/agent-run.mjs

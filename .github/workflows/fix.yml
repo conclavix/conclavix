@@ -1,0 +1,725 @@
+name: Fixer
+
+# Auto-fixer for blocking review findings, red CI and merge conflicts with the base branch, and
+# merge-ready labelling. See docs/fixer.md.
+# scan: after a push to main (and daily) starts one run per conflicting PR. route: decides what to
+# do (read-only). fix: Claude edits the PR head or resolves the merge, gates run, one commit is
+# bundled; no write token and no PAT. push: verifies the bundle and pushes it with the bot PAT; it
+# never runs PR code. report: labels and comments. No pull request is ever merged into main.
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] only same-repo PRs of trusted authors, PR code never runs with the PAT, see docs/fixer.md
+    workflows: [Review, CI]
+    types: [completed]
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request to run the fixer (or the merge-ready check) for
+        required: true
+        type: number
+      conflicts_only:
+        description: Only resolve a merge conflict, do nothing else (set by the conflict scan)
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+# One fixer run per PR at a time: a run that waits sees the state the previous one left (new head or
+# needs-human), so the Review and CI completions of one head cannot start two rounds. Scans share
+# one group; a waiting scan is replaced by a newer one.
+concurrency:
+  group: ${{ (github.event_name == 'push' || github.event_name == 'schedule') && 'fixer-scan' || format('fixer-pr-{0}', inputs.pr_number || github.event.workflow_run.pull_requests[0].number || github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Scan for merge conflicts
+    if: github.event_name == 'push' || github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # check out the trusted fixer scripts
+      pull-requests: read # list open PRs and read their mergeable state
+      actions: write # start one fixer run per conflicting PR (workflow_dispatch)
+    steps:
+      - name: Check out the trusted fixer from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/fixer
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Start a fixer run for each conflicting PR
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_FILE: fix.yml
+        run: node .github/fixer/scan.mjs
+
+  route:
+    name: Route
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.conclusion != 'cancelled' &&
+       github.event.workflow_run.conclusion != 'skipped')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read # check out the trusted fixer scripts
+      pull-requests: read # read the PR, its labels and commits
+      statuses: read # read the review status of the head
+      actions: read # find the review and CI runs of the head
+    outputs:
+      mode: ${{ steps.route.outputs.mode }}
+      reason: ${{ steps.route.outputs.reason }}
+      detail: ${{ steps.route.outputs.detail }}
+      round: ${{ steps.route.outputs.round }}
+      drop_ready: ${{ steps.route.outputs.drop_ready }}
+      pr: ${{ steps.route.outputs.pr }}
+      head_sha: ${{ steps.route.outputs.head_sha }}
+      head_ref: ${{ steps.route.outputs.head_ref }}
+      base_ref: ${{ steps.route.outputs.base_ref }}
+      base_sha: ${{ steps.route.outputs.base_sha }}
+      review_run: ${{ steps.route.outputs.review_run }}
+      ci_failures: ${{ steps.route.outputs.ci_failures }}
+    steps:
+      - name: Check out the trusted fixer from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/fixer
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Decide what to do
+        id: route
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_CONFLICTS_ONLY: ${{ inputs.conflicts_only }}
+          RUN_PULL_REQUESTS: ${{ toJSON(github.event.workflow_run.pull_requests) }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_NAME: ${{ github.event.workflow_run.name }}
+        run: node .github/fixer/route.mjs
+
+  fix:
+    name: Fix
+    needs: route
+    if: needs.route.outputs.mode == 'fix' || needs.route.outputs.mode == 'merge'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read # check out the PR head and the base branch
+      actions: read # download the review artifact and the logs of the failed CI jobs
+    outputs:
+      push: ${{ steps.finalize.outputs.push }}
+      repair: ${{ steps.repair_prep.outputs.run_repair }}
+      repair_gate: ${{ steps.repair_prep.outputs.gate }}
+      claude_cost: ${{ steps.collect.outputs.claude_cost }}
+      gate_install: ${{ steps.gate_install.outcome }}
+      gate_check: ${{ steps.gate_check.outcome }}
+      gate_smoke: ${{ steps.gate_smoke.outputs.ran == 'true' && steps.gate_smoke.outcome || 'skipped' }}
+    env:
+      MODE: ${{ needs.route.outputs.mode }}
+      PR_NUMBER: ${{ needs.route.outputs.pr }}
+      HEAD_SHA: ${{ needs.route.outputs.head_sha }}
+      HEAD_REF: ${{ needs.route.outputs.head_ref }}
+      BASE_SHA: ${{ needs.route.outputs.base_sha }}
+      BASE_REF: ${{ needs.route.outputs.base_ref }}
+      ROUND: ${{ needs.route.outputs.round }}
+    steps:
+      - name: Check that the Claude token is configured
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }} # zizmor: ignore[secrets-outside-env] repository secret by decision, see docs/fixer.md
+        run: |
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "::error::CLAUDE_CODE_OAUTH_TOKEN is not available to this run."
+            exit 1
+          fi
+
+      - name: Check out the pull request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.route.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Load the fixer from the default branch
+        id: trusted
+        env:
+          TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          dest="$RUNNER_TEMP/trusted"
+          mkdir -p "$dest"
+          git archive "$TRUSTED_SHA" .github/fixer | tar -x -C "$dest"
+          echo "dir=$dest/.github/fixer" >> "$GITHUB_OUTPUT"
+
+      - name: Download the review result
+        if: needs.route.outputs.review_run != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: review-pr-${{ needs.route.outputs.pr }}
+          run-id: ${{ needs.route.outputs.review_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/review-result
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.1.0
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      # Runs before any PR code. The CI log excerpts go to files in the input directory only; they
+      # are never printed, put into outputs or interpolated into a command. In merge mode it merges
+      # the base tip without committing (hooks off) and prepares the conflicted files instead.
+      - name: Select the findings and failed CI steps, or merge the base, and build the prompt
+        id: prep
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORK_DIR: ${{ github.workspace }}
+          REVIEW_RUN: ${{ needs.route.outputs.review_run }}
+          CI_FAILURES: ${{ needs.route.outputs.ci_failures }}
+          FINDINGS_FILE: ${{ runner.temp }}/review-result/findings.json
+          INPUT_DIR: ${{ runner.temp }}/fixer-input
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+        run: node "$FIXER_DIR/prepare.mjs"
+
+      # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB needs bubblewrap. Ubuntu 24.04 restricts unprivileged user
+      # namespaces through AppArmor and ships no bwrap profile, so userns is granted to the bwrap
+      # binary only instead of lifting the restriction for every process (docs/fixer.md).
+      - name: Set up the bubblewrap sandbox for Claude
+        if: steps.prep.outputs.run_claude == 'true'
+        id: sandbox
+        continue-on-error: true
+        env:
+          START_ERROR_FILE: ${{ runner.temp }}/fixer-sandbox/start-error.txt
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+        run: bash "$FIXER_DIR/sandbox.sh"
+
+      - name: Start MongoDB and Redis for the tests
+        if: steps.prep.outputs.run_claude == 'true' || steps.prep.outputs.merge == 'true'
+        run: |
+          scripts/start-test-mongo.sh mongo 27088
+          scripts/start-test-redis.sh redis 6390
+
+      # PR code (lifecycle scripts, checks, tests) runs in its own PID namespace from here on, so no
+      # process it starts can outlive its step and reach a later step that holds the Claude token.
+      - name: Install dependencies
+        if: steps.prep.outputs.run_claude == 'true'
+        id: deps
+        continue-on-error: true
+        env:
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+        run: bash "$FIXER_DIR/isolate.sh" pnpm install --frozen-lockfile
+
+      - name: Fix with Claude
+        if: >-
+          steps.prep.outputs.run_claude == 'true' && steps.sandbox.outcome == 'success' &&
+          steps.deps.outcome == 'success'
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea # v1.0.241
+        env:
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }} # zizmor: ignore[secrets-outside-env] see docs/fixer.md
+          github_token: ${{ github.token }}
+          # The conflict scan dispatches this workflow with GITHUB_TOKEN, so the actor is github-actions[bot].
+          allowed_bots: github-actions
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: >-
+            --model ${{ vars.FIXER_MODEL || 'claude-opus-5-5' }}
+            --tools Read,Grep,Glob,Edit,Write,Bash
+            --allowedTools "${{ steps.prep.outputs.allowed_tools }}"
+            --disallowedTools "${{ steps.prep.outputs.denied_tools }}"
+            --permission-mode dontAsk
+            --setting-sources user
+            --strict-mcp-config
+            --add-dir ${{ runner.temp }}/fixer-input
+            --max-budget-usd ${{ vars.FIXER_MAX_BUDGET_USD || '25' }}
+            --json-schema '${{ steps.prep.outputs.schema }}'
+
+      - name: Collect the change and check the policy
+        if: steps.prep.outputs.run_claude == 'true' || steps.prep.outputs.merge == 'true'
+        id: collect
+        env:
+          WORK_DIR: ${{ github.workspace }}
+          INPUT_DIR: ${{ runner.temp }}/fixer-input
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: node "$FIXER_DIR/collect.mjs"
+
+      - name: 'Gate: install with the frozen lockfile'
+        if: steps.collect.outputs.changed == 'true' && steps.collect.outputs.policy_ok == 'true'
+        id: gate_install
+        continue-on-error: true
+        env:
+          GATE_LOG_DIR: ${{ runner.temp }}/fixer-gates
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+        run: |
+          set -o pipefail
+          mkdir -p "$GATE_LOG_DIR"
+          bash "$FIXER_DIR/isolate.sh" pnpm install --frozen-lockfile 2>&1 | tee "$GATE_LOG_DIR/install.log"
+
+      - name: 'Gate: pnpm check'
+        if: steps.gate_install.outcome == 'success'
+        id: gate_check
+        continue-on-error: true
+        env:
+          GATE_LOG_DIR: ${{ runner.temp }}/fixer-gates
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+        run: |
+          set -o pipefail
+          bash "$FIXER_DIR/isolate.sh" pnpm check 2>&1 | tee "$GATE_LOG_DIR/check.log"
+
+      - name: 'Gate: pnpm smoke (when defined)'
+        if: steps.gate_check.outcome == 'success'
+        id: gate_smoke
+        continue-on-error: true
+        env:
+          GATE_LOG_DIR: ${{ runner.temp }}/fixer-gates
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+        run: |
+          set -o pipefail
+          if node -e 'process.exit(require("./package.json").scripts?.smoke ? 0 : 1)'; then
+            echo "ran=true" >> "$GITHUB_OUTPUT"
+            bash "$FIXER_DIR/isolate.sh" pnpm smoke 2>&1 | tee "$GATE_LOG_DIR/smoke.log"
+          else
+            echo "No smoke script on this head, skipped."
+          fi
+
+      # The gate logs are written by PR code: they are read only by the trusted repair script, which
+      # gives Claude a redacted, capped excerpt. The repair itself runs in the repair job on a fresh
+      # runner, where no code written in this round has run before the Claude step.
+      - name: Prepare one repair pass for a failed gate
+        if: steps.gate_check.outcome == 'failure' || steps.gate_smoke.outcome == 'failure'
+        id: repair_prep
+        env:
+          WORK_DIR: ${{ github.workspace }}
+          INPUT_DIR: ${{ runner.temp }}/fixer-input
+          STATE_DIR: ${{ runner.temp }}/fixer-state
+          GATE_LOG_DIR: ${{ runner.temp }}/fixer-gates
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          GATE_INSTALL: ${{ steps.gate_install.outcome }}
+          GATE_CHECK: ${{ steps.gate_check.outcome }}
+          GATE_SMOKE: ${{ steps.gate_smoke.outputs.ran == 'true' && steps.gate_smoke.outcome || 'skipped' }}
+          COLLECT_TREE: ${{ steps.collect.outputs.tree }}
+          COLLECT_FILES: ${{ steps.collect.outputs.files }}
+          FIRST_COST: ${{ steps.collect.outputs.claude_cost }}
+          ROUND_MAX_BUDGET_USD: ${{ vars.FIXER_MAX_BUDGET_USD || '25' }}
+          REPAIR_MAX_BUDGET_USD: ${{ vars.FIXER_REPAIR_MAX_BUDGET_USD || '10' }}
+          HANDOFF_DIR: ${{ runner.temp }}/fixer-handoff
+        run: node "$FIXER_DIR/repair.mjs" prepare
+
+      - name: Upload the round for the repair job
+        if: steps.repair_prep.outputs.run_repair == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fixer-handoff-pr-${{ needs.route.outputs.pr }}
+          path: ${{ runner.temp }}/fixer-handoff
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Decide, commit and bundle
+        if: always() && steps.prep.outcome == 'success' && steps.repair_prep.outputs.run_repair != 'true'
+        id: finalize
+        env:
+          WORK_DIR: ${{ github.workspace }}
+          INPUT_DIR: ${{ runner.temp }}/fixer-input
+          RESULT_DIR: ${{ runner.temp }}/fixer-result
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          SANDBOX_OUTCOME: ${{ steps.sandbox.outcome }}
+          DEPS_OUTCOME: ${{ steps.deps.outcome }}
+          START_ERROR_FILE: ${{ runner.temp }}/fixer-sandbox/start-error.txt
+          REVIEW_RUN_URL: ${{ needs.route.outputs.review_run && format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, needs.route.outputs.review_run) || '' }}
+          GATE_INSTALL: ${{ steps.gate_install.outcome }}
+          GATE_CHECK: ${{ steps.gate_check.outcome }}
+          GATE_SMOKE: ${{ steps.gate_smoke.outputs.ran == 'true' && steps.gate_smoke.outcome || 'skipped' }}
+        run: node "$FIXER_DIR/finalize.mjs"
+
+      - name: Upload the fixer result
+        if: always() && steps.finalize.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fixer-pr-${{ needs.route.outputs.pr }}
+          path: ${{ runner.temp }}/fixer-result
+          retention-days: 30
+          if-no-files-found: error
+
+  repair:
+    name: Repair a failed gate
+    needs: [route, fix]
+    if: needs.fix.outputs.repair == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read # check out the PR head and the base branch
+      actions: read # download the review artifact of the review run
+    outputs:
+      push: ${{ steps.repair_collect.outputs.ok == 'true' && steps.finalize.outputs.push || 'false' }}
+      repair_paths: ${{ steps.repair_collect.outputs.paths }}
+    env:
+      MODE: ${{ needs.route.outputs.mode }}
+      PR_NUMBER: ${{ needs.route.outputs.pr }}
+      HEAD_SHA: ${{ needs.route.outputs.head_sha }}
+      HEAD_REF: ${{ needs.route.outputs.head_ref }}
+      BASE_SHA: ${{ needs.route.outputs.base_sha }}
+      BASE_REF: ${{ needs.route.outputs.base_ref }}
+      ROUND: ${{ needs.route.outputs.round }}
+    steps:
+      - name: Check out the pull request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.route.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Runs the PR head's own scripts, before the round's tree is restored.
+      - name: Start MongoDB and Redis for the tests
+        run: |
+          scripts/start-test-mongo.sh mongo 27088
+          scripts/start-test-redis.sh redis 6390
+
+      - name: Load the fixer from the default branch
+        id: trusted
+        env:
+          TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          dest="$RUNNER_TEMP/trusted"
+          mkdir -p "$dest"
+          git archive "$TRUSTED_SHA" .github/fixer | tar -x -C "$dest"
+          echo "dir=$dest/.github/fixer" >> "$GITHUB_OUTPUT"
+
+      - name: Download the round from the fix job
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fixer-handoff-pr-${{ needs.route.outputs.pr }}
+          path: ${{ runner.temp }}/fixer-handoff
+
+      - name: Download the review result
+        if: needs.route.outputs.review_run != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: review-pr-${{ needs.route.outputs.pr }}
+          run-id: ${{ needs.route.outputs.review_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/review-result
+
+      # The handoff was written after round code ran in the fix job, so it is untrusted: this step
+      # restores the tree on the PR head, checks it with the round policy and computes the allowed
+      # files, the budget and the prompt itself. No PR code has run on this runner yet.
+      - name: Restore and check the round, build the repair prompt
+        id: restore
+        env:
+          WORK_DIR: ${{ github.workspace }}
+          INPUT_DIR: ${{ runner.temp }}/fixer-input
+          STATE_DIR: ${{ runner.temp }}/fixer-state
+          HANDOFF_DIR: ${{ runner.temp }}/fixer-handoff
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+          REPAIR_GATE: ${{ needs.fix.outputs.repair_gate }}
+          REVIEW_RUN: ${{ needs.route.outputs.review_run }}
+          FINDINGS_FILE: ${{ runner.temp }}/review-result/findings.json
+          FIRST_COST: ${{ needs.fix.outputs.claude_cost }}
+          ROUND_MAX_BUDGET_USD: ${{ vars.FIXER_MAX_BUDGET_USD || '25' }}
+          REPAIR_MAX_BUDGET_USD: ${{ vars.FIXER_REPAIR_MAX_BUDGET_USD || '10' }}
+        run: node "$FIXER_DIR/repair.mjs" restore
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.1.0
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Set up the bubblewrap sandbox for Claude
+        id: sandbox
+        continue-on-error: true
+        env:
+          START_ERROR_FILE: ${{ runner.temp }}/fixer-sandbox/start-error.txt
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+        run: bash "$FIXER_DIR/sandbox.sh"
+
+      - name: Install dependencies
+        id: deps
+        continue-on-error: true
+        env:
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+        run: bash "$FIXER_DIR/isolate.sh" pnpm install --frozen-lockfile
+
+      - name: Repair the failed gate with Claude
+        if: steps.sandbox.outcome == 'success' && steps.deps.outcome == 'success'
+        id: repair
+        continue-on-error: true
+        uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea # v1.0.241
+        env:
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }} # zizmor: ignore[secrets-outside-env] see docs/fixer.md
+          github_token: ${{ github.token }}
+          allowed_bots: github-actions
+          prompt: ${{ steps.restore.outputs.prompt }}
+          claude_args: >-
+            --model ${{ vars.FIXER_MODEL || 'claude-opus-5-5' }}
+            --tools Read,Grep,Glob,Edit,Write,Bash
+            --allowedTools "${{ steps.restore.outputs.allowed_tools }}"
+            --disallowedTools "${{ steps.restore.outputs.denied_tools }}"
+            --permission-mode dontAsk
+            --setting-sources user
+            --strict-mcp-config
+            --add-dir ${{ runner.temp }}/fixer-input
+            --max-budget-usd ${{ steps.restore.outputs.budget }}
+            --json-schema '${{ steps.restore.outputs.schema }}'
+
+      - name: Check the repair against the policy
+        id: repair_collect
+        env:
+          WORK_DIR: ${{ github.workspace }}
+          INPUT_DIR: ${{ runner.temp }}/fixer-input
+          STATE_DIR: ${{ runner.temp }}/fixer-state
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+          REPAIR_EXECUTION_FILE: ${{ steps.repair.outputs.execution_file }}
+          REPAIR_GATE: ${{ needs.fix.outputs.repair_gate }}
+          REPAIR_BEFORE: ${{ steps.restore.outputs.before }}
+          REPAIR_ALLOWED: ${{ steps.restore.outputs.allowed }}
+        run: node "$FIXER_DIR/repair.mjs" collect
+
+      - name: 'Gate after repair: install with the frozen lockfile'
+        if: steps.repair_collect.outputs.ok == 'true'
+        id: gate_install
+        continue-on-error: true
+        env:
+          GATE_LOG_DIR: ${{ runner.temp }}/fixer-gates-2
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+        run: |
+          set -o pipefail
+          mkdir -p "$GATE_LOG_DIR"
+          bash "$FIXER_DIR/isolate.sh" pnpm install --frozen-lockfile 2>&1 | tee "$GATE_LOG_DIR/install.log"
+
+      - name: 'Gate after repair: pnpm check'
+        if: steps.gate_install.outcome == 'success'
+        id: gate_check
+        continue-on-error: true
+        env:
+          GATE_LOG_DIR: ${{ runner.temp }}/fixer-gates-2
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+        run: |
+          set -o pipefail
+          bash "$FIXER_DIR/isolate.sh" pnpm check 2>&1 | tee "$GATE_LOG_DIR/check.log"
+
+      - name: 'Gate after repair: pnpm smoke (when defined)'
+        if: steps.gate_check.outcome == 'success'
+        id: gate_smoke
+        continue-on-error: true
+        env:
+          GATE_LOG_DIR: ${{ runner.temp }}/fixer-gates-2
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+        run: |
+          set -o pipefail
+          if node -e 'process.exit(require("./package.json").scripts?.smoke ? 0 : 1)'; then
+            echo "ran=true" >> "$GITHUB_OUTPUT"
+            bash "$FIXER_DIR/isolate.sh" pnpm smoke 2>&1 | tee "$GATE_LOG_DIR/smoke.log"
+          else
+            echo "No smoke script on this head, skipped."
+          fi
+
+      - name: Decide, commit and bundle
+        if: always() && steps.restore.outcome == 'success'
+        id: finalize
+        env:
+          WORK_DIR: ${{ github.workspace }}
+          INPUT_DIR: ${{ runner.temp }}/fixer-input
+          RESULT_DIR: ${{ runner.temp }}/fixer-result
+          STATE_DIR: ${{ runner.temp }}/fixer-state
+          FIXER_DIR: ${{ steps.trusted.outputs.dir }}
+          EXECUTION_FILE: ${{ steps.restore.outputs.first_execution }}
+          REVIEW_RUN_URL: ${{ needs.route.outputs.review_run && format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, needs.route.outputs.review_run) || '' }}
+          GATE_INSTALL: ${{ needs.fix.outputs.gate_install }}
+          GATE_CHECK: ${{ needs.fix.outputs.gate_check }}
+          GATE_SMOKE: ${{ needs.fix.outputs.gate_smoke }}
+          REPAIR_RAN: 'true'
+          REPAIR_STARTED: ${{ steps.repair.outcome }}
+          FIRST_COST: ${{ needs.fix.outputs.claude_cost }}
+          REPAIR_COST: ${{ steps.repair_collect.outputs.claude_cost }}
+          REPAIR_OK: ${{ steps.repair_collect.outputs.ok }}
+          REPAIR_GATE: ${{ needs.fix.outputs.repair_gate }}
+          REPAIR_PATHS: ${{ steps.repair_collect.outputs.paths }}
+          REPAIR_EXECUTION_FILE: ${{ steps.repair.outputs.execution_file }}
+          GATE2_INSTALL: ${{ steps.gate_install.outcome }}
+          GATE2_CHECK: ${{ steps.gate_check.outcome }}
+          GATE2_SMOKE: ${{ steps.gate_smoke.outputs.ran == 'true' && steps.gate_smoke.outcome || 'skipped' }}
+        run: node "$FIXER_DIR/finalize.mjs"
+
+      - name: Upload the fixer result
+        if: always() && steps.finalize.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fixer-pr-${{ needs.route.outputs.pr }}
+          path: ${{ runner.temp }}/fixer-result
+          retention-days: 30
+          if-no-files-found: error
+
+  push:
+    name: Push
+    needs: [route, fix, repair]
+    if: >-
+      always() && needs.fix.result == 'success' &&
+      (needs.fix.outputs.push == 'true' ||
+       (needs.repair.result == 'success' && needs.repair.outputs.push == 'true'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # check out the PR head and the trusted fixer
+      actions: read # download the review artifact of the review run
+    outputs:
+      sha: ${{ steps.verify.outputs.sha }}
+    steps:
+      - name: Check out the trusted fixer from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          sparse-checkout: .github/fixer
+          persist-credentials: false
+
+      # Full history of all branches: a merge commit is verified against the merge git computes for
+      # the PR head and the base tip, and the base tip must be on the base branch.
+      - name: Check out the pull request head (not executed)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.route.outputs.head_sha }}
+          path: work
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the fixer result
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fixer-pr-${{ needs.route.outputs.pr }}
+          path: ${{ runner.temp }}/fixer-result
+
+      - name: Download the review result
+        if: needs.route.outputs.review_run != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: review-pr-${{ needs.route.outputs.pr }}
+          run-id: ${{ needs.route.outputs.review_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/review-result
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Verify the fix commit
+        id: verify
+        env:
+          MODE: ${{ needs.route.outputs.mode }}
+          BASE_SHA: ${{ needs.route.outputs.base_sha }}
+          BASE_REF: ${{ needs.route.outputs.base_ref }}
+          REPAIR_PATHS: ${{ needs.repair.outputs.repair_paths }}
+          WORK_DIR: ${{ github.workspace }}/work
+          BUNDLE: ${{ runner.temp }}/fixer-result/fix.bundle
+          REVIEW_RUN: ${{ needs.route.outputs.review_run }}
+          FINDINGS_FILE: ${{ runner.temp }}/review-result/findings.json
+          PR_NUMBER: ${{ needs.route.outputs.pr }}
+          HEAD_SHA: ${{ needs.route.outputs.head_sha }}
+          ROUND: ${{ needs.route.outputs.round }}
+          BRANCH: ${{ needs.route.outputs.head_ref }}
+        run: node trusted/.github/fixer/verify.mjs
+
+      - name: Push the fix commit with the bot account (fast-forward only)
+        env:
+          FIXER_BOT_PAT: ${{ secrets.FIXER_BOT_PAT }} # zizmor: ignore[secrets-outside-env] repository secret by decision, see docs/fixer.md
+          SHA: ${{ steps.verify.outputs.sha }}
+          BRANCH: ${{ needs.route.outputs.head_ref }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FIXER_BOT_PAT" ]; then
+            echo "::error::FIXER_BOT_PAT is not available to this run."
+            exit 1
+          fi
+          auth="$(printf 'x-access-token:%s' "$FIXER_BOT_PAT" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -C work -c core.hooksPath=/dev/null \
+            -c "http.${GITHUB_SERVER_URL}/.extraheader=AUTHORIZATION: basic $auth" \
+            push --no-verify "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" "${SHA}:refs/heads/${BRANCH}"
+          echo "Pushed $SHA to $BRANCH" >> "$GITHUB_STEP_SUMMARY"
+
+  report:
+    name: Report
+    needs: [route, fix, repair, push]
+    if: >-
+      always() && needs.route.result == 'success' &&
+      (needs.route.outputs.mode != 'none' || needs.route.outputs.drop_ready == 'true') &&
+      needs.fix.result != 'cancelled' && needs.repair.result != 'cancelled' &&
+      needs.push.result != 'cancelled'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read # check out the trusted fixer scripts
+      issues: write # labels and the PR comment
+      pull-requests: write # labels and the PR comment
+    steps:
+      - name: Check out the trusted fixer from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/fixer
+          persist-credentials: false
+
+      - name: Download the fixer result
+        if: needs.route.outputs.mode == 'fix' || needs.route.outputs.mode == 'merge'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fixer-pr-${{ needs.route.outputs.pr }}
+          path: ${{ runner.temp }}/fixer-result
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Label and comment
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OUTCOME_FILE: ${{ runner.temp }}/fixer-result/outcome.json
+          MODE: ${{ needs.route.outputs.mode }}
+          ROUTE_REASON: ${{ needs.route.outputs.reason }}
+          ROUTE_DETAIL: ${{ needs.route.outputs.detail }}
+          DROP_READY: ${{ needs.route.outputs.drop_ready }}
+          PR_NUMBER: ${{ needs.route.outputs.pr }}
+          HEAD_SHA: ${{ needs.route.outputs.head_sha }}
+          ROUND: ${{ needs.route.outputs.round }}
+          FIX_RESULT: ${{ needs.fix.outputs.repair == 'true' && needs.repair.result || needs.fix.result }}
+          PUSH_RESULT: ${{ needs.push.result }}
+          PUSHED_SHA: ${{ needs.push.outputs.sha }}
+          FIRST_COST: ${{ needs.fix.outputs.claude_cost }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/fixer/report.mjs
