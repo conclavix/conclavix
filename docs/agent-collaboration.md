@@ -124,6 +124,19 @@ Example: Mr. Green delegates integration to the Integrations Agent, which delega
 the PR Reviewer. With `PR Reviewer reports to Mr. Green` set to wake, the closed review wakes the
 Integrations Agent on its integration issue and Mr. Green on his planning issue at the same time.
 
+## Heartbeats and processed wakes
+
+Every minute the scheduler sweeps for actionable, idle issues whose last run is older than
+`HEARTBEAT_MINUTES` and queues a `heartbeat` wake for the assignee. The sweep leaves out issues
+that every heartbeat would skip anyway: open blockers, an assignee not enabled in the project, and
+an assignee that is paused or no longer exists. Resuming the agent lets the next sweep wake those
+issues again. Explicit wakes (assignment, comments, unblocking, reports, manual) are still queued
+for a paused agent and skipped with `skipReason: 'agent_paused'`, so the reason stays visible.
+
+Processed wakes (run or skipped) are only kept for debugging; runs carry their own reason. A TTL
+index on `processedAt` removes them after 30 days. Pending wakes have `processedAt: null` and never
+expire.
+
 ## Link option in the API and the canvas
 
 | Route                        | Capability | Body                                                              |

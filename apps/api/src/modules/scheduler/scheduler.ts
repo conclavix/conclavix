@@ -321,11 +321,20 @@ export class Scheduler {
 
   async sweepHeartbeats(now = new Date()): Promise<number> {
     const cutoff = new Date(now.getTime() - this.options.heartbeatMinutes * 60 * 1000);
-    const disabled = await disabledAssignments(this.collections);
+    const [disabled, active] = await Promise.all([
+      disabledAssignments(this.collections),
+      this.collections.agents
+        .find({ status: 'active' }, { projection: { _id: 1 } })
+        .map((agent) => agent._id)
+        .toArray(),
+    ]);
+    if (active.length === 0) return 0;
     const due = await this.collections.issues
       .find({
         status: { $in: [...ACTIONABLE_STATUSES] },
-        assigneeAgentId: { $ne: null },
+        // A heartbeat for a paused or deleted agent would be skipped on every sweep, leaving one
+        // processed wake per issue and minute behind; resuming the agent lets the next sweep in.
+        assigneeAgentId: { $in: active },
         checkoutRunId: null,
         // Agents disabled in a project keep their issues there but get no heartbeats for them.
         ...(disabled.length > 0 ? { $nor: disabled } : {}),

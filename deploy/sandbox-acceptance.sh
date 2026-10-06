@@ -256,7 +256,9 @@ STUB
   chmod 0600 "$work/stdin"
   umask 077
   # Through a pipe, not a regular file, like the runner (which passes a socket).
-  cat "$work/stdin" | systemd-run --quiet --wait --pipe -p User=cvx-runner -p Group=cvx-runner \
+  # --expand-environment=no: otherwise systemd replaces ${CONCLAVIX_RUN_BEARER} in the MCP
+  # config with an empty string before the helper sees it (the runner spawns sudo directly).
+  cat "$work/stdin" | systemd-run --quiet --wait --pipe --expand-environment=no -p User=cvx-runner -p Group=cvx-runner \
     -p SupplementaryGroups=cvx-code -p ProtectSystem=strict -p ProtectHome=tmpfs -p PrivateTmp=yes \
     -p 'CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_AUDIT_WRITE CAP_KILL CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH' \
     -p "ReadWritePaths=-$CODE_ROOT -/run/conclavix-agent" \
