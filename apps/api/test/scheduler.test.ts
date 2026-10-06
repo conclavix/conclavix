@@ -134,82 +134,167 @@ describe('scheduler', () => {
 
   const at = (base: Date, minutes: number) => new Date(base.getTime() + minutes * 60_000);
 
-  it('defers a wake over the hourly run limit and runs it once the window frees', async () => {
-    const agent = await fx.agent({
-      limits: { maxRunsPerIssuePerHour: 2, maxCostPerRunUsd: 1, maxCostPerDayUsd: 10 },
-    });
-    const issue = await fx.issue({ title: 'limited', assigneeAgentId: agent.id });
-    const t0 = new Date('2030-01-01T10:00:00Z');
-    await fx.scheduler.processPendingWakes(t0);
-    await finishLast(at(t0, 1));
-    await comment(issue.key);
-    await fx.scheduler.processPendingWakes(at(t0, 2));
-    await finishLast(at(t0, 3));
-
-    await comment(issue.key);
-    expect(await fx.scheduler.processPendingWakes(at(t0, 4))).toMatchObject({ run: 0, defer: 1 });
-    const deferred = await lastWake(issue.id);
-    expect(deferred).toMatchObject({
-      processedAt: null,
-      skipReason: null,
-      deferReason: 'run_rate_limit',
-      notBefore: new Date(t0.getTime() + 60 * 60_000 + 1),
-    });
-
-    await comment(issue.key);
-    await comment(issue.key);
-    expect(
-      await ctx.database.collections.wakes.countDocuments({ issueId: new ObjectId(issue.id) }),
-    ).toBe(3);
-    expect(await fx.pendingWakes()).toBe(1);
-    expect(await fx.scheduler.processPendingWakes(at(t0, 30))).toEqual({
-      run: 0,
-      skip: 0,
-      defer: 0,
-    });
-
-    expect(await fx.scheduler.processPendingWakes(at(t0, 61))).toMatchObject({ run: 1 });
-    const run = fx.dispatcher.runs.at(-1);
-    expect(fx.dispatcher.runs).toHaveLength(3);
-    expect(run?.issueId.toHexString()).toBe(issue.id);
-    expect((await lastWake(issue.id))?.runId).toEqual(run?._id);
-    expect(await fx.pendingWakes()).toBe(0);
+  const limits = (maxIdleRunsPerIssue: number, maxCostPerDayUsd = 10) => ({
+    limits: { maxIdleRunsPerIssue, maxCostPerRunUsd: 1, maxCostPerDayUsd },
   });
 
-  it('re-checks a deferred wake at once when the board wakes the agent manually', async () => {
-    const agent = await fx.agent({
-      limits: { maxRunsPerIssuePerHour: 1, maxCostPerRunUsd: 1, maxCostPerDayUsd: 10 },
-    });
-    const issue = await fx.issue({ title: 'raised', assigneeAgentId: agent.id });
+  /** What a status change, document revision or sub-issue does to the issue during a run. */
+  const progress = (issueId: string) =>
+    ctx.database.collections.issues.updateOne(
+      { _id: new ObjectId(issueId) },
+      { $inc: { progress: 1 } },
+    );
+
+  const agentStatus = async (agentId: string) =>
+    (await ctx.request({ method: 'GET', url: `/api/agents/${agentId}` })).json().status;
+
+  it('never throttles runs that make progress, however many there are', async () => {
+    const agent = await fx.agent(limits(1));
+    const issue = await fx.issue({ title: 'productive', assigneeAgentId: agent.id });
+    const t0 = new Date('2030-01-01T10:00:00Z');
+    await fx.scheduler.processPendingWakes(t0);
+    for (let minute = 1; minute <= 8; minute += 1) {
+      await progress(issue.id);
+      await finishLast(at(t0, minute * 2 - 1));
+      await comment(issue.key);
+      expect(await fx.scheduler.processPendingWakes(at(t0, minute * 2))).toMatchObject({ run: 1 });
+    }
+    expect(fx.dispatcher.runs).toHaveLength(9);
+    expect(await agentStatus(agent.id)).toBe('active');
+  });
+
+  it('backs off after the idle-run limit, then pauses after one more idle run', async () => {
+    const agent = await fx.agent(limits(2));
+    const issue = await fx.issue({ title: 'idle', assigneeAgentId: agent.id });
     const t0 = new Date('2030-01-02T10:00:00Z');
     await fx.scheduler.processPendingWakes(t0);
     await finishLast(at(t0, 1));
     await comment(issue.key);
-    await fx.scheduler.processPendingWakes(at(t0, 2));
-    expect((await lastWake(issue.id))?.deferReason).toBe('run_rate_limit');
+    expect(await fx.scheduler.processPendingWakes(at(t0, 2))).toMatchObject({ run: 1 });
+    await finishLast(at(t0, 3));
 
-    await ctx.request({
-      method: 'PATCH',
-      url: `/api/agents/${agent.id}`,
-      payload: { limits: { maxRunsPerIssuePerHour: 5, maxCostPerRunUsd: 1, maxCostPerDayUsd: 10 } },
+    await comment(issue.key);
+    expect(await fx.scheduler.processPendingWakes(at(t0, 4))).toMatchObject({ run: 0, defer: 1 });
+    expect(await lastWake(issue.id)).toMatchObject({
+      processedAt: null,
+      skipReason: null,
+      deferReason: 'idle_backoff',
+      notBefore: at(t0, 13),
     });
+    await comment(issue.key);
+    expect(await fx.pendingWakes()).toBe(1);
+    expect(await fx.scheduler.processPendingWakes(at(t0, 12))).toEqual({
+      run: 0,
+      skip: 0,
+      defer: 0,
+    });
+    expect(await fx.scheduler.processPendingWakes(at(t0, 13))).toMatchObject({ run: 1 });
+    expect(await agentStatus(agent.id)).toBe('active');
+
+    await finishLast(at(t0, 14));
+    expect(await agentStatus(agent.id)).toBe('paused');
+    const comments = (
+      await ctx.request({ method: 'GET', url: `/api/issues/${issue.key}/comments` })
+    ).json();
+    expect(comments.items.at(-1).body).toMatch(/^Agent paused: its last 3 runs/);
+    await comment(issue.key);
+    await fx.scheduler.processPendingWakes(at(t0, 60));
+    expect(await lastWake(issue.id)).toMatchObject({ skipReason: 'agent_paused' });
+    expect(fx.dispatcher.runs).toHaveLength(3);
+  });
+
+  it('resets the idle count when a run makes progress', async () => {
+    const agent = await fx.agent(limits(2));
+    const issue = await fx.issue({ title: 'reset', assigneeAgentId: agent.id });
+    const t0 = new Date('2030-01-03T10:00:00Z');
+    await fx.scheduler.processPendingWakes(t0);
+    for (const [minute, productive] of [
+      [1, false],
+      [3, true],
+      [5, false],
+      [7, true],
+      [9, false],
+    ] as const) {
+      if (productive) await progress(issue.id);
+      await finishLast(at(t0, minute));
+      await comment(issue.key);
+      expect(await fx.scheduler.processPendingWakes(at(t0, minute + 1))).toMatchObject({ run: 1 });
+    }
+    await finishLast(at(t0, 11));
+    await comment(issue.key);
+    expect(await fx.scheduler.processPendingWakes(at(t0, 12))).toMatchObject({ defer: 1 });
+    expect((await lastWake(issue.id))?.deferReason).toBe('idle_backoff');
+    expect(await agentStatus(agent.id)).toBe('active');
+  });
+
+  it('lets a manual board wake skip the idle backoff, but not event wakes', async () => {
+    const agent = await fx.agent(limits(1));
+    const issue = await fx.issue({ title: 'board', assigneeAgentId: agent.id });
+    const t0 = new Date('2030-01-04T10:00:00Z');
+    await fx.scheduler.processPendingWakes(t0);
+    await finishLast(at(t0, 1));
+    await comment(issue.key);
+    await fx.scheduler.processPendingWakes(at(t0, 2));
+    expect((await lastWake(issue.id))?.deferReason).toBe('idle_backoff');
+
     const manual = await ctx.request({
       method: 'POST',
       url: `/api/agents/${agent.id}/wake`,
       payload: { issueId: issue.id },
     });
     expect(manual.json()).toEqual({ queued: false });
+    expect(await lastWake(issue.id)).toMatchObject({ notBefore: null, boardWake: true });
     expect(await fx.scheduler.processPendingWakes(at(t0, 3))).toMatchObject({ run: 1 });
     expect(await fx.pendingWakes()).toBe(0);
   });
 
-  it('defers a wake over the daily cost limit until the next UTC day', async () => {
-    const agent = await fx.agent({
-      limits: { maxRunsPerIssuePerHour: 4, maxCostPerRunUsd: 1, maxCostPerDayUsd: 1 },
+  it('counts a coding run whose commit was synced as progress', async () => {
+    const agent = await fx.agent(limits(1));
+    const issue = await fx.issue({ title: 'code', assigneeAgentId: agent.id });
+    const t0 = new Date('2030-01-05T10:00:00Z');
+    const code = (head: string | null, synced: boolean) => ({
+      branch: 'cvx/X-1',
+      base: 'a'.repeat(40),
+      head,
+      commit: head,
+      agentCommits: 0,
+      files: 1,
+      insertions: 1,
+      deletions: 0,
+      synced,
+      error: null,
     });
+    const finishWithCode = async (minute: number, head: string | null, synced: boolean) => {
+      const run = fx.dispatcher.runs.at(-1);
+      if (!run) throw new Error('expected a run');
+      await ctx.database.collections.runs.updateOne(
+        { _id: run._id },
+        { $set: { code: code(head, synced) } },
+      );
+      return fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd: 0.1 }, at(t0, minute));
+    };
+
+    await fx.scheduler.processPendingWakes(t0);
+    for (let minute = 1; minute <= 7; minute += 2) {
+      const finished = await finishWithCode(minute, 'b'.repeat(40), true);
+      expect(finished.madeProgress).toBe(true);
+      await comment(issue.key);
+      expect(await fx.scheduler.processPendingWakes(at(t0, minute + 1))).toMatchObject({ run: 1 });
+    }
+    expect((await finishWithCode(9, 'b'.repeat(40), false)).madeProgress).toBe(false);
+    await comment(issue.key);
+    expect(await fx.scheduler.processPendingWakes(at(t0, 10))).toMatchObject({ defer: 1 });
+    await fx.scheduler.processPendingWakes(at(t0, 19));
+    expect((await finishWithCode(20, 'a'.repeat(40), true)).madeProgress).toBe(false);
+    expect(await agentStatus(agent.id)).toBe('paused');
+  });
+
+  it('defers a wake over the daily cost limit until the next UTC day', async () => {
+    const agent = await fx.agent(limits(4, 1));
     const issue = await fx.issue({ title: 'expensive', assigneeAgentId: agent.id });
     const t0 = new Date('2030-01-03T22:00:00Z');
     await fx.scheduler.processPendingWakes(t0);
+    await progress(issue.id);
     await finishLast(at(t0, 1), 1);
     await comment(issue.key);
     await fx.scheduler.processPendingWakes(at(t0, 2));
@@ -222,30 +307,6 @@ describe('scheduler', () => {
     expect(fx.dispatcher.runs).toHaveLength(1);
     await fx.scheduler.processPendingWakes(at(t0, 120));
     expect(fx.dispatcher.runs).toHaveLength(2);
-  });
-
-  it('keeps loop detection for deferred wakes: the agent is paused, its wake skipped', async () => {
-    const agent = await fx.agent({
-      limits: { maxRunsPerIssuePerHour: 1, maxCostPerRunUsd: 1, maxCostPerDayUsd: 10 },
-    });
-    const issue = await fx.issue({ title: 'stuck', assigneeAgentId: agent.id });
-    const t0 = new Date('2030-01-05T08:00:00Z');
-    await fx.scheduler.processPendingWakes(t0);
-    for (let hour = 0; hour < 2; hour += 1) {
-      await finishLast(at(t0, hour * 61 + 1));
-      await comment(issue.key);
-      await fx.scheduler.processPendingWakes(at(t0, hour * 61 + 2));
-      expect((await lastWake(issue.id))?.deferReason).toBe('run_rate_limit');
-      await fx.scheduler.processPendingWakes(at(t0, (hour + 1) * 61));
-    }
-    await finishLast(at(t0, 123));
-    expect(fx.dispatcher.runs).toHaveLength(3);
-    const paused = await ctx.request({ method: 'GET', url: `/api/agents/${agent.id}` });
-    expect(paused.json().status).toBe('paused');
-    await comment(issue.key);
-    await fx.scheduler.processPendingWakes(at(t0, 300));
-    expect(await lastWake(issue.id)).toMatchObject({ skipReason: 'agent_paused' });
-    expect(fx.dispatcher.runs).toHaveLength(3);
   });
 
   it('rejects finishing a run twice', async () => {

@@ -14,7 +14,7 @@ describe('reportsTo migration', () => {
     title: '',
     reportsTo,
     adapter: { type: 'claude_cli' },
-    limits: { maxRunsPerIssuePerHour: 4, maxCostPerRunUsd: 2, maxCostPerDayUsd: 20 },
+    limits: { maxIdleRunsPerIssue: 4, maxCostPerRunUsd: 2, maxCostPerDayUsd: 20 },
     instructions: '',
     status: 'active',
     createdAt: new Date(),

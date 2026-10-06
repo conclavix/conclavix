@@ -3,6 +3,7 @@ import { CLOSED_ISSUE_STATUSES, type WakeDeferReason, type WakeSkipReason } from
 import type { AgentDoc, Collections, IssueDoc, WakeDoc } from '../../db.js';
 import { isActionable } from './wakes.js';
 import { projectAccessChecker } from '../projects/agent-access.js';
+import { idleRunLimit, idleStreak } from './loop-detection.js';
 
 export type GateResult =
   | { kind: 'run'; agent: AgentDoc; issue: IssueDoc }
@@ -10,7 +11,10 @@ export type GateResult =
   | { kind: 'defer' }
   | { kind: 'defer_until'; reason: WakeDeferReason; until: Date };
 
-const HOUR_MS = 60 * 60 * 1000;
+export interface GateOptions {
+  /** How long a wake waits after the agent's idle-run limit was reached on the issue. */
+  idleBackoffMs: number;
+}
 
 const startOfUtcDay = (now: Date): Date =>
   new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -63,14 +67,42 @@ async function issueGate(
 }
 
 /**
+ * After `maxIdleRunsPerIssue` consecutive runs without progress the next run on the issue waits
+ * `idleBackoffMs` after the last of them. A board wake (manual) skips the wait, so the board can
+ * always get the agent going again; runs that make progress never count, so productive work is
+ * never throttled by its number of runs.
+ */
+async function idleBackoff(
+  collections: Collections,
+  wake: WakeDoc,
+  agent: AgentDoc,
+  issue: IssueDoc,
+  now: Date,
+  options: GateOptions,
+  session: ClientSession,
+): Promise<GateResult | null> {
+  if (wake.reason === 'manual' || wake.boardWake === true) {
+    return null;
+  }
+  const limit = idleRunLimit(agent);
+  const streak = await idleStreak(collections, agent._id, issue._id, limit, session);
+  if (streak.count < limit || !streak.lastFinishedAt) {
+    return null;
+  }
+  const until = new Date(streak.lastFinishedAt.getTime() + options.idleBackoffMs);
+  return until > now ? { kind: 'defer_until', reason: 'idle_backoff', until } : null;
+}
+
+/**
  * Decide whether a wake becomes a run, is dropped with a reason, waits for a running run,
- * or waits until a rate or budget window frees (the hourly run window, or the next UTC day).
+ * or waits until a window frees (the idle backoff, or the next UTC day for the cost limit).
  */
 export async function evaluateWake(
   collections: Collections,
   wake: WakeDoc,
   now: Date,
   session: ClientSession,
+  options: GateOptions,
 ): Promise<GateResult> {
   const agent = await collections.agents.findOne({ _id: wake.agentId }, { session });
   if (!agent) {
@@ -86,21 +118,9 @@ export async function evaluateWake(
   if (!(await projectAccessChecker(collections, issue.projectId, session)).isEnabled(agent)) {
     return { kind: 'skip', reason: 'agent_disabled_in_project' };
   }
-  const windowStart = new Date(now.getTime() - HOUR_MS);
-  const recentRuns = await collections.runs
-    .find(
-      { agentId: agent._id, issueId: issue._id, createdAt: { $gte: windowStart } },
-      { session, projection: { createdAt: 1 } },
-    )
-    .sort({ createdAt: 1 })
-    .toArray();
-  const oldest = recentRuns[0];
-  if (oldest && recentRuns.length >= agent.limits.maxRunsPerIssuePerHour) {
-    return {
-      kind: 'defer_until',
-      reason: 'run_rate_limit',
-      until: new Date(oldest.createdAt.getTime() + HOUR_MS + 1),
-    };
+  const backoff = await idleBackoff(collections, wake, agent, issue, now, options, session);
+  if (backoff) {
+    return backoff;
   }
   if ((await costToday(collections, agent, now, session)) >= agent.limits.maxCostPerDayUsd) {
     return { kind: 'defer_until', reason: 'daily_cost_limit', until: startOfNextUtcDay(now) };

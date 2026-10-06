@@ -146,21 +146,26 @@ describe('reports links that wake their target', () => {
     expect(wakes.some((wake) => wake.issueId.equals(new ObjectId(loose.id)))).toBe(false);
   });
 
-  it('keeps the scheduler gates: a target over its run limit waits, a paused one is skipped', async () => {
+  it('keeps the scheduler gates: an idle target backs off, a paused one is skipped', async () => {
     await setWake(reviewLink.id, true);
     const { review } = await delegateReview();
     await ctx.request({
       method: 'PATCH',
       url: `/api/agents/${lead.id}`,
-      payload: { limits: { maxRunsPerIssuePerHour: 1, maxCostPerRunUsd: 1, maxCostPerDayUsd: 5 } },
+      payload: { limits: { maxIdleRunsPerIssue: 1, maxCostPerRunUsd: 1, maxCostPerDayUsd: 5 } },
     });
+    // The lead's last run on its plan changed nothing, so its next one waits for the backoff.
+    await ctx.database.collections.runs.updateMany(
+      { agentId: new ObjectId(lead.id), issueId: new ObjectId(plan.id) },
+      { $set: { madeProgress: false, finishedAt: new Date() } },
+    );
     await fx.patch(review.key, { status: 'done' });
     await fx.scheduler.processPendingWakes();
     const wake = await ctx.database.collections.wakes.findOne({
       agentId: new ObjectId(lead.id),
       reason: 'report_closed',
     });
-    expect(wake).toMatchObject({ processedAt: null, deferReason: 'run_rate_limit' });
+    expect(wake).toMatchObject({ processedAt: null, deferReason: 'idle_backoff' });
 
     await ctx.request({
       method: 'PATCH',

@@ -11,8 +11,9 @@ export const isActionable = (issue: Pick<IssueDoc, 'status' | 'assigneeAgentId'>
 
 /**
  * Queue a wake for (agent, issue); a pending wake for the same pair absorbs the new one.
- * A manual wake also lets an absorbing deferred wake be re-checked on the next tick,
- * so raising an agent's limits takes effect without waiting for the old window.
+ * A manual (board) wake also lets an absorbing deferred wake be re-checked on the next tick and
+ * marks it as a board wake, so raising an agent's limits takes effect without waiting for the old
+ * window and an idle backoff never holds back the board.
  */
 export async function requestWake(
   collections: Collections,
@@ -35,7 +36,7 @@ export async function requestWake(
           runId: null,
           skipReason: null,
         },
-        ...(reason === 'manual' ? { $set: { notBefore: null } } : {}),
+        ...(reason === 'manual' ? { $set: { notBefore: null, boardWake: true } } : {}),
       },
       { upsert: true, ...(session ? { session } : {}) },
     );

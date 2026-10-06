@@ -23,11 +23,36 @@ export const adapterSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
-export const agentLimitsSchema = z.strictObject({
-  maxRunsPerIssuePerHour: z.int().min(1).max(60).default(4),
-  maxCostPerRunUsd: z.number().positive().max(100).default(2),
-  maxCostPerDayUsd: z.number().positive().max(1000).default(20),
-});
+/** The name the idle-run limit had while it counted every run in a sliding hour. */
+const LEGACY_RUN_LIMIT_FIELD = 'maxRunsPerIssuePerHour';
+
+/**
+ * Accept the old field name for the idle-run limit: its value is taken over when the new name is
+ * absent and dropped otherwise, so older clients keep working.
+ */
+const renameLegacyRunLimit = (value: unknown): unknown => {
+  if (typeof value !== 'object' || value === null || !(LEGACY_RUN_LIMIT_FIELD in value)) {
+    return value;
+  }
+  const { [LEGACY_RUN_LIMIT_FIELD]: legacy, ...rest } = value as Record<string, unknown>;
+  return 'maxIdleRunsPerIssue' in rest ? rest : { ...rest, maxIdleRunsPerIssue: legacy };
+};
+
+export const DEFAULT_MAX_IDLE_RUNS_PER_ISSUE = 2;
+
+/**
+ * Per-agent limits. `maxIdleRunsPerIssue` counts consecutive runs on one issue without progress
+ * (see docs/agent-collaboration.md); runs that make progress never count against it. The cost
+ * limits are hard brakes independent of progress.
+ */
+export const agentLimitsSchema = z.preprocess(
+  renameLegacyRunLimit,
+  z.strictObject({
+    maxIdleRunsPerIssue: z.int().min(1).max(60).default(DEFAULT_MAX_IDLE_RUNS_PER_ISSUE),
+    maxCostPerRunUsd: z.number().positive().max(100).default(2),
+    maxCostPerDayUsd: z.number().positive().max(1000).default(20),
+  }),
+);
 
 /** Skills assigned to an agent; the runner mounts exactly these into each run workspace. */
 export const skillIdsSchema = z

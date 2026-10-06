@@ -119,7 +119,7 @@ const agent = (skillIds: string[]): AgentDetail => ({
   avatarUrl: null,
   reportsTo: null,
   adapter: { type: 'claude_cli' },
-  limits: { maxRunsPerIssuePerHour: 4, maxCostPerRunUsd: 2, maxCostPerDayUsd: 20 },
+  limits: { maxIdleRunsPerIssue: 4, maxCostPerRunUsd: 2, maxCostPerDayUsd: 20 },
   skillIds,
   instructions: '',
   createdAt: '2026-01-01',

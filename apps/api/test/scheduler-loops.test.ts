@@ -32,7 +32,7 @@ describe('scheduler loops, heartbeats and concurrency', () => {
 
   it('pauses an agent after three runs without progress and tells the board', async () => {
     const agent = await fx.agent({
-      limits: { maxRunsPerIssuePerHour: 10, maxCostPerRunUsd: 1, maxCostPerDayUsd: 10 },
+      limits: { maxIdleRunsPerIssue: 2, maxCostPerRunUsd: 1, maxCostPerDayUsd: 10 },
     });
     const issue = await fx.issue({ title: 'stuck', assigneeAgentId: agent.id, status: 'backlog' });
     await fx.patch(issue.key, { status: 'todo' });
@@ -52,7 +52,7 @@ describe('scheduler loops, heartbeats and concurrency', () => {
 
   it('does not pause an agent that makes progress', async () => {
     const agent = await fx.agent({
-      limits: { maxRunsPerIssuePerHour: 10, maxCostPerRunUsd: 1, maxCostPerDayUsd: 10 },
+      limits: { maxIdleRunsPerIssue: 2, maxCostPerRunUsd: 1, maxCostPerDayUsd: 10 },
     });
     const issue = await fx.issue({ title: 'moving', assigneeAgentId: agent.id });
     await ctx.database.collections.wakes.deleteMany({});

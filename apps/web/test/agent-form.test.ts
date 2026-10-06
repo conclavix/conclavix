@@ -19,7 +19,7 @@ const agent = (id: string, reportsTo: string | null): Agent => ({
   status: 'active',
   reportsTo,
   adapter: { type: 'claude_cli' },
-  limits: { maxRunsPerIssuePerHour: 4, maxCostPerRunUsd: 2, maxCostPerDayUsd: 20 },
+  limits: { maxIdleRunsPerIssue: 4, maxCostPerRunUsd: 2, maxCostPerDayUsd: 20 },
 });
 
 describe('agent form', () => {
@@ -90,12 +90,12 @@ describe('agent form', () => {
   it('coerces limits typed into number fields', () => {
     const form = emptyForm();
     form.limits = {
-      maxRunsPerIssuePerHour: '6' as unknown as number,
+      maxIdleRunsPerIssue: '6' as unknown as number,
       maxCostPerRunUsd: 1.5,
       maxCostPerDayUsd: 10,
     };
     expect(settingsPayload(form).limits).toEqual({
-      maxRunsPerIssuePerHour: 6,
+      maxIdleRunsPerIssue: 6,
       maxCostPerRunUsd: 1.5,
       maxCostPerDayUsd: 10,
     });

@@ -40,9 +40,9 @@ LiteLLM is optional; with one, each agent can get its own key so spend is tracke
 
 **Organisation**
 
-- Agents with role, title, instructions, model and limits: runs per issue per hour, cost per
-  run, cost per day. An agent whose last three runs on an issue changed nothing is paused, with a
-  comment on the issue.
+- Agents with role, title, instructions, model and limits: idle runs per issue, cost per run, cost
+  per day. Only runs without progress count: after a few of them in a row the agent backs off for
+  a few minutes, and if it still changes nothing it is paused, with a comment on the issue.
 - An org canvas where you draw `delegates` and `reports` links between agents. One agent is the
   lead; a new project gets a planning issue for the lead unless you turn that off.
 - Per-project agent access: each agent has a default, each project can override it.

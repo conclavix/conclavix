@@ -23,7 +23,7 @@ describe('overview', () => {
       title: '',
       reportsTo: null,
       adapter: { type: 'claude_cli' },
-      limits: { maxRunsPerIssuePerHour: 4, maxCostPerRunUsd: 5, maxCostPerDayUsd },
+      limits: { maxIdleRunsPerIssue: 4, maxCostPerRunUsd: 5, maxCostPerDayUsd },
       instructions: '',
       status,
       createdAt: at('2026-09-01T00:00:00Z'),

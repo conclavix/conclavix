@@ -12,7 +12,8 @@ async function main(): Promise<void> {
   const dispatcher = new QueueDispatcher(redisConnection(config.REDIS_URL));
   const scheduler = new Scheduler(database, dispatcher, {
     heartbeatMinutes: config.HEARTBEAT_MINUTES,
-    loopThreshold: 3,
+    idleBackoffMs: config.IDLE_BACKOFF_MINUTES * 60_000,
+    idleRunsAfterBackoff: 1,
     batchSize: 100,
   });
   const maxRunningMs = (config.RUN_TIMEOUT_MINUTES + 5) * 60_000;

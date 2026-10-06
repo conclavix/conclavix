@@ -90,9 +90,12 @@ const modelRules = computed(() =>
     </v-col>
     <v-col cols="12" sm="4">
       <v-text-field
-        v-model.number="form.limits.maxRunsPerIssuePerHour"
+        v-model.number="form.limits.maxIdleRunsPerIssue"
         type="number"
-        label="Max runs per issue per hour"
+        label="Idle runs before backoff"
+        hint="Runs in a row on one issue without progress (no status change, document revision, sub-issue or synced commit). Then the agent waits a few minutes; one more idle run pauses it. Productive runs never count."
+        persistent-hint
+        data-test="idle-runs-field"
         :rules="[rules.range(1, 60, true)]"
       />
     </v-col>

@@ -142,8 +142,10 @@ describe('scheduler failure handling', () => {
   });
 
   it('rolls back the loop pause if its system comment fails, and can retry it', async () => {
-    fx = await createFixture(ctx, { loopThreshold: 1 });
-    const agent = await fx.agent();
+    fx = await createFixture(ctx, { idleRunsAfterBackoff: 0 });
+    const agent = await fx.agent({
+      limits: { maxIdleRunsPerIssue: 1, maxCostPerRunUsd: 2, maxCostPerDayUsd: 20 },
+    });
     const issue = await fx.issue({ title: 'pause atomically', assigneeAgentId: agent.id });
     await fx.scheduler.processPendingWakes();
     const run = fx.dispatcher.runs[0];
@@ -255,7 +257,7 @@ describe('scheduler failure handling', () => {
     'carries the budget and accounts for actual cost %s independently of breaches',
     async (costUsd) => {
       const agent = await fx.agent({
-        limits: { maxCostPerRunUsd: 0.5, maxCostPerDayUsd: 1, maxRunsPerIssuePerHour: 10 },
+        limits: { maxCostPerRunUsd: 0.5, maxCostPerDayUsd: 1, maxIdleRunsPerIssue: 10 },
       });
       await fx.issue({ title: 'budget', assigneeAgentId: agent.id });
       await fx.scheduler.processPendingWakes();

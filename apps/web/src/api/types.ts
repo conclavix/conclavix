@@ -7,7 +7,7 @@ export interface Agent {
   avatarUrl: string | null;
   reportsTo: string | null;
   adapter: { type: string; model?: string };
-  limits: { maxRunsPerIssuePerHour: number; maxCostPerRunUsd: number; maxCostPerDayUsd: number };
+  limits: { maxIdleRunsPerIssue: number; maxCostPerRunUsd: number; maxCostPerDayUsd: number };
   skillIds?: string[];
   /** Whether the agent may work in projects without an override; missing means enabled. */
   projectDefault?: 'enabled' | 'disabled';

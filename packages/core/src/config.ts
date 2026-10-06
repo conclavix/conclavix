@@ -118,6 +118,8 @@ const baseConfigSchema = z.object({
     z.coerce.number().int().min(0).max(3600).default(120),
   ),
   HEARTBEAT_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
+  /** How long an agent waits on an issue after `maxIdleRunsPerIssue` runs without progress. */
+  IDLE_BACKOFF_MINUTES: z.coerce.number().int().min(1).max(1440).default(10),
   CONCLAVIX_MODELS: modelListSchema,
   /** Lets skill directory sources use plain http and private addresses; for local tests only. */
   SKILL_SOURCES_ALLOW_PRIVATE: z.stringbool().default(false),
