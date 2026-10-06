@@ -326,6 +326,42 @@ describe('scheduler', () => {
       expect(await lastWake(issue.id)).toMatchObject({ reason: 'comment' });
     });
 
+    it('posts the comment the ordinary way when the review was closed under a closed parent meanwhile', async () => {
+      const agent = await fx.agent();
+      const parent = await fx.issue({ title: 'parent' });
+      const issue = await fx.issue({
+        title: 'child in review',
+        assigneeAgentId: agent.id,
+        parentId: parent.id,
+      });
+      await fx.scheduler.processPendingWakes();
+      await finishLast(new Date());
+      await fx.patch(issue.key, { status: 'in_review' });
+      expect(await fx.pendingWakes()).toBe(0);
+      const update = IssueRepository.prototype.update;
+      const spy = vi
+        .spyOn(IssueRepository.prototype, 'update')
+        .mockImplementationOnce(async function (this: IssueRepository, ...args) {
+          // The agent finishes the child and the parent closes before the answer's transaction,
+          // so moving the child back to in_progress is no longer allowed.
+          await ctx.database.collections.issues.updateMany(
+            { _id: { $in: [new ObjectId(issue.id), new ObjectId(parent.id)] } },
+            { $set: { status: 'done', closedAt: new Date() } },
+          );
+          return update.apply(this, args);
+        });
+      try {
+        expect((await comment(issue.key)).statusCode).toBe(201);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(
+        await ctx.database.collections.comments.countDocuments({ issueId: new ObjectId(issue.id) }),
+      ).toBe(1);
+      expect(await issueDoc(issue.id)).toMatchObject({ status: 'done' });
+      expect(await fx.pendingWakes()).toBe(0);
+    });
+
     it('leaves the issue in review and wakes nobody on an agent comment', async () => {
       const { issue } = await inReview();
       const other = await fx.agent();

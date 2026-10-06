@@ -85,7 +85,8 @@ export class CommentRepository {
    * together (through the issue update, so the board column follows), and the assignee gets a
    * comment wake under the usual run limits. The agent sets in_review again when it needs the
    * board once more. False, with nothing written, when the issue left in_review meanwhile (another
-   * answer, a status change); the caller then posts the comment the ordinary way.
+   * answer, a status change), also when that made the move itself invalid; the caller then posts
+   * the comment the ordinary way.
    */
   private async answerReview(issue: IssueDoc, doc: CommentDoc): Promise<boolean> {
     const { collections } = this.database;
@@ -106,6 +107,12 @@ export class CommentRepository {
       return true;
     } catch (error) {
       if (error instanceof ReviewAlreadyAnswered) {
+        return false;
+      }
+      // update() validates the move before `within` runs, so an issue that left in_review
+      // meanwhile can fail there (e.g. reopening under a closed parent); fall back in that case too.
+      const now = await findIssueByRef(collections, issue._id.toHexString());
+      if (!answersReview(now, doc.author)) {
         return false;
       }
       throw error;
