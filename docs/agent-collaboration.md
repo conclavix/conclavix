@@ -111,26 +111,31 @@ skip it):
 
 - `idle_backoff` (`maxIdleRunsPerIssue` runs in a row on this issue without progress, see below):
   `notBefore` is `IDLE_BACKOFF_MINUTES` (default 10) after the last of those runs finished.
+- `issue_run_cap` (`MAX_RUNS_PER_ISSUE_PER_DAY` runs of the agent on this issue in the last 24
+  hours, default 50, with or without progress): `notBefore` is when the oldest of them leaves the
+  24 hours.
 - `daily_cost_limit` (`maxCostPerDayUsd` spent since midnight UTC): `notBefore` is the next
   midnight UTC. Deferring keeps one rule for both limits; the run then counts against the new day.
 
 While a wake waits, further wakes for the same agent and issue are absorbed by it, so a deferred
 lead gets exactly one run when the window frees. A manual wake from the board (after raising the
 limits, for example) clears `notBefore`, so the wake is checked on the next tick, and marks the
-wake as a board wake, which skips the idle backoff (the cost limit and every other gate still
-apply). Wakes from events (comments, closed sub-issues, unblocking, reports, heartbeats) do not
+wake as a board wake, which skips the idle backoff (the run cap, the cost limit and every other
+gate still apply). Wakes from events (comments, closed sub-issues, unblocking, reports, heartbeats) do not
 skip it. Wakes deferred by the former hourly window (`run_rate_limit`) are released on the first
 start after the upgrade.
 
 ### Idle runs: backoff, then pause
 
 The limit counts repetitions, not runs. A finished run **made progress** when it changed its
-issue's status, revised a document, created a sub-issue or reopened an issue (each raises the
-issue's progress counter), or when it was a coding run whose commits were synced into the project
-repository. Only consecutive finished runs of the same agent on the same issue **without** progress
-count; one run with progress resets the count. Productive agents are therefore never throttled by
-how many runs they need, only by their cost limits (`maxCostPerRunUsd`, `maxCostPerDayUsd`), which
-stay hard brakes.
+issue's status, revised a document (a revision with the same title and body does not count),
+created a sub-issue or reopened an issue (each raises the issue's progress counter), or when it was
+a coding run whose commits were synced into the project repository. Only consecutive finished runs
+of the same agent on the same issue **without** progress count; one run with progress resets the
+count. Productive agents are therefore not throttled by how many runs they need. Hard brakes stay
+in place regardless of progress: the cost limits (`maxCostPerRunUsd`, `maxCostPerDayUsd`) and the
+run cap per issue (`MAX_RUNS_PER_ISSUE_PER_DAY`), a backstop for loops whose runs look like
+progress, such as an agent that commits a changed log file every run.
 
 With `N = maxIdleRunsPerIssue` (per agent, 1 to 60, default 2):
 

@@ -75,6 +75,42 @@ describe('scheduler loops, heartbeats and concurrency', () => {
     ).toBe('active');
   });
 
+  it('does not count rewriting a document unchanged as progress', async () => {
+    const agent = await fx.agent({
+      limits: { maxIdleRunsPerIssue: 2, maxCostPerRunUsd: 1, maxCostPerDayUsd: 10 },
+    });
+    const issue = await fx.issue({ title: 'same notes', assigneeAgentId: agent.id });
+    await ctx.database.collections.wakes.deleteMany({});
+    await ctx.database.collections.issues.updateOne(
+      { _id: new ObjectId(issue.id) },
+      { $set: { checkoutRunId: null } },
+    );
+    const write = (body: string, baseRevision?: number) =>
+      ctx.request({
+        method: 'PUT',
+        url: `/api/issues/${issue.key}/documents/notes`,
+        payload: baseRevision === undefined ? { body } : { body, baseRevision },
+      });
+
+    await runOnce(agent.id, issue.id, async () => {
+      expect((await write('same')).statusCode).toBeLessThan(300);
+    });
+    expect(fx.dispatcher.runs.at(-1)?._id).toBeDefined();
+    for (let revision = 1; revision <= 3; revision += 1) {
+      await runOnce(agent.id, issue.id, async () => {
+        expect((await write('same', revision)).statusCode).toBeLessThan(300);
+      });
+    }
+    const runs = await ctx.database.collections.runs
+      .find({ issueId: new ObjectId(issue.id) })
+      .sort({ createdAt: 1, _id: 1 })
+      .toArray();
+    expect(runs.map((run) => run.madeProgress)).toEqual([true, false, false, false]);
+    expect(
+      (await ctx.request({ method: 'GET', url: `/api/agents/${agent.id}` })).json().status,
+    ).toBe('paused');
+  });
+
   it('sweeps heartbeats only for actionable, idle, overdue issues', async () => {
     const agent = await fx.agent();
     const overdue = await fx.issue({ title: 'overdue', assigneeAgentId: agent.id });

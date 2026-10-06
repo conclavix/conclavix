@@ -120,6 +120,11 @@ const baseConfigSchema = z.object({
   HEARTBEAT_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
   /** How long an agent waits on an issue after `maxIdleRunsPerIssue` runs without progress. */
   IDLE_BACKOFF_MINUTES: z.coerce.number().int().min(1).max(1440).default(10),
+  /**
+   * Hard cap on runs of one agent on one issue in 24 hours, progress or not: a backstop for loops
+   * whose runs look like progress. High enough that productive work does not reach it.
+   */
+  MAX_RUNS_PER_ISSUE_PER_DAY: z.coerce.number().int().min(1).max(1000).default(50),
   CONCLAVIX_MODELS: modelListSchema,
   /** Lets skill directory sources use plain http and private addresses; for local tests only. */
   SKILL_SOURCES_ALLOW_PRIVATE: z.stringbool().default(false),

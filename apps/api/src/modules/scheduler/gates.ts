@@ -14,7 +14,11 @@ export type GateResult =
 export interface GateOptions {
   /** How long a wake waits after the agent's idle-run limit was reached on the issue. */
   idleBackoffMs: number;
+  /** Runs of one agent on one issue in 24 hours, with or without progress. */
+  maxRunsPerIssuePerDay: number;
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const startOfUtcDay = (now: Date): Date =>
   new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -94,8 +98,45 @@ async function idleBackoff(
 }
 
 /**
+ * Backstop for loops whose runs look like progress (a rewritten file, a status ping-pong): at most
+ * `maxRunsPerIssuePerDay` runs of the agent on the issue in 24 hours. A hard brake like the cost
+ * limits, so a board wake does not skip it; the wake waits until the oldest run leaves the window.
+ */
+async function issueRunCap(
+  collections: Collections,
+  agent: AgentDoc,
+  issue: IssueDoc,
+  now: Date,
+  options: GateOptions,
+  session: ClientSession,
+): Promise<GateResult | null> {
+  const recent = await collections.runs
+    .find(
+      {
+        agentId: agent._id,
+        issueId: issue._id,
+        createdAt: { $gt: new Date(now.getTime() - DAY_MS) },
+      },
+      { session, projection: { createdAt: 1 } },
+    )
+    .sort({ createdAt: -1 })
+    .limit(options.maxRunsPerIssuePerDay)
+    .toArray();
+  const oldest = recent.at(-1);
+  if (!oldest || recent.length < options.maxRunsPerIssuePerDay) {
+    return null;
+  }
+  return {
+    kind: 'defer_until',
+    reason: 'issue_run_cap',
+    until: new Date(oldest.createdAt.getTime() + DAY_MS),
+  };
+}
+
+/**
  * Decide whether a wake becomes a run, is dropped with a reason, waits for a running run,
- * or waits until a window frees (the idle backoff, or the next UTC day for the cost limit).
+ * or waits until a window frees (the idle backoff, the daily run cap per issue, or the next UTC day
+ * for the cost limit).
  */
 export async function evaluateWake(
   collections: Collections,
@@ -121,6 +162,10 @@ export async function evaluateWake(
   const backoff = await idleBackoff(collections, wake, agent, issue, now, options, session);
   if (backoff) {
     return backoff;
+  }
+  const capped = await issueRunCap(collections, agent, issue, now, options, session);
+  if (capped) {
+    return capped;
   }
   if ((await costToday(collections, agent, now, session)) >= agent.limits.maxCostPerDayUsd) {
     return { kind: 'defer_until', reason: 'daily_cost_limit', until: startOfNextUtcDay(now) };

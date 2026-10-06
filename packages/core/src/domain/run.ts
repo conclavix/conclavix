@@ -94,6 +94,7 @@ export type WakeSkipReason =
   | 'blocked'
   | 'run_rate_limit'
   | 'idle_backoff'
+  | 'issue_run_cap'
   | 'daily_cost_limit'
   | 'agent_disabled_in_project';
 
@@ -105,5 +106,5 @@ export type WakeSkipReason =
  */
 export type WakeDeferReason = Extract<
   WakeSkipReason,
-  'run_rate_limit' | 'idle_backoff' | 'daily_cost_limit'
+  'run_rate_limit' | 'idle_backoff' | 'issue_run_cap' | 'daily_cost_limit'
 >;

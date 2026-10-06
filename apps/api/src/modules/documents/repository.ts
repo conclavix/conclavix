@@ -156,12 +156,22 @@ export class DocumentRepository {
       author,
       createdAt: now,
     };
+    const previous = existing
+      ? await this.collections.revisions.findOne(
+          { documentId: existing._id, revision: existing.revision },
+          { session, projection: { title: 1, body: 1 } },
+        )
+      : null;
     await this.collections.revisions.insertOne(revision, { session });
-    await this.collections.issues.updateOne(
-      { _id: issueId },
-      { $inc: { progress: 1 } },
-      { session },
-    );
+    // Rewriting a document unchanged is no progress; it must not reset loop detection.
+    const changed = !previous || previous.body !== input.body || previous.title !== doc.title;
+    if (changed) {
+      await this.collections.issues.updateOne(
+        { _id: issueId },
+        { $inc: { progress: 1 } },
+        { session },
+      );
+    }
     return { document: toRevision(doc, revision), created: !existing };
   }
 }

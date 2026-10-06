@@ -14,6 +14,7 @@ async function main(): Promise<void> {
     heartbeatMinutes: config.HEARTBEAT_MINUTES,
     idleBackoffMs: config.IDLE_BACKOFF_MINUTES * 60_000,
     idleRunsAfterBackoff: 1,
+    maxRunsPerIssuePerDay: config.MAX_RUNS_PER_ISSUE_PER_DAY,
     batchSize: 100,
   });
   const maxRunningMs = (config.RUN_TIMEOUT_MINUTES + 5) * 60_000;

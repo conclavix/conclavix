@@ -27,6 +27,8 @@ export interface SchedulerOptions {
    * it pauses after `maxIdleRunsPerIssue + idleRunsAfterBackoff` consecutive idle runs.
    */
   idleRunsAfterBackoff: number;
+  /** Hard cap on runs of one agent on one issue in 24 hours, progress or not. */
+  maxRunsPerIssuePerDay: number;
   batchSize: number;
 }
 
@@ -34,6 +36,7 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   heartbeatMinutes: 60,
   idleBackoffMs: 10 * 60_000,
   idleRunsAfterBackoff: 1,
+  maxRunsPerIssuePerDay: 50,
   batchSize: 100,
 };
 

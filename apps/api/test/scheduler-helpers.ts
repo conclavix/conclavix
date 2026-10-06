@@ -37,6 +37,7 @@ export async function createFixture(
     heartbeatMinutes: 60,
     idleBackoffMs: 10 * 60_000,
     idleRunsAfterBackoff: 1,
+    maxRunsPerIssuePerDay: 50,
     batchSize: 100,
     ...options,
   });
