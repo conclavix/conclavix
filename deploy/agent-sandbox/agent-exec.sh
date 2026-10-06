@@ -7,7 +7,7 @@
 set -euo pipefail
 umask 077
 
-readonly allowed='^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_[A-Z0-9_]+|CLAUDE_CODE_[A-Z0-9_]+|CONCLAVIX_RUN_TOKEN|ENABLE_TOOL_SEARCH|LANG|LC_[A-Z]+|TZ)$'
+readonly allowed='^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_[A-Z0-9_]+|CLAUDE_CODE_[A-Z0-9_]+|CONCLAVIX_RUN_BEARER|ENABLE_TOOL_SEARCH|LANG|LC_[A-Z]+|TZ)$'
 readonly base64_value='^[A-Za-z0-9+/]*={0,2}$'
 
 if [[ $# -lt 1 || ${1:0:1} != / ]]; then

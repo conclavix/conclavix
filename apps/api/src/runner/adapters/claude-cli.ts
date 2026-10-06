@@ -27,6 +27,13 @@ const SUDO_KILL_MARGIN_MS = 15_000;
 /** The run token reaches claude only through this variable, never through argv or a file. */
 export const RUN_TOKEN_ENV = 'CONCLAVIX_RUN_TOKEN';
 /**
+ * The run token's variable in coding runs. The sandbox sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, under
+ * which Claude Code expands variables whose names look like credentials (TOKEN, KEY, AUTH, ...) to
+ * an empty string in MCP headers, so the conclavix server would get `Bearer ` and answer 401. This
+ * name avoids those patterns; the managed `sandbox.credentials` deny still hides it from Bash.
+ */
+export const SANDBOX_RUN_TOKEN_ENV = 'CONCLAVIX_RUN_BEARER';
+/**
  * Pre-approves every tool of the conclavix MCP server (the same rule the coding sandbox uses).
  * The server decides per run which tools exist (lead tools, code tools), so a list of names here
  * would only drift: under dontAsk a conclavix tool missing from it is silently denied.
@@ -118,13 +125,13 @@ export function agentEnv(
 }
 
 /** MCP config for one run; claude expands the token from the environment, so it holds no secret. */
-export function mcpConfig(mcpUrl: string): string {
+export function mcpConfig(mcpUrl: string, tokenEnv: string = RUN_TOKEN_ENV): string {
   return JSON.stringify({
     mcpServers: {
       conclavix: {
         type: 'http',
         url: mcpUrl,
-        headers: { Authorization: `Bearer \${${RUN_TOKEN_ENV}}` },
+        headers: { Authorization: `Bearer \${${tokenEnv}}` },
       },
     },
   });
@@ -183,7 +190,7 @@ export function codeClaudeArgs(input: AdapterRunInput): string[] {
     '--no-session-persistence',
     '--strict-mcp-config',
     '--mcp-config',
-    mcpConfig(input.mcpUrl),
+    mcpConfig(input.mcpUrl, SANDBOX_RUN_TOKEN_ENV),
     '--max-budget-usd',
     budgetArg(input.run.maxCostPerRunUsd),
     '--setting-sources',
@@ -401,7 +408,7 @@ export class ClaudeCliAdapter implements Adapter {
           ...this.options.extraEnv,
           ...env,
           ENABLE_TOOL_SEARCH: 'false',
-          [RUN_TOKEN_ENV]: input.token,
+          [SANDBOX_RUN_TOKEN_ENV]: input.token,
         })}${claudeStdin(input)}`,
         killAfterMs: SANDBOX_KILL_AFTER_MS,
         onStderr: (line) => {

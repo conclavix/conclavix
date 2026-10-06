@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { parseRunArgs } from '../args.mjs';
 import { mergeConfig } from '../config.mjs';
@@ -78,6 +79,18 @@ describe('managedSettings', () => {
     const names = settings.sandbox.credentials.envVars.map((entry) => entry.name);
     assert.deepEqual(names, SECRET_ENV);
     assert.ok(settings.sandbox.credentials.envVars.every((entry) => entry.mode === 'deny'));
+  });
+
+  it('hides exactly the secrets the exec wrapper accepts, the run token included', () => {
+    const script = readFileSync(new URL('../agent-exec.sh', import.meta.url), 'utf8');
+    const allowed = new RegExp(/^readonly allowed='([^']+)'$/m.exec(script)[1]);
+    assert.deepEqual(
+      SECRET_ENV.filter((name) => !allowed.test(name)),
+      [],
+    );
+    assert.ok(SECRET_ENV.includes('CONCLAVIX_RUN_BEARER'));
+    // A credential-like name would be expanded to an empty string in the MCP header.
+    assert.ok(!allowed.test('CONCLAVIX_RUN_TOKEN'));
   });
 });
 
