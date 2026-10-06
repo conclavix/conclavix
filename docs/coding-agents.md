@@ -169,9 +169,14 @@ The probe mode of the acceptance script checks that such a reference reaches the
   the branch tip, `git add -A` skips `node_modules/`, `.venv/` and other caches, and
   `commit-tree` writes one commit with the author `Conclavix <agent name>`
   (`agent-<id>@conclavix.invalid`). The message is the agent's result, redacted like the run log,
-  with `Conclavix-Issue/Run/Agent` trailers. Commits the agent made itself stay below it.
+  with `Conclavix-Issue/Run/Agent` trailers. Commits the agent made itself stay below it. If the
+  agent reset or rebased the branch so that it no longer contains the server tip the run started
+  from, the runner commits the work tree on top of that server tip instead (the rewritten commits
+  are dropped, their content is in the work tree) and records a run event; the server branch is
+  never rewritten by a run.
 - Then `syncIssueBranch` fetches `cvx/<KEY>` into the project repository (fast-forward only; a
-  rewritten branch is not forced and the run records the refusal).
+  rewritten branch is not forced and the run records the refusal). A clone that is removed and
+  created again starts from the server's `cvx/<KEY>`, not from `main`.
 - The run stores `code` (branch, base, head, commit, agent commits, files, insertions,
   deletions, synced, error); the run view shows it with a link to the Code tab.
 - Two runs never share a clone at the same time: the runner locks the issue clone, and while a

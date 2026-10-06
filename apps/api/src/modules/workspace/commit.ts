@@ -66,6 +66,12 @@ export interface CloneCommit {
   commit: string | null;
   /** Commits the agent made itself in the clone during the run (on top of the base). */
   agentCommits: number;
+  /**
+   * True when the clone's branch no longer contained the base (the agent reset or rebased it):
+   * the work tree was then committed on top of the base instead, so the sync stays a
+   * fast-forward and the agent's rewritten commits are not kept.
+   */
+  rewritten: boolean;
   stats: DiffStats;
 }
 
@@ -123,8 +129,11 @@ export class CodeWorkspace extends Workspace {
 
   /**
    * Commit every change in the work tree of an issue clone on `cvx/<KEY>` with a fixed author.
-   * Commits the agent made itself stay as they are; the runner's commit goes on top. Returns the
-   * new tip, the commit (null without changes) and the diff stats against `input.base`.
+   * Commits the agent made itself stay as they are; the runner's commit goes on top. If the agent
+   * rewrote the branch so that it no longer contains `input.base`, the work tree is committed on
+   * top of the base instead: the server branch is never rewritten, and the next sync is a
+   * fast-forward. Returns the new tip, the commit (null without changes) and the diff stats
+   * against `input.base`.
    */
   async commitIssueWork(
     projectId: string,
@@ -139,7 +148,9 @@ export class CodeWorkspace extends Workspace {
       await this.resetCloneConfig(gitDir);
       const git = this.cloneGit(gitDir);
       const tip = await git.commit(ref);
-      const parent = tip ?? (await git.commit(input.base ?? ''));
+      const base = await git.commit(input.base ?? '');
+      const rewritten = tip !== null && base !== null && !(await git.isAncestor(base, tip));
+      const parent = rewritten ? base : (tip ?? base);
       if (!parent) throw notFound(`Branch ${branch} in the workspace of ${issueKey}`);
       const index = join(gitDir, `cvx-index-${randomBytes(6).toString('hex')}`);
       const excludes = await mkdtemp(join(tmpdir(), 'cvx-commit-'));
@@ -160,12 +171,12 @@ export class CodeWorkspace extends Workspace {
         await git.run(['update-ref', ref, head, tip ?? NO_REF]);
         await git.run(['symbolic-ref', 'HEAD', ref]);
         await rename(index, join(gitDir, 'index'));
-        const base = input.base && (await git.commit(input.base)) ? input.base : null;
         return {
           branch,
           head,
           commit,
           agentCommits: await this.countCommits(git, base, parent).catch(() => 0),
+          rewritten,
           stats: await this.diffStats(git, base, head).catch(() => UNKNOWN_STATS),
         };
       } finally {
@@ -203,7 +214,19 @@ export class CodeWorkspace extends Workspace {
         throw error;
       }
     };
-    return { run, text, commit };
+    /** Whether `ancestor` is reachable from `descendant` (a commit counts as its own ancestor). */
+    const isAncestor = async (ancestor: string, descendant: string): Promise<boolean> => {
+      try {
+        await run(['merge-base', '--is-ancestor', ancestor, descendant]);
+        return true;
+      } catch (error) {
+        if (error instanceof GitError && error.reason === 'exit' && error.exitCode === 1) {
+          return false;
+        }
+        throw error;
+      }
+    };
+    return { run, text, commit, isAncestor };
   }
 
   private async commitTree(

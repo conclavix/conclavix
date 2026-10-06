@@ -143,7 +143,7 @@ export class CodeRuns {
     } else if (NOT_COMMITTED.has(result.sandbox.result)) {
       code.error = `the sandbox stopped the run (${result.sandbox.result}); nothing was committed`;
     } else {
-      await this.commitAndSync(context, agent, issue, run, result, code, redact);
+      await this.commitAndSync(context, agent, issue, run, result, code, events, redact);
     }
     if (code.error) events.record('runner', `code: ${code.error}`);
     const commit = code.commit ? `commit ${code.commit.slice(0, 12)}` : 'no new commit';
@@ -162,6 +162,7 @@ export class CodeRuns {
     run: RunDoc,
     result: AdapterResult,
     code: RunCode,
+    events: RunEventRecorder,
     redact: (text: string) => string,
   ): Promise<void> {
     try {
@@ -170,6 +171,12 @@ export class CodeRuns {
         message: redact(commitMessage(agent, issue, run, result)),
         base: context.base,
       });
+      if (commit.rewritten) {
+        events.record(
+          'runner',
+          `${context.branch} in the clone no longer contained the server tip ${short(context.base)}; the work tree was committed on top of it instead`,
+        );
+      }
       Object.assign(code, {
         head: commit.head,
         commit: commit.commit,
