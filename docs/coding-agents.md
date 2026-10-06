@@ -136,10 +136,18 @@ file would have to be readable by the unit. The runner writes them to sudo's std
 `NAME=<base64>` lines followed by an empty line, ahead of the stream-json prompt.
 `systemd-run --pipe` hands the same pipe to the unit, where `agent-exec.sh` reads exactly these
 lines (bash reads a pipe byte by byte, so nothing of the prompt is consumed), accepts only
-`CLAUDE_CODE_*`, `ANTHROPIC_*`, `CONCLAVIX_RUN_TOKEN` and locale variables, exports them and
+`CLAUDE_CODE_*`, `ANTHROPIC_*`, `CONCLAVIX_RUN_BEARER` and locale variables, exports them and
 `exec`s claude. The values then live where they lived before this feature: in the claude
 process's environment, which Bash cannot read (scrub, PID namespace, `credentials` deny) and the
 file tools may not read (`Read(//proc/**)` deny, read block).
+
+The run token travels as `CONCLAVIX_RUN_BEARER` here, not as `CONCLAVIX_RUN_TOKEN` like in
+read-only runs: with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` set, Claude Code expands variables whose
+names look like credentials (`TOKEN`, `KEY`, `AUTH`, `SECRET`, ...) to an empty string in MCP
+headers, so the conclavix MCP server would receive `Authorization: Bearer ` and refuse the run
+(`mcp: conclavix=failed` in the init event). Because the scrub does not match that name, the
+managed `sandbox.credentials.envVars` deny entry is what keeps it away from Bash;
+`sandbox-acceptance.sh --with-claude` checks both (MCP `connected`, no `CONCLAVIX_*` in Bash).
 
 ### 5. Git and the clone
 

@@ -37,6 +37,7 @@ echo "uid=$(id -u)"
 findmnt -no OPTIONS -T "$0" | tr , '\\n' | grep -qx noexec && echo "policy-mount=noexec" || echo "policy-mount=exec"
 echo "scrub=$CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"
 echo "tokenlen=\${#CLAUDE_CODE_OAUTH_TOKEN}"
+echo "runlen=\${#CONCLAVIX_RUN_BEARER}"
 echo ok > own.txt && echo "write-own=ok"
 cat ../ITG-2/secret.txt >/dev/null 2>&1 && echo "other-clone=readable" || echo "other-clone=hidden"
 ls "$CVX_ROOT/repos" >/dev/null 2>&1 && echo "repos=visible" || echo "repos=hidden"
@@ -117,7 +118,8 @@ describe(
       rmSync(root, { recursive: true, force: true });
     });
 
-    const ENV_INPUT = `CLAUDE_CODE_OAUTH_TOKEN=${Buffer.from('not-a-real-token').toString('base64')}\n\n`;
+    const b64 = (value) => Buffer.from(value).toString('base64');
+    const ENV_INPUT = `CLAUDE_CODE_OAUTH_TOKEN=${b64('not-a-real-token')}\nCONCLAVIX_RUN_BEARER=${b64('cvx_run_synthetic')}\n\n`;
 
     const runProbe = (runId, mode, extra = [], configFile = config, stdin = ENV_INPUT) =>
       spawnSync(
@@ -154,6 +156,7 @@ describe(
         'uid=65534',
         'scrub=1',
         'tokenlen=16',
+        'runlen=17',
         'write-own=ok',
         'other-clone=hidden',
         'repos=hidden',

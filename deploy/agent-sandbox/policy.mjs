@@ -5,13 +5,17 @@ export const CACHE_DIR = '/tmp/cvx-cache';
 /** HOME of claude inside the unit, on the unit's private /tmp. */
 export const RUN_HOME = '/tmp/cvx-home';
 
-/** Variables claude needs and sandboxed commands must never see. */
+/**
+ * Variables claude needs and sandboxed commands must never see. The run token's name avoids
+ * credential patterns on purpose (claude would not expand it into the MCP header under the env
+ * scrub), so the scrub does not cover it and this deny entry is what hides it from Bash.
+ */
 export const SECRET_ENV = [
   'CLAUDE_CODE_OAUTH_TOKEN',
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_CUSTOM_HEADERS',
-  'CONCLAVIX_RUN_TOKEN',
+  'CONCLAVIX_RUN_BEARER',
 ];
 
 /** The clone of an issue below the code root. */

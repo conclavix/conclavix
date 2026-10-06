@@ -11,8 +11,11 @@
 # The probe mode starts real transient units through the installed root helper with a scripted
 # probe instead of claude. --with-claude starts claude through the runner's path (cvx-runner,
 # sudo, helper) with the runner's credentials from /etc/conclavix/runner.env and asks it to run
-# one probe script with Bash; it costs one short model turn. Nothing secret is printed: the probes
-# report PASS/FAIL per check, and the Claude output is parsed for those lines only.
+# one probe script with Bash; it costs one short model turn. That run also gets an MCP server like
+# the board's: a stub on 127.0.0.1 that answers only the run's bearer, which claude must expand from
+# the variable the runner uses (the init event has to report it as connected). Nothing secret is
+# printed: the probes report PASS/FAIL per check, and the Claude output is parsed for those lines
+# only.
 set -euo pipefail
 
 HELPER=${HELPER:-/usr/local/libexec/conclavix/agent-run.mjs}
@@ -47,7 +50,9 @@ echo "claude $(/usr/bin/claude --version 2>/dev/null | head -1), $(bwrap --versi
 
 work=$(mktemp -d /run/cvx-acceptance.XXXXXX)
 clones="$CODE_ROOT/workspaces/$PROJECT"
+stub=
 cleanup() {
+  [[ -n $stub ]] && kill "$stub" 2>/dev/null
   for unit in $(systemctl list-units --all --plain --no-legend 'cvx-agent-*' | awk '{print $1}'); do
     case $unit in cvx-agent-0000000000000000000acc*) systemctl stop "$unit" || true ;; esac
   done
@@ -162,7 +167,7 @@ if [[ $WITH_CLAUDE -eq 1 ]]; then
 r() { if eval "$2" >/dev/null 2>&1; then echo "ACCIN $1=yes"; else echo "ACCIN $1=no"; fi; }
 # Variable names only (compgen -e), never values: a multi-line value would leak through `env`.
 names() { compgen -e | grep -E "$1" | paste -sd, - | grep . || echo none; }
-echo "ACCIN credential-env=$(names 'TOKEN|API_KEY|CUSTOM_HEADERS|SECRET|PASSWORD')"
+echo "ACCIN credential-env=$(names 'TOKEN|API_KEY|CUSTOM_HEADERS|SECRET|PASSWORD|^CONCLAVIX_')"
 echo "ACCIN anthropic-env=$(names '^ANTHROPIC_')"
 echo "ACCIN home=$HOME"
 echo "ACCIN procs=$(ls /proc | grep -c '^[0-9]' || true)"
@@ -178,6 +183,54 @@ r write-clone 'echo ok > inner.txt'
 INNER
   ln -s /proc/self/environ "$clones/ACC-1/environ-link"
   chown -h cvx-runner:cvx-code "$clones/ACC-1/acceptance-probe.sh" "$clones/ACC-1/environ-link"
+  # A minimal MCP server (streamable HTTP, JSON responses) on loopback, where the board API listens.
+  # It answers only `Bearer <run bearer>` and counts the requests it accepts and refuses.
+  bearer="cvx_run_acceptance-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  printf '%s' "$bearer" >"$work/bearer"
+  cat >"$work/mcp-stub.cjs" <<'STUB'
+const http = require('node:http');
+const fs = require('node:fs');
+const [bearerFile, portFile, logFile] = process.argv.slice(2);
+const expected = `Bearer ${fs.readFileSync(bearerFile, 'utf8')}`;
+const send = (res, status, body) => {
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(body === undefined ? '' : JSON.stringify(body));
+};
+const server = http.createServer((req, res) => {
+  if (req.method !== 'POST') return send(res, 405, { error: 'method_not_allowed' });
+  const ok = req.headers.authorization === expected;
+  fs.appendFileSync(logFile, ok ? 'accepted\n' : 'refused\n');
+  if (!ok) return send(res, 401, { error: 'unauthorized' });
+  let raw = '';
+  req.on('data', (chunk) => (raw += chunk));
+  req.on('end', () => {
+    let message;
+    try {
+      message = JSON.parse(raw);
+    } catch {
+      return send(res, 400, { error: 'bad_request' });
+    }
+    if (message.id === undefined) return send(res, 202);
+    const reply = (result) => send(res, 200, { jsonrpc: '2.0', id: message.id, result });
+    if (message.method === 'initialize') {
+      return reply({
+        protocolVersion: message.params?.protocolVersion ?? '2025-06-18',
+        capabilities: { tools: {} },
+        serverInfo: { name: 'conclavix-acceptance', version: '1' },
+      });
+    }
+    if (message.method === 'tools/list') return reply({ tools: [] });
+    if (message.method === 'ping') return reply({});
+    return send(res, 200, { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'not found' } });
+  });
+});
+server.listen(0, '127.0.0.1', () => fs.writeFileSync(portFile, String(server.address().port)));
+STUB
+  : >"$work/mcp-log"
+  /usr/bin/node "$work/mcp-stub.cjs" "$work/bearer" "$work/mcp-port" "$work/mcp-log" &
+  stub=$!
+  for _ in $(seq 1 50); do [[ -s $work/mcp-port ]] && break; sleep 0.1; done
+  mcp_config="{\"mcpServers\":{\"conclavix\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:$(cat "$work/mcp-port")/mcp\",\"headers\":{\"Authorization\":\"Bearer \${CONCLAVIX_RUN_BEARER}\"}}}}"
   {
     while IFS= read -r line; do
       name=${line%%=*}
@@ -187,6 +240,7 @@ INNER
       value=${value%\"}
       printf '%s=%s\n' "$name" "$(printf '%s' "$value" | base64 -w0)"
     done <"$RUNNER_ENV"
+    printf 'CONCLAVIX_RUN_BEARER=%s\n' "$(base64 -w0 <"$work/bearer")"
     printf '\n'
     printf '%s\n' '{"type":"control_request","request_id":"init","request":{"subtype":"initialize"}}'
     printf '%s\n' '{"type":"user","session_id":"","parent_tool_use_id":null,"message":{"role":"user","content":"This is an automated sandbox acceptance test. Do exactly these three steps and nothing else: 1. Run `bash ./acceptance-probe.sh` once with the Bash tool. 2. Use the Read tool on /proc/self/environ. 3. Use the Read tool on ./environ-link. Then answer DONE."}}'
@@ -201,10 +255,14 @@ INNER
     /usr/bin/sudo -n "$HELPER" run --run-id 0000000000000000000acc10 --project "$PROJECT" \
     --issue ACC-1 --status-tag "$TAG" --runtime-max-sec 600 -- \
     -p --input-format stream-json --output-format stream-json --verbose \
-    --no-session-persistence --strict-mcp-config --max-budget-usd 1 --setting-sources user \
+    --no-session-persistence --strict-mcp-config --mcp-config "$mcp_config" --max-budget-usd 1 \
+    --setting-sources user \
     --tools Read,Grep,Glob,Skill,Edit,Write,Bash --permission-mode dontAsk \
     >"$work/stream" 2>"$work/stderr" || true
-  rm -f "$work/stdin"
+  rm -f "$work/stdin" "$work/bearer"
+  kill "$stub" 2>/dev/null || true
+  wait "$stub" 2>/dev/null || true
+  stub=
   check 'claude unit result' "$(result_of)" success
   node - "$work/stream" <<'PARSE' >"$work/inner"
 const fs = require('node:fs');
@@ -213,6 +271,10 @@ const uses = new Map();
 for (const line of lines) {
   let event;
   try { event = JSON.parse(line); } catch { continue; }
+  if (event?.type === 'system' && event.subtype === 'init') {
+    const server = (event.mcp_servers ?? []).find((s) => s.name === 'conclavix');
+    console.log(`ACCIN mcp-conclavix=${String(server?.status ?? 'absent').replace(/[^a-z-]/g, '')}`);
+  }
   for (const block of event?.message?.content ?? []) {
     if (block.type === 'tool_use') uses.set(block.id, block);
     if (block.type !== 'tool_result') continue;
@@ -231,6 +293,9 @@ PARSE
   inner() { sed -n "s/^ACCIN $1=//p" "$work/inner" | head -1; }
   # Claude Code's subprocess scrub removes the credential variables (OAuth token, API key, auth
   # token, ANTHROPIC_CUSTOM_HEADERS with the gateway key); ANTHROPIC_BASE_URL may stay visible.
+  check 'conclavix MCP server connected (run bearer expanded into the header)' "$(inner mcp-conclavix)" connected
+  check 'MCP stub accepted the bearer and refused nothing' \
+    "$(grep -c '^accepted$' "$work/mcp-log" | awk '{print ($1 > 0) ? "yes" : "no"}')/$(grep -c '^refused$' "$work/mcp-log" || true)" yes/0
   check 'no credential variables in Bash' "$(inner credential-env)" none
   echo "ANTHROPIC_* names visible to Bash (expected: none or ANTHROPIC_BASE_URL): $(inner anthropic-env)"
   check 'runner.env unreadable from Bash' "$(inner token-file)" no
