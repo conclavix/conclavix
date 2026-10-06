@@ -97,6 +97,38 @@ describe('scheduler loops, heartbeats and concurrency', () => {
     expect(fresh.id).not.toBe(overdue.id);
   });
 
+  it('creates no heartbeat wakes for a blocked issue but wakes it once unblocked', async () => {
+    const agent = await fx.agent();
+    const blocker = await fx.issue({ title: 'blocker' });
+    const blocked = await fx.issue({
+      title: 'blocked',
+      assigneeAgentId: agent.id,
+      blockedBy: [blocker.id],
+    });
+    const runsOfBlocked = () =>
+      fx.dispatcher.runs.filter((run) => run.issueId.toHexString() === blocked.id).length;
+    await fx.scheduler.processPendingWakes();
+    expect(runsOfBlocked()).toBe(0);
+    const wakesOf = () =>
+      ctx.database.collections.wakes.countDocuments({ issueId: new ObjectId(blocked.id) });
+    const initial = await wakesOf();
+
+    for (let sweep = 0; sweep < 3; sweep += 1) {
+      await fx.scheduler.sweepHeartbeats();
+      await fx.scheduler.processPendingWakes();
+    }
+    expect(await wakesOf()).toBe(initial);
+
+    await fx.patch(blocker.key, { status: 'done' });
+    const wake = await ctx.database.collections.wakes.findOne({
+      issueId: new ObjectId(blocked.id),
+      processedAt: null,
+    });
+    expect(wake?.reason).toBe('unblocked');
+    await fx.scheduler.processPendingWakes();
+    expect(runsOfBlocked()).toBe(1);
+  });
+
   it('never creates two runs for one issue when schedulers race', async () => {
     const agent = await fx.agent();
     const issues = [];

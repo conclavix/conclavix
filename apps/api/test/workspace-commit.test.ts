@@ -1,7 +1,18 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { AppError } from '../src/errors.js';
 import { CodeWorkspace, safeIdent, sumNumstat } from '../src/modules/workspace/commit.js';
+import { removeSandboxPlaceholders } from '../src/modules/workspace/placeholders.js';
 import { commitAll, git, tempRoot } from './workspace-helpers.js';
 
 const PROJECT = 'cccccccccccccccccccccccc';
@@ -89,6 +100,97 @@ describe('CodeWorkspace.commitIssueWork', () => {
     expect(result.commit).not.toBeNull();
     expect(existsSync(marker)).toBe(false);
     expect(readFileSync(config, 'utf8')).not.toContain('evil');
+  });
+
+  /** Leave what Claude Code's Bash sandbox leaves in the clone's .git (seen on a runner host). */
+  const plantPlaceholders = (gitDir: string) => {
+    writeFileSync(join(gitDir, 'commondir'), '.');
+    writeFileSync(join(gitDir, 'config.worktree'), '');
+    for (const name of ['worktrees', 'modules', 'glab-cli']) mkdirSync(join(gitDir, name));
+  };
+
+  const rejection = async (promise: Promise<unknown>): Promise<string> => {
+    try {
+      await promise;
+    } catch (error) {
+      if (error instanceof AppError) return `${error.statusCode} ${error.message}`;
+      throw error;
+    }
+    return 'accepted';
+  };
+
+  it('removes the sandbox placeholders and commits the agent’s work', async () => {
+    const gitDir = join(clone, '.git');
+    const before = readdirSync(gitDir).sort();
+    plantPlaceholders(gitDir);
+    writeFileSync(join(clone, 'work.txt'), 'done\n');
+
+    const result = await ws.commitIssueWork(PROJECT, ISSUE, { author: AUTHOR, message: 'w', base });
+    expect(result.commit).not.toBeNull();
+    expect(result.stats.files).toBe(1);
+    expect(readdirSync(gitDir).sort()).toEqual(before);
+    expect((await ws.syncIssueBranch(PROJECT, ISSUE, false)).after).toBe(result.commit);
+  });
+
+  it('removes only the known names in their harmless shapes', async () => {
+    const gitDir = join(clone, '.git');
+    plantPlaceholders(gitDir);
+    writeFileSync(join(gitDir, 'commondir'), '.\n');
+    expect((await removeSandboxPlaceholders(gitDir)).sort()).toEqual([
+      'commondir',
+      'config.worktree',
+      'glab-cli',
+      'modules',
+      'worktrees',
+    ]);
+
+    writeFileSync(join(gitDir, 'config.worktree'), '[core]\n\tbare = true\n');
+    mkdirSync(join(gitDir, 'modules', 'sub'), { recursive: true });
+    writeFileSync(join(gitDir, 'description'), '');
+    expect(await removeSandboxPlaceholders(gitDir)).toEqual([]);
+    expect(existsSync(join(gitDir, 'config.worktree'))).toBe(true);
+    expect(existsSync(join(gitDir, 'modules', 'sub'))).toBe(true);
+    expect(existsSync(join(gitDir, 'description'))).toBe(true);
+  });
+
+  it('still refuses a commondir that points to another repository', async () => {
+    const gitDir = join(clone, '.git');
+    plantPlaceholders(gitDir);
+    writeFileSync(join(gitDir, 'commondir'), ws.repoDir(PROJECT));
+    writeFileSync(join(clone, 'work.txt'), 'x\n');
+    expect(
+      await rejection(ws.commitIssueWork(PROJECT, ISSUE, { author: AUTHOR, message: 'x', base })),
+    ).toBe(`422 The workspace of ${ISSUE} refers to another repository`);
+    expect(readFileSync(join(gitDir, 'commondir'), 'utf8')).toBe(ws.repoDir(PROJECT));
+    expect(await rejection(ws.syncIssueBranch(PROJECT, ISSUE, false))).toMatch(/^422 /);
+  });
+
+  it('still refuses symlinked or hardlinked placeholders', async () => {
+    const gitDir = join(clone, '.git');
+    const outside = join(root.dir, 'outside');
+    mkdirSync(outside);
+    writeFileSync(join(outside, 'dot'), '.');
+    const commit = () =>
+      rejection(ws.commitIssueWork(PROJECT, ISSUE, { author: AUTHOR, message: 'x', base }));
+
+    symlinkSync(join(outside, 'dot'), join(gitDir, 'commondir'));
+    expect(await commit()).toMatch(/^422 /);
+    expect(existsSync(join(outside, 'dot'))).toBe(true);
+    expect(await removeSandboxPlaceholders(gitDir)).toEqual([]);
+    await rm(join(gitDir, 'commondir'));
+
+    symlinkSync(outside, join(gitDir, 'worktrees'));
+    expect(await commit()).toMatch(/^422 /);
+    expect(existsSync(outside)).toBe(true);
+    await rm(join(gitDir, 'worktrees'));
+
+    linkSync(join(outside, 'dot'), join(gitDir, 'commondir'));
+    expect(await commit()).toMatch(/^422 /);
+    expect(readFileSync(join(outside, 'dot'), 'utf8')).toBe('.');
+    await rm(join(gitDir, 'commondir'));
+
+    writeFileSync(join(clone, 'work.txt'), 'ok\n');
+    expect(await commit()).toBe('accepted');
   });
 
   it('cleans author identities and sums numstat output', () => {

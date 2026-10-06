@@ -1,7 +1,7 @@
 import pino from 'pino';
 import { ObjectId, type ClientSession } from 'mongodb';
-import type { FinishedRunStatus } from '@conclavix/core';
-import { LOCKS, lock, type Database, type RunDoc, type WakeDoc } from '../../db.js';
+import { CLOSED_ISSUE_STATUSES, type FinishedRunStatus } from '@conclavix/core';
+import { LOCKS, lock, type Database, type IssueDoc, type RunDoc, type WakeDoc } from '../../db.js';
 import { conflict, notFound, unprocessable } from '../../errors.js';
 import { Redactor, errorKind, redactOrWithhold } from '../../runner/redact.js';
 import { generateRunToken } from '../runs/tokens.js';
@@ -333,8 +333,12 @@ export class Scheduler {
       })
       .limit(this.options.batchSize * 5)
       .toArray();
+    const blocked = await this.openBlockers(due);
     let created = 0;
     for (const issue of due) {
+      // A blocked issue would be skipped as blocked on every sweep, leaving one processed wake
+      // per sweep behind; closing its last blocker wakes it ('unblocked') instead.
+      if ((issue.blockedBy ?? []).some((id) => blocked.has(id.toHexString()))) continue;
       if (
         issue.assigneeAgentId &&
         (await requestWake(this.collections, issue.assigneeAgentId, issue._id, 'heartbeat'))
@@ -343,5 +347,18 @@ export class Scheduler {
       }
     }
     return created;
+  }
+
+  /** Ids (hex) of the issues blocking any of `issues` that are not closed yet. */
+  private async openBlockers(issues: readonly IssueDoc[]): Promise<Set<string>> {
+    const ids = issues.flatMap((issue) => issue.blockedBy ?? []);
+    if (ids.length === 0) return new Set();
+    const open = await this.collections.issues
+      .find(
+        { _id: { $in: ids }, status: { $nin: [...CLOSED_ISSUE_STATUSES] } },
+        { projection: { _id: 1 } },
+      )
+      .toArray();
+    return new Set(open.map((issue) => issue._id.toHexString()));
   }
 }
