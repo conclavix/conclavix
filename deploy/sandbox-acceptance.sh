@@ -78,6 +78,7 @@ sleep) sleep 600; exit 0 ;;
 disk) head -c 100M /dev/zero >big.bin; sleep 120; exit 0 ;;
 esac
 echo "ACC uid=$(id -un)"
+echo "ACC literal-arg=$([[ ${2:-} == '${CONCLAVIX_RUN_BEARER} $HOME' ]] && echo yes || echo no)"
 r policy-noexec 'findmnt -no OPTIONS -T "$0" | tr , "\\n" | grep -qx noexec'
 echo "ACC scrub=$CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"
 echo "ACC home-empty=$([[ -z $(ls -A "$HOME" 2>/dev/null) ]] && echo yes || echo no)"
@@ -104,6 +105,10 @@ sed -i -e "s|\$CODE_ROOT|$CODE_ROOT|" -e "s|\$LAN_PROBE_HOST|$LAN_PROBE_HOST|" "
 chmod 0755 "$work/probe.sh"
 
 fake=$(printf 'acceptance-%s' "$TAG" | base64 -w0)
+# Must reach the probe as written: systemd would expand it from the unit's environment otherwise,
+# and the MCP header reference of a real run would arrive empty.
+# shellcheck disable=SC2016
+literal_arg='${CONCLAVIX_RUN_BEARER} $HOME'
 # The helper refuses probe mode when it sees SUDO_UID (that is how the runner calls it), so it is
 # started with nothing from this environment but PATH and, for tests, the configuration override
 # that it only honours for root without sudo.
@@ -114,7 +119,7 @@ probe() {
   shift 2
   printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n\n' "$fake" |
     "${helper_env[@]}" /usr/bin/node "$HELPER" probe "$work/probe.sh" run --run-id "$run_id" --project "$PROJECT" \
-      --issue ACC-1 --status-tag "$TAG" "$@" -- "$mode" 2>"$work/stderr" || true
+      --issue ACC-1 --status-tag "$TAG" "$@" -- "$mode" "$literal_arg" 2>"$work/stderr" || true
 }
 result_of() { grep -o '"result":"[a-z-]*"' "$work/stderr" | tail -1 | cut -d'"' -f4; }
 
@@ -122,6 +127,7 @@ echo '--- outer unit'
 out=$(probe 0000000000000000000acc01 basic)
 value() { printf '%s\n' "$out" | sed -n "s/^ACC $1=//p" | head -1; }
 check 'runs as cvx-agent' "$(value uid)" cvx-agent
+check 'arguments reach the unit without variable expansion' "$(value literal-arg)" yes
 check 'policy directory mounted noexec in the unit' "$(value policy-noexec)" yes
 check 'subprocess environment scrub on' "$(value scrub)" 1
 check 'fresh empty HOME' "$(value home-empty)" yes
@@ -167,7 +173,9 @@ if [[ $WITH_CLAUDE -eq 1 ]]; then
 r() { if eval "$2" >/dev/null 2>&1; then echo "ACCIN $1=yes"; else echo "ACCIN $1=no"; fi; }
 # Variable names only (compgen -e), never values: a multi-line value would leak through `env`.
 names() { compgen -e | grep -E "$1" | paste -sd, - | grep . || echo none; }
-echo "ACCIN credential-env=$(names 'TOKEN|API_KEY|CUSTOM_HEADERS|SECRET|PASSWORD|^CONCLAVIX_')"
+# CLOUDSDK_PROXY_* are the credentials of Claude Code's own sandbox proxy, set for every command.
+echo "ACCIN credential-env=$(compgen -e | grep -Ev '^CLOUDSDK_PROXY_' | grep -E 'TOKEN|API_KEY|CUSTOM_HEADERS|SECRET|PASSWORD|^CONCLAVIX_' | paste -sd, - | grep . || echo none)"
+echo "ACCIN proxy-env=$(names '^CLOUDSDK_PROXY_')"
 echo "ACCIN anthropic-env=$(names '^ANTHROPIC_')"
 echo "ACCIN home=$HOME"
 echo "ACCIN procs=$(ls /proc | grep -c '^[0-9]' || true)"
@@ -298,6 +306,7 @@ PARSE
     "$(grep -c '^accepted$' "$work/mcp-log" | awk '{print ($1 > 0) ? "yes" : "no"}')/$(grep -c '^refused$' "$work/mcp-log" || true)" yes/0
   check 'no credential variables in Bash' "$(inner credential-env)" none
   echo "ANTHROPIC_* names visible to Bash (expected: none or ANTHROPIC_BASE_URL): $(inner anthropic-env)"
+  echo "sandbox proxy variables visible to Bash (Claude Code's own, expected): $(inner proxy-env)"
   check 'runner.env unreadable from Bash' "$(inner token-file)" no
   check 'non-allowlisted domain refused' "$(inner example)" no
   check 'no direct connection without the proxy' "$(inner example-noproxy)" no

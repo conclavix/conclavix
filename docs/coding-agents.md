@@ -149,6 +149,12 @@ headers, so the conclavix MCP server would receive `Authorization: Bearer ` and 
 managed `sandbox.credentials.envVars` deny entry is what keeps it away from Bash;
 `sandbox-acceptance.sh --with-claude` checks both (MCP `connected`, no `CONCLAVIX_*` in Bash).
 
+The helper starts the unit with `systemd-run --expand-environment=no` (systemd 254 or later). By
+default the service manager expands `${NAME}` and `$NAME` in the command line from the unit's own
+environment, which holds none of the run's variables, so the MCP config's
+`Bearer ${CONCLAVIX_RUN_BEARER}` would reach claude as `Bearer ` before claude could expand it.
+The probe mode of the acceptance script checks that such a reference reaches the unit unchanged.
+
 ### 5. Git and the clone
 
 - The agent may use git in the clone (the inner sandbox protects `.git/hooks` and `.git/config`).
@@ -232,7 +238,8 @@ names, the base domain allowlist, hidden paths and the maximum limits; see
 
 ## Installation
 
-On the runner host, as root (tested with Debian 13, bubblewrap 0.12, Claude Code >= 2.1.285):
+On the runner host, as root (tested with Debian 13, systemd 257, bubblewrap 0.12, Claude Code >=
+2.1.285; systemd 254 or later is required for `systemd-run --expand-environment`):
 
 ```sh
 # 1. Shared group for the API container and the runner; the agent user is not a member.
@@ -278,8 +285,9 @@ calls it, so the script starts the helper with an empty environment (`env -i`, o
 root login shell works the same way. It creates a throwaway project below `WORKSPACE_ROOT/workspaces/ffffffffffffffffffacce55`, starts
 real units and prints one PASS/FAIL line per check:
 
-- probe mode (default, no Claude run): inside the unit a script checks the user, that the policy
-  directory is mounted `noexec`, the scrub flag,
+- probe mode (default, no Claude run): inside the unit a script checks the user, that a
+  `${...}` reference in the arguments arrives unexpanded, that the policy directory is mounted
+  `noexec`, the scrub flag,
   the empty HOME, that `runner.env`, the agent's home, `/proc/1/environ`, other clones, the
   project repositories and the runner's workspaces are out of reach, that only the clone and
   `/tmp` are writable, that the LAN is blocked (a TCP probe to port 53 of `LAN_PROBE_HOST`,
@@ -291,12 +299,16 @@ real units and prints one PASS/FAIL line per check:
   `cvx-runner` with the runner's capabilities, sudo, helper) with the credentials from
   `runner.env`. Claude runs a probe script with Bash and two Read calls; the script checks that
   no credential variable is visible (names containing `TOKEN`, `API_KEY`, `CUSTOM_HEADERS`,
-  `SECRET` or `PASSWORD`; a failure prints the names, never values), `runner.env` is unreadable,
+  `SECRET` or `PASSWORD`, and `CONCLAVIX_*`; a failure prints the names, never values),
+  `runner.env` is unreadable,
   a non-allowlisted domain is refused with and without the proxy, the registry works,
   `127.0.0.1` ports are closed, `.git/hooks` and `.claude/settings.json` are not writable, HOME
   is the per-run `/tmp/cvx-home` without a `.credentials.json`, and the Read tool is denied on
   `/proc/self/environ` and on a symlink to it. The visible `ANTHROPIC_*` names are printed for
   information; `ANTHROPIC_BASE_URL` (the LiteLLM URL) is expected there and is not a secret.
+  `CLOUDSDK_PROXY_*` are left out of the credential check and printed for information: Claude
+  Code sets them for every sandboxed command as the credentials of its own local sandbox proxy;
+  they carry none of the run's secrets.
   HOME is writable on purpose: Claude keeps `~/.claude` there, and it is the unit's private
   `/tmp`, discarded with the unit. The stream is parsed for these results only and deleted;
   nothing secret is printed.
