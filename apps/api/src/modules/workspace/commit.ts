@@ -1,12 +1,13 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { issueBranchName } from '@conclavix/core';
 import { notFound } from '../../errors.js';
 import type { GitCallOptions } from './git.js';
 import { GitError } from './git.js';
-import { EMPTY_TREE, NO_REF, OBJECT_ID } from './repo-base.js';
+import { removeSandboxPlaceholders } from './placeholders.js';
+import { EMPTY_TREE, NO_REF, OBJECT_ID, isMissing } from './repo-base.js';
 import { Workspace } from './service.js';
 
 /**
@@ -97,6 +98,23 @@ export function safeIdent(value: string, fallback: string): string {
  * is replaced by CLONE_CONFIG and the index is a fresh one built from the branch tip.
  */
 export class CodeWorkspace extends Workspace {
+  /**
+   * The checked `.git` of an issue clone, after removing what Claude Code's Bash sandbox left in
+   * it (see removeSandboxPlaceholders). The runner only gets here while no sandbox unit runs in
+   * the clone: before a run starts and after its unit has ended.
+   */
+  protected override async cloneGitDir(projectId: string, issueKey: string): Promise<string> {
+    const gitDir = join(this.issueWorkspaceDir(projectId, issueKey), '.git');
+    let isDirectory = false;
+    try {
+      isDirectory = (await lstat(gitDir)).isDirectory();
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    if (isDirectory) await removeSandboxPlaceholders(gitDir);
+    return super.cloneGitDir(projectId, issueKey);
+  }
+
   /** The tip of `cvx/<issueKey>` in the project repository, or null without that branch. */
   async branchTip(projectId: string, issueKey: string): Promise<string | null> {
     await this.ensureRepo(projectId);

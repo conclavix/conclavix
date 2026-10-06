@@ -145,7 +145,11 @@ file tools may not read (`Read(//proc/**)` deny, read block).
 
 - The agent may use git in the clone (the inner sandbox protects `.git/hooks` and `.git/config`).
 - After the unit has ended and the helper has handed the clone back, the runner (not the agent)
-  commits: the clone's `.git` is checked like before a sync (no symlinks, hardlinks, alternates,
+  commits: first the entries Claude Code's Bash sandbox leaves in `.git` (it creates
+  `config.worktree` and `commondir` to mount them read-only, bubblewrap leaves the mount points
+  of `worktrees/`, `modules/`, `glab-cli/`) are removed, but only in their harmless shapes: an
+  empty directory, or a regular single-link file that is empty (or `.` for `commondir`); then the
+  clone's `.git` is checked like before a sync (no symlinks, hardlinks, alternates,
   `commondir`), its `.git/config` is replaced by a fixed template (no filters, includes,
   fsmonitor, hooks path), git runs with `core.hooksPath=/dev/null` and a fresh index built from
   the branch tip, `git add -A` skips `node_modules/`, `.venv/` and other caches, and
