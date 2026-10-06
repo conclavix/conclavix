@@ -2,6 +2,9 @@ import type { Collections } from '../db.js';
 
 const NOTIFICATION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
+/** How long processed (run or skipped) wakes are kept before MongoDB expires them. */
+export const PROCESSED_WAKE_RETENTION_SECONDS = 30 * 24 * 60 * 60;
+
 const CASE_INSENSITIVE = { locale: 'en', strength: 2 } as const;
 
 /** Create the unique and lookup indexes for all collections. */
@@ -44,6 +47,12 @@ export async function ensureIndexes(collections: Collections): Promise<void> {
     { unique: true, partialFilterExpression: { processedAt: null } },
   );
   await collections.wakes.createIndex({ processedAt: 1, _id: 1 });
+  // Processed wakes are kept for debugging only (runs carry their reason); pending wakes have
+  // processedAt null and never expire.
+  await collections.wakes.createIndex(
+    { processedAt: 1 },
+    { expireAfterSeconds: PROCESSED_WAKE_RETENTION_SECONDS },
+  );
   await collections.runs.createIndex({ agentId: 1, issueId: 1, createdAt: -1 });
   await collections.runs.createIndex({ agentId: 1, createdAt: -1 });
   await collections.runs.createIndex({ status: 1 });

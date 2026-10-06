@@ -2,6 +2,7 @@ import { ObjectId } from 'mongodb';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestContext, type TestContext } from './helpers.js';
 import { createFixture, type Fixture } from './scheduler-helpers.js';
+import { PROCESSED_WAKE_RETENTION_SECONDS } from '../src/db/indexes.js';
 
 describe('scheduler loops, heartbeats and concurrency', () => {
   let ctx: TestContext;
@@ -127,6 +128,68 @@ describe('scheduler loops, heartbeats and concurrency', () => {
     expect(wake?.reason).toBe('unblocked');
     await fx.scheduler.processPendingWakes();
     expect(runsOfBlocked()).toBe(1);
+  });
+
+  it('creates no heartbeat wakes for a paused agent, keeps explicit wakes and resumes', async () => {
+    const agent = await fx.agent();
+    const issue = await fx.issue({ title: 'paused work', assigneeAgentId: agent.id });
+    const issueId = new ObjectId(issue.id);
+    await ctx.database.collections.wakes.deleteMany({ issueId });
+    await ctx.database.collections.issues.updateOne(
+      { _id: issueId },
+      { $set: { lastRunAt: new Date(Date.now() - 2 * 60 * 60 * 1000) } },
+    );
+    await ctx.request({
+      method: 'PATCH',
+      url: `/api/agents/${agent.id}`,
+      payload: { status: 'paused' },
+    });
+    const wakesOf = () => ctx.database.collections.wakes.countDocuments({ issueId });
+
+    for (let sweep = 0; sweep < 3; sweep += 1) {
+      await fx.scheduler.sweepHeartbeats();
+      await fx.scheduler.processPendingWakes();
+    }
+    expect(await wakesOf()).toBe(0);
+
+    await ctx.request({
+      method: 'POST',
+      url: `/api/agents/${agent.id}/wake`,
+      payload: { issueId: issue.id },
+    });
+    await fx.scheduler.processPendingWakes();
+    expect(await ctx.database.collections.wakes.findOne({ issueId })).toMatchObject({
+      reason: 'manual',
+      skipReason: 'agent_paused',
+    });
+
+    await ctx.request({
+      method: 'PATCH',
+      url: `/api/agents/${agent.id}`,
+      payload: { status: 'active' },
+    });
+    await fx.scheduler.sweepHeartbeats();
+    expect(
+      await ctx.database.collections.wakes.findOne({ issueId, processedAt: null }),
+    ).toMatchObject({ reason: 'heartbeat' });
+  });
+
+  it('creates no heartbeat wakes for issues of a deleted agent', async () => {
+    const issue = await fx.issue({ title: 'orphaned' });
+    const issueId = new ObjectId(issue.id);
+    await ctx.database.collections.issues.updateOne(
+      { _id: issueId },
+      { $set: { assigneeAgentId: new ObjectId(), status: 'todo', lastRunAt: null } },
+    );
+    await fx.scheduler.sweepHeartbeats();
+    expect(await ctx.database.collections.wakes.countDocuments({ issueId })).toBe(0);
+  });
+
+  it('expires processed wakes through a TTL index on processedAt', async () => {
+    const indexes = await ctx.database.collections.wakes.listIndexes().toArray();
+    const ttl = indexes.find((index) => index.expireAfterSeconds !== undefined);
+    expect(ttl?.key).toEqual({ processedAt: 1 });
+    expect(ttl?.expireAfterSeconds).toBe(PROCESSED_WAKE_RETENTION_SECONDS);
   });
 
   it('never creates two runs for one issue when schedulers race', async () => {
