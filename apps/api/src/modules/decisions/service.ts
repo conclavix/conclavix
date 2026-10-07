@@ -159,9 +159,7 @@ export class DecisionService {
       decision.issueId.toHexString(),
       { body: answerComment(input) },
       author,
-      {
-        outcome: 'answered',
-      },
+      { outcome: 'answered', decisionId: id },
     );
     return this.get(id);
   }
@@ -173,7 +171,7 @@ export class DecisionService {
       decision.issueId.toHexString(),
       { body: dismissComment(input) },
       author,
-      { outcome: 'dismissed' },
+      { outcome: 'dismissed', decisionId: id },
     );
     return this.get(id);
   }

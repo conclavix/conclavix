@@ -1,6 +1,6 @@
 import { ObjectId } from 'mongodb';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toStreamEvent } from '../src/modules/stream/events.js';
 import { createTestContext, type TestContext } from './helpers.js';
 import { callTool, connectAgent, startRunFor } from './mcp-helpers.js';
@@ -42,6 +42,7 @@ describe('board decisions', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await ctx.close();
   });
 
@@ -161,6 +162,56 @@ describe('board decisions', () => {
       payload: { option: 'us' },
     });
     expect(again.statusCode).toBe(409);
+  });
+
+  it('rejects an answer that read the decision as open before another answer settled it', async () => {
+    (await ask({ question: 'Which region?', options: ['eu', 'us'] })).close();
+    const [open] = (await decisions()).items as { id: string }[];
+    const stale = await ctx.database.collections.decisions.findOne({ _id: new ObjectId(open?.id) });
+    const first = await ctx.request({
+      method: 'POST',
+      url: `/api/decisions/${open?.id}/answer`,
+      payload: { option: 'eu' },
+    });
+    expect(first.statusCode).toBe(200);
+    // The second request passed its open check before the first one committed.
+    vi.spyOn(ctx.database.collections.decisions, 'findOne').mockResolvedValueOnce(stale);
+    const second = await ctx.request({
+      method: 'POST',
+      url: `/api/decisions/${open?.id}/answer`,
+      payload: { option: 'us' },
+    });
+    expect(second.statusCode).toBe(409);
+    expect(
+      await ctx.database.collections.comments.countDocuments({
+        issueId: new ObjectId(issue.id),
+        body: { $regex: '^\\*\\*Decision:' },
+      }),
+    ).toBe(1);
+    expect(await commentWakes()).toBe(1);
+  });
+
+  it('does not settle a newer question with an answer meant for the superseded one', async () => {
+    const { token } = await startRunFor(ctx, fx, issue.id);
+    const client = await connectAgent(baseUrl, token);
+    await callTool(client, 'request_board_decision', { question: 'Region?', options: ['eu'] });
+    const [first] = (await decisions()).items as { id: string }[];
+    const stale = await ctx.database.collections.decisions.findOne({
+      _id: new ObjectId(first?.id),
+    });
+    await callTool(client, 'request_board_decision', { question: 'Size?', options: ['S', 'L'] });
+    await client.close();
+    vi.spyOn(ctx.database.collections.decisions, 'findOne').mockResolvedValueOnce(stale);
+    const answered = await ctx.request({
+      method: 'POST',
+      url: `/api/decisions/${first?.id}/answer`,
+      payload: { option: 'eu' },
+    });
+    expect(answered.statusCode).toBe(409);
+    const doc = await issueDoc();
+    expect(doc?.status).toBe('in_review');
+    expect(doc?.awaitingBoard?.question).toBe('Size?');
+    expect((await decisions()).items).toMatchObject([{ question: 'Size?', status: 'open' }]);
   });
 
   it('lets the board dismiss a question, which wakes the agent', async () => {

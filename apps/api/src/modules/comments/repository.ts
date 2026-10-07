@@ -1,6 +1,7 @@
 import { ObjectId } from 'mongodb';
 import type { Author, Comment, CreateCommentInput, PageQuery } from '@conclavix/core';
 import type { CommentDoc, Database, IssueDoc } from '../../db.js';
+import { conflict } from '../../errors.js';
 import { findIssueByRef } from '../issues/queries.js';
 import { IssueRepository } from '../issues/repository.js';
 import { isActionable, requestWake } from '../scheduler/wakes.js';
@@ -23,7 +24,12 @@ const answersReview = (issue: Pick<IssueDoc, 'status' | 'assigneeAgentId'>, auth
 /** How a board-side comment settles an open board decision on the issue (default: answered). */
 export interface CommentOptions {
   outcome?: BoardOutcome;
+  /** The decision the comment answers: it must still be the issue's open one, else 409. */
+  decisionId?: ObjectId;
 }
+
+/** The comment was meant for a decision that is no longer the issue's open question. */
+const decisionNotOpen = () => conflict('the decision is no longer open');
 
 /** The issue left in_review between the read and the transaction; post the comment normally. */
 class ReviewAlreadyAnswered extends Error {}
@@ -57,7 +63,7 @@ export class CommentRepository {
     issueRef: string,
     input: CreateCommentInput,
     author: Author,
-    { outcome = 'answered' }: CommentOptions = {},
+    { outcome = 'answered', decisionId }: CommentOptions = {},
   ): Promise<Comment> {
     const issue = await findIssueByRef(this.database.collections, issueRef);
     const doc: CommentDoc = {
@@ -69,29 +75,35 @@ export class CommentRepository {
     };
     let current = issue;
     if (answersReview(issue, author)) {
-      if (await this.answerReview(issue, doc, outcome)) {
+      if (await this.answerReview(issue, doc, outcome, decisionId)) {
         return toComment(doc);
       }
       current = await findIssueByRef(this.database.collections, issue._id.toHexString());
     }
     await this.database.inTransaction(async (session) => {
+      if (decisionId && !current.awaitingBoard?.decisionId.equals(decisionId)) {
+        throw decisionNotOpen();
+      }
       await this.database.collections.comments.insertOne(doc, { session });
       // Without an assignee the issue stays in_review, but the board has still answered.
       if (current.awaitingBoard && isBoardSide(author)) {
-        const { decisionId } = current.awaitingBoard;
+        const awaitingId = current.awaitingBoard.decisionId;
         await this.database.collections.issues.updateOne(
-          { _id: current._id, 'awaitingBoard.decisionId': decisionId },
+          { _id: current._id, 'awaitingBoard.decisionId': awaitingId },
           { $set: { awaitingBoard: null, updatedAt: new Date() } },
           { session },
         );
-        await settleDecision(
+        const settled = await settleDecision(
           this.database.collections,
-          decisionId,
+          awaitingId,
           outcome,
           author,
           doc.body,
           session,
         );
+        if (decisionId && !settled) {
+          throw decisionNotOpen();
+        }
       }
       const authoredByAssignee =
         author.type === 'agent' && current.assigneeAgentId?.toHexString() === author.agentId;
@@ -120,6 +132,7 @@ export class CommentRepository {
     issue: IssueDoc,
     doc: CommentDoc,
     outcome: BoardOutcome,
+    decisionId: ObjectId | undefined,
   ): Promise<boolean> {
     const { collections } = this.database;
     try {
@@ -130,10 +143,13 @@ export class CommentRepository {
           if (!answersReview(before, doc.author) || !before.assigneeAgentId) {
             throw new ReviewAlreadyAnswered();
           }
+          if (decisionId && !before.awaitingBoard?.decisionId.equals(decisionId)) {
+            throw decisionNotOpen();
+          }
           await collections.comments.insertOne(doc, { session });
           if (before.awaitingBoard) {
             // The move out of in_review clears awaitingBoard; this records how it was settled.
-            await settleDecision(
+            const settled = await settleDecision(
               collections,
               before.awaitingBoard.decisionId,
               outcome,
@@ -141,6 +157,9 @@ export class CommentRepository {
               doc.body,
               session,
             );
+            if (decisionId && !settled) {
+              throw decisionNotOpen();
+            }
           }
           await requestWake(collections, before.assigneeAgentId, before._id, 'comment', session);
         },
