@@ -200,6 +200,29 @@ describe('chat run tools and the approval gate', () => {
     expect(done.statusCode).toBe(409);
   });
 
+  it("refuses the creation tools once the run's agent is no longer the lead", async () => {
+    const { chatId } = await createLeadChat(ctx, fx);
+    const discussion = await chatTurn(ctx, fx, chatId);
+    const discussing = await connectRun(discussion._id);
+    await callTool(discussing, 'write_chat_plan', { markdown: '# Plan' });
+    await discussing.close();
+    await fx.scheduler.finishRun(discussion._id, { status: 'succeeded', costUsd: 0 });
+    await ctx.request({
+      method: 'POST',
+      url: `/api/chats/${chatId}/approve`,
+      payload: { planRevision: 1 },
+    });
+    const run = await startChatRun(ctx, fx, chatId);
+    const client = await connectRun(run._id);
+    const successor = await fx.agent({ name: 'Successor', role: 'ceo' });
+    await ctx.request({ method: 'PUT', url: '/api/org/lead', payload: { agentId: successor.id } });
+    const project = await callTool(client, 'create_project', { key: 'LATE', name: 'Late' });
+    expect(project.isError).toBe(true);
+    expect(project.data.error).toMatch(/no longer the lead/);
+    expect(await ctx.database.collections.projects.countDocuments({ key: 'LATE' })).toBe(0);
+    await client.close();
+  });
+
   it('plans a referenced project without creating a new one', async () => {
     const { chatId } = await createLeadChat(ctx, fx, { projectId: fx.projectId });
     const discussion = await chatTurn(ctx, fx, chatId);

@@ -25,6 +25,10 @@ issue. Open it under **CEO Chat** in the navigation.
    labelled `planning`; the assignment wakes the lead on it as usual, so planning continues on the
    board with `create_issue`. The chat shows links to the new project and issue.
 
+A chat belongs to the lead it was started with. If the board picks another lead (or the lead is
+deleted), the chat takes no further messages and its pending turn is dropped, and the creation
+tools refuse runs of an agent that is no longer the lead; start a new chat with the new lead.
+
 If the creation run fails, the board can still write to the approved chat (for example "please
 try again") until the planning issue exists. After that the chat is done; archive it or start a
 new one.

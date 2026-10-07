@@ -3,7 +3,10 @@ import { createPinia, setActivePinia } from 'pinia';
 import type { Chat } from '../src/chats/api';
 
 const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
-vi.mock('../src/chats/api', () => ({ chatApi: { get, post } }));
+vi.mock('../src/chats/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/chats/api')>()),
+  chatApi: { get, post },
+}));
 const { useChatsStore } = await import('../src/stores/chats');
 
 const chat = (id: string): Chat => ({
@@ -86,5 +89,16 @@ describe('chats store', () => {
     store.applyStream('chat', { ...chat('a') });
     await flush();
     expect(store.loadError).toBe('');
+  });
+
+  it('ignores malformed stream events', async () => {
+    get.mockResolvedValueOnce({ chat: chat('a'), messages: [] });
+    const store = useChatsStore();
+    await store.open('a');
+    store.applyStream('chat_message', { id: 'm1', chatId: 'a', content: 42 });
+    store.applyStream('chat', { id: 'a', status: 'deleted' });
+    expect(store.messages).toEqual([]);
+    expect(store.current?.status).toBe('open');
+    expect(get).toHaveBeenCalledTimes(1);
   });
 });

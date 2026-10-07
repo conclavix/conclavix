@@ -1,6 +1,12 @@
 import { defineStore } from 'pinia';
 import { computed, ref, type Ref } from 'vue';
-import { chatApi, type Chat, type ChatMessage } from '../chats/api';
+import {
+  chatApi,
+  parseChatEvent,
+  parseChatMessageEvent,
+  type Chat,
+  type ChatMessage,
+} from '../chats/api';
 import { mergeMessage } from '../chats/logic';
 
 const newestFirst = (a: Chat, b: Chat): number => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
@@ -104,11 +110,16 @@ export const useChatsStore = defineStore('chats', () => {
    * carries the created project and issue), new messages of the open chat are appended.
    */
   function applyStream(type: string, data: Record<string, unknown>): void {
-    if (type === 'chat' && typeof data['id'] === 'string') {
-      upsert(data as unknown as Chat);
-      if (current.value?.id === data['id']) void refreshQuietly();
-    } else if (type === 'chat_message' && current.value?.id === data['chatId']) {
-      messages.value = mergeMessage(messages.value, data as unknown as ChatMessage);
+    if (type === 'chat') {
+      const chat = parseChatEvent(data);
+      if (!chat) return;
+      upsert(chat);
+      if (current.value?.id === chat.id) void refreshQuietly();
+    } else if (type === 'chat_message') {
+      const message = parseChatMessageEvent(data);
+      if (message && current.value?.id === message.chatId) {
+        messages.value = mergeMessage(messages.value, message);
+      }
     }
   }
 

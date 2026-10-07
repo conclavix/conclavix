@@ -26,7 +26,9 @@ watch(open, (isOpen) => {
   title.value = '';
   projectId.value = null;
   error.value = '';
-  void projects.ensureLoaded().catch(() => undefined);
+  projects.ensureLoaded().catch((cause: unknown) => {
+    error.value = `Could not load the projects: ${describeError(cause)}`;
+  });
 });
 
 async function submit(): Promise<void> {

@@ -4,6 +4,7 @@ import type { ChatDoc, ChatRunDoc, Database } from '../../db.js';
 import { AppError, conflict, notFound } from '../../errors.js';
 import type { AuditLog } from '../audit/audit.js';
 import { IssueRepository } from '../issues/repository.js';
+import { storedLeadId } from '../org/lead.js';
 import { PLANNING_LABEL } from '../org/planning.js';
 import { ProjectRepository } from '../projects/repository.js';
 
@@ -21,6 +22,10 @@ async function chatOfRun(
   }
   if (!chat.activeRunId?.equals(run._id)) {
     throw forbidden('only the run answering the chat can act on it');
+  }
+  // The org chart may have changed while the run was going; only the lead plans.
+  if (!(await storedLeadId(database.collections, session))?.equals(run.agentId)) {
+    throw forbidden('you are no longer the lead; the board has to start a new chat');
   }
   return chat;
 }

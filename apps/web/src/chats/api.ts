@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { api } from '../api/client';
 import type { Page } from '../api/types';
 
@@ -82,3 +83,60 @@ export const chatApi = {
     api<Chat>(`/chats/${id}/approve`, { method: 'POST', ...json({ planRevision }) }),
   revisions: (id: string) => api<Page<ChatPlanRevision>>(`/chats/${id}/plan/revisions`),
 };
+
+const turnSchema = z.object({
+  reason: z.enum(['chat', 'plan_approved']),
+  requestedAt: z.string(),
+  notBefore: z.string().nullable(),
+  deferReason: z.literal('daily_cost_limit').nullable(),
+});
+
+/** A chat as the event stream sends it (no created project and issue; the chat read has them). */
+const chatEventSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: z.enum(['open', 'approved', 'archived']),
+  leadAgentId: z.string(),
+  projectId: z.string().nullable(),
+  plan: z
+    .object({
+      revision: z.number(),
+      markdown: z.string(),
+      runId: z.string().nullable(),
+      updatedAt: z.string(),
+    })
+    .nullable(),
+  approval: z
+    .object({ userId: z.string().nullable(), at: z.string(), planRevision: z.number() })
+    .nullable(),
+  activeRunId: z.string().nullable(),
+  pendingTurn: turnSchema.nullable(),
+  lastError: z.string().nullable(),
+  updatedAt: z.string(),
+});
+
+const authorSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('board') }),
+  z.object({ type: z.literal('user'), userId: z.string() }),
+  z.object({ type: z.literal('system') }),
+  z.object({ type: z.literal('agent'), agentId: z.string() }),
+]);
+
+const chatMessageEventSchema = z.object({
+  id: z.string(),
+  chatId: z.string(),
+  role: z.enum(['board', 'agent']),
+  author: authorSchema,
+  content: z.string(),
+  runId: z.string().nullable(),
+  error: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+/** Parse a `chat` stream event; null for anything that is not a well-formed chat. */
+export const parseChatEvent = (data: unknown): Chat | null =>
+  chatEventSchema.safeParse(data).data ?? null;
+
+/** Parse a `chat_message` stream event; null for anything that is not a well-formed message. */
+export const parseChatMessageEvent = (data: unknown): ChatMessage | null =>
+  chatMessageEventSchema.safeParse(data).data ?? null;
