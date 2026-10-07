@@ -35,7 +35,9 @@ export async function createFixture(
   const dispatcher = new RecordingDispatcher();
   const scheduler = new Scheduler(ctx.database, dispatcher, {
     heartbeatMinutes: 60,
-    loopThreshold: 3,
+    idleBackoffMs: 10 * 60_000,
+    idleRunsAfterBackoff: 1,
+    maxRunsPerIssuePerDay: 50,
     batchSize: 100,
     ...options,
   });

@@ -34,6 +34,7 @@ import { registerOrgRoutes } from './modules/org/routes.js';
 import { ProjectPlanner } from './modules/org/planning.js';
 import { OrgGraphRepository } from './modules/org/graph.js';
 import { migrateReportsToLinks } from './modules/org/migration.js';
+import { migrateIdleRunLimit } from './modules/scheduler/limits-migration.js';
 import { RunRepository } from './modules/runs/repository.js';
 import { SkillRepository } from './modules/skills/repository.js';
 import { registerSkillRoutes } from './modules/skills/routes.js';
@@ -181,6 +182,10 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const migrated = await migrateReportsToLinks(options.database);
   if (migrated !== null) {
     app.log.info({ agents: migrated }, 'converted reportsTo into agent links');
+  }
+  const idleLimit = await migrateIdleRunLimit(collections);
+  if (idleLimit.agents + idleLimit.wakes > 0) {
+    app.log.info(idleLimit, 'converted the hourly run limit into the idle-run limit');
   }
 
   registerErrorHandler(app);

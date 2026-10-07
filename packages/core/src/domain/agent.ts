@@ -23,11 +23,47 @@ export const adapterSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
-export const agentLimitsSchema = z.strictObject({
-  maxRunsPerIssuePerHour: z.int().min(1).max(60).default(4),
-  maxCostPerRunUsd: z.number().positive().max(100).default(2),
-  maxCostPerDayUsd: z.number().positive().max(1000).default(20),
-});
+export const DEFAULT_MAX_IDLE_RUNS_PER_ISSUE = 2;
+
+/** The name the idle-run limit had while it counted every run in a sliding hour. */
+const LEGACY_RUN_LIMIT_FIELD = 'maxRunsPerIssuePerHour';
+
+/**
+ * The idle-run limit for a value of the former hourly run limit. Loop detection used to pause
+ * after 3 idle runs whatever the hourly value was, and the pause now comes one idle run after the
+ * limit, so the value is capped at the default: the loop guard of an existing agent never gets
+ * weaker by the conversion. A lower value is kept.
+ */
+export const idleLimitFromLegacy = <T>(legacy: T): T | number =>
+  typeof legacy === 'number' ? Math.min(legacy, DEFAULT_MAX_IDLE_RUNS_PER_ISSUE) : legacy;
+
+/**
+ * Accept the old field name for the idle-run limit: its value is converted when the new name is
+ * absent and dropped otherwise, so older clients keep working.
+ */
+const renameLegacyRunLimit = (value: unknown): unknown => {
+  if (typeof value !== 'object' || value === null || !(LEGACY_RUN_LIMIT_FIELD in value)) {
+    return value;
+  }
+  const { [LEGACY_RUN_LIMIT_FIELD]: legacy, ...rest } = value as Record<string, unknown>;
+  return 'maxIdleRunsPerIssue' in rest
+    ? rest
+    : { ...rest, maxIdleRunsPerIssue: idleLimitFromLegacy(legacy) };
+};
+
+/**
+ * Per-agent limits. `maxIdleRunsPerIssue` counts consecutive runs on one issue without progress
+ * (see docs/agent-collaboration.md); runs that make progress never count against it. The cost
+ * limits are hard brakes independent of progress.
+ */
+export const agentLimitsSchema = z.preprocess(
+  renameLegacyRunLimit,
+  z.strictObject({
+    maxIdleRunsPerIssue: z.int().min(1).max(60).default(DEFAULT_MAX_IDLE_RUNS_PER_ISSUE),
+    maxCostPerRunUsd: z.number().positive().max(100).default(2),
+    maxCostPerDayUsd: z.number().positive().max(1000).default(20),
+  }),
+);
 
 /** Skills assigned to an agent; the runner mounts exactly these into each run workspace. */
 export const skillIdsSchema = z

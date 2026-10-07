@@ -93,11 +93,18 @@ export type WakeSkipReason =
   | 'not_assigned'
   | 'blocked'
   | 'run_rate_limit'
+  | 'idle_backoff'
+  | 'issue_run_cap'
   | 'daily_cost_limit'
   | 'agent_disabled_in_project';
 
 /**
  * Limits whose window frees on its own: such a wake stays pending until `notBefore`
  * instead of being skipped. Wakes processed before deferral existed may carry them as skipReason.
+ * `run_rate_limit` is the former hourly run window; it is no longer produced, only kept on
+ * stored wakes.
  */
-export type WakeDeferReason = Extract<WakeSkipReason, 'run_rate_limit' | 'daily_cost_limit'>;
+export type WakeDeferReason = Extract<
+  WakeSkipReason,
+  'run_rate_limit' | 'idle_backoff' | 'issue_run_cap' | 'daily_cost_limit'
+>;

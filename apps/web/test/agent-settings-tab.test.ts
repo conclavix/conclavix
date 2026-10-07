@@ -25,7 +25,7 @@ const detail = (id: string, name: string, secret: string): AgentDetail => ({
   avatarUrl: null,
   reportsTo: null,
   adapter: { type: 'claude_cli', gatewayKeySecret: secret },
-  limits: { maxRunsPerIssuePerHour: 4, maxCostPerRunUsd: 2, maxCostPerDayUsd: 20 },
+  limits: { maxIdleRunsPerIssue: 4, maxCostPerRunUsd: 2, maxCostPerDayUsd: 20 },
   instructions: '',
   createdAt: '2026-01-01',
   updatedAt: '2026-01-01',

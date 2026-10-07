@@ -9,7 +9,8 @@ export const ADAPTER_TYPES: { value: AdapterType; title: string }[] = [
 ];
 
 export interface AgentLimitsForm {
-  maxRunsPerIssuePerHour: number;
+  /** Consecutive runs on one issue without progress before the agent backs off. */
+  maxIdleRunsPerIssue: number;
   maxCostPerRunUsd: number;
   maxCostPerDayUsd: number;
 }
@@ -33,7 +34,7 @@ export interface AgentForm {
 }
 
 export const DEFAULT_LIMITS: AgentLimitsForm = {
-  maxRunsPerIssuePerHour: 4,
+  maxIdleRunsPerIssue: 2,
   maxCostPerRunUsd: 2,
   maxCostPerDayUsd: 20,
 };
@@ -98,7 +99,7 @@ export function adapterFromForm(form: AgentForm): AgentAdapter {
 }
 
 const limitsFromForm = (limits: AgentLimitsForm): AgentLimitsForm => ({
-  maxRunsPerIssuePerHour: Number(limits.maxRunsPerIssuePerHour),
+  maxIdleRunsPerIssue: Number(limits.maxIdleRunsPerIssue),
   maxCostPerRunUsd: Number(limits.maxCostPerRunUsd),
   maxCostPerDayUsd: Number(limits.maxCostPerDayUsd),
 });

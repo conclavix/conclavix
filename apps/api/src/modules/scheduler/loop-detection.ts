@@ -1,6 +1,76 @@
-import { ObjectId } from 'mongodb';
-import { FINISHED_RUN_STATUSES } from '@conclavix/core';
-import type { Database, RunDoc } from '../../db.js';
+import { ObjectId, type ClientSession } from 'mongodb';
+import {
+  DEFAULT_MAX_IDLE_RUNS_PER_ISSUE,
+  FINISHED_RUN_STATUSES,
+  idleLimitFromLegacy,
+} from '@conclavix/core';
+import type { AgentDoc, Collections, Database, RunDoc } from '../../db.js';
+
+/**
+ * The agent's idle-run limit. Agents not yet migrated still carry the former hourly limit, which
+ * the scheduler process may read before the API has migrated them; it is converted the same way.
+ */
+export function idleRunLimit(agent: Pick<AgentDoc, 'limits'>): number {
+  const limits = agent.limits as Partial<AgentDoc['limits']> & { maxRunsPerIssuePerHour?: number };
+  return (
+    limits.maxIdleRunsPerIssue ??
+    (limits.maxRunsPerIssuePerHour === undefined
+      ? DEFAULT_MAX_IDLE_RUNS_PER_ISSUE
+      : idleLimitFromLegacy(limits.maxRunsPerIssuePerHour))
+  );
+}
+
+/**
+ * Number of idle runs after which the agent is paused: the backoff limit plus
+ * `idleRunsAfterBackoff` further runs, each of them started only after a backoff.
+ */
+export const pauseThreshold = (agent: Pick<AgentDoc, 'limits'>, idleRunsAfterBackoff: number) =>
+  idleRunLimit(agent) + idleRunsAfterBackoff;
+
+/**
+ * Whether a finished run made progress: it raised the issue's progress counter (status change,
+ * document revision, new sub-issue, reopening) or it was a coding run whose commits reached the
+ * project repository.
+ */
+export function runMadeProgress(
+  run: Pick<RunDoc, 'progressAtStart' | 'code'>,
+  issueProgress: number | undefined,
+): boolean {
+  if ((issueProgress ?? run.progressAtStart) > run.progressAtStart) return true;
+  const code = run.code;
+  return Boolean(code?.synced && code.head !== null && code.head !== code.base);
+}
+
+export interface IdleStreak {
+  /** Consecutive finished runs without progress, newest first, capped at the requested limit. */
+  count: number;
+  /** When the newest of them finished; null without idle runs. */
+  lastFinishedAt: Date | null;
+}
+
+/**
+ * Count the agent's consecutive finished runs on the issue that made no progress, starting at the
+ * newest one. A run with progress (or one finished before progress was recorded) ends the streak.
+ */
+export async function idleStreak(
+  collections: Collections,
+  agentId: ObjectId,
+  issueId: ObjectId,
+  limit: number,
+  session?: ClientSession,
+): Promise<IdleStreak> {
+  const recent = await collections.runs
+    .find(
+      { agentId, issueId, status: { $in: [...FINISHED_RUN_STATUSES] } },
+      { projection: { madeProgress: 1, finishedAt: 1 }, ...(session ? { session } : {}) },
+    )
+    .sort({ finishedAt: -1, _id: -1 })
+    .limit(limit)
+    .toArray();
+  let count = 0;
+  while (count < recent.length && recent[count]?.madeProgress === false) count += 1;
+  return { count, lastFinishedAt: count > 0 ? (recent[0]?.finishedAt ?? null) : null };
+}
 
 /**
  * Pause the agent when its last `threshold` finished runs on the issue changed nothing,
@@ -13,16 +83,8 @@ export async function pauseOnLoop(
   now: Date,
 ): Promise<boolean> {
   const { collections } = database;
-  const recent = await collections.runs
-    .find({
-      agentId: run.agentId,
-      issueId: run.issueId,
-      status: { $in: [...FINISHED_RUN_STATUSES] },
-    })
-    .sort({ finishedAt: -1, _id: -1 })
-    .limit(threshold)
-    .toArray();
-  if (recent.length < threshold || recent.some((item) => item.madeProgress !== false)) {
+  const streak = await idleStreak(collections, run.agentId, run.issueId, threshold);
+  if (streak.count < threshold) {
     return false;
   }
   return database.inTransaction(async (session) => {
@@ -41,7 +103,7 @@ export async function pauseOnLoop(
         author: { type: 'system' },
         body:
           `Agent paused: its last ${threshold} runs on this issue made no progress ` +
-          '(no status change, no document revision, no new sub-issue). ' +
+          '(no status change, no document revision, no new sub-issue, no synced commit). ' +
           'Check the issue and set the agent back to active when it can continue.',
         createdAt: now,
       },

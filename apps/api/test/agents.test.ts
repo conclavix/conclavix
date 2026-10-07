@@ -25,8 +25,42 @@ describe('agents and org chart', () => {
       name: 'CEO',
       reportsTo: null,
       status: 'active',
-      limits: { maxRunsPerIssuePerHour: 4, maxCostPerRunUsd: 2, maxCostPerDayUsd: 20 },
+      limits: { maxIdleRunsPerIssue: 2, maxCostPerRunUsd: 2, maxCostPerDayUsd: 20 },
     });
+  });
+
+  it('accepts the former limit name maxRunsPerIssuePerHour as the idle-run limit', async () => {
+    const created = await createAgent({
+      name: 'Legacy client',
+      role: 'x',
+      limits: { maxRunsPerIssuePerHour: 6, maxCostPerRunUsd: 1, maxCostPerDayUsd: 5 },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().limits).toEqual({
+      maxIdleRunsPerIssue: 2,
+      maxCostPerRunUsd: 1,
+      maxCostPerDayUsd: 5,
+    });
+    const both = await ctx.request({
+      method: 'PATCH',
+      url: `/api/agents/${created.json().id}`,
+      payload: {
+        limits: {
+          maxRunsPerIssuePerHour: 9,
+          maxIdleRunsPerIssue: 3,
+          maxCostPerRunUsd: 1,
+          maxCostPerDayUsd: 5,
+        },
+      },
+    });
+    expect(both.statusCode).toBe(200);
+    expect(both.json().limits.maxIdleRunsPerIssue).toBe(3);
+    const invalid = await ctx.request({
+      method: 'PATCH',
+      url: `/api/agents/${created.json().id}`,
+      payload: { limits: { maxRunsPerIssuePerHour: 0, maxCostPerRunUsd: 1, maxCostPerDayUsd: 5 } },
+    });
+    expect(invalid.statusCode).toBe(400);
   });
 
   it('builds the org chart from reportsTo', async () => {

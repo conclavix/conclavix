@@ -122,6 +122,8 @@ export interface WakeDoc {
   /** Set while the wake waits for a rate or budget window; absent on older wakes. */
   notBefore?: Date | null;
   deferReason?: WakeDeferReason | null;
+  /** True once the board woke the agent manually; such a wake skips the idle backoff. */
+  boardWake?: boolean;
 }
 
 export interface RunDoc {

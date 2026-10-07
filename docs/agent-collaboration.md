@@ -58,8 +58,8 @@ delegation, so closing it again wakes the delegator as before.
 - `reason` is required (1 to 20000 characters, not blank) and becomes a comment on the reopened
   issue, written in the same transaction as the status change.
 - The assignee is woken by the usual rule for an issue that becomes actionable (`assigned` wake for
-  that issue); the scheduler gates (paused agent, project access, runs per issue and hour, cost per
-  day) apply as for every wake.
+  that issue); the scheduler gates (paused agent, project access, idle backoff, cost per day) apply as
+  for every wake.
 - Reopening counts as progress of the reopening run's own issue, like creating a sub-issue, so loop
   detection does not pause a delegator that sends work back.
 - A sub-issue whose parent is closed cannot be reopened; reopen the parent first.
@@ -109,16 +109,48 @@ pending with `deferReason` and `notBefore`, keeps its agent and issue, and the s
 again from `notBefore` on (all gates again, so a closed issue, an unassigned agent or a pause still
 skip it):
 
-- `run_rate_limit` (`maxRunsPerIssuePerHour` runs on this issue in the last hour): `notBefore` is
-  when the oldest of those runs leaves the hour.
+- `idle_backoff` (`maxIdleRunsPerIssue` runs in a row on this issue without progress, see below):
+  `notBefore` is `IDLE_BACKOFF_MINUTES` (default 10) after the last of those runs finished.
+- `issue_run_cap` (`MAX_RUNS_PER_ISSUE_PER_DAY` runs of the agent on this issue in the last 24
+  hours, default 50, with or without progress): `notBefore` is when the oldest of them leaves the
+  24 hours.
 - `daily_cost_limit` (`maxCostPerDayUsd` spent since midnight UTC): `notBefore` is the next
   midnight UTC. Deferring keeps one rule for both limits; the run then counts against the new day.
 
 While a wake waits, further wakes for the same agent and issue are absorbed by it, so a deferred
 lead gets exactly one run when the window frees. A manual wake from the board (after raising the
-limits, for example) clears `notBefore`, so the wake is checked on the next tick. Loop detection is
-unchanged: runs started from deferred wakes count, and an agent paused for making no progress has
-its pending wake skipped.
+limits, for example) clears `notBefore`, so the wake is checked on the next tick, and marks the
+wake as a board wake, which skips the idle backoff (the run cap, the cost limit and every other
+gate still apply). Wakes from events (comments, closed sub-issues, unblocking, reports, heartbeats) do not
+skip it. Wakes deferred by the former hourly window (`run_rate_limit`) are released on the first
+start after the upgrade.
+
+### Idle runs: backoff, then pause
+
+The limit counts repetitions, not runs. A finished run **made progress** when it changed its
+issue's status, revised a document (a revision with the same title and body does not count),
+created a sub-issue or reopened an issue (each raises the issue's progress counter), or when it was
+a coding run whose commits were synced into the project repository. Only consecutive finished runs
+of the same agent on the same issue **without** progress count; one run with progress resets the
+count. Productive agents are therefore not throttled by how many runs they need. Hard brakes stay
+in place regardless of progress: the cost limits (`maxCostPerRunUsd`, `maxCostPerDayUsd`) and the
+run cap per issue (`MAX_RUNS_PER_ISSUE_PER_DAY`), a backstop for loops whose runs look like
+progress, such as an agent that commits a changed log file every run.
+
+With `N = maxIdleRunsPerIssue` (per agent, 1 to 60, default 2):
+
+1. After `N` idle runs in a row, the next run on the issue waits `IDLE_BACKOFF_MINUTES` after the
+   last of them (`idle_backoff`). The board's manual wake skips this wait.
+2. If the run after the backoff makes no progress either (`N + 1` idle runs), loop detection pauses
+   the agent and posts a system comment on the issue (`Agent paused: ...`). The board sets the
+   agent back to active when it can continue; its pending wakes are skipped while it is paused.
+
+With the default of 2 the pause comes after 3 idle runs, as before the backoff existed. Agents
+stored before this limit had `maxRunsPerIssuePerHour` instead; on the first start it becomes
+`maxIdleRunsPerIssue`, capped at 2 (a value of 1 stays 1). An hourly run count is no idle-run count,
+and the cap keeps the pause of every existing agent at 3 idle runs or fewer, as it was; raise the
+limit in the agent settings where more patience is wanted. The API still accepts the old field name
+in `limits`, converted the same way (it is ignored when the new one is given).
 
 Example: Mr. Green delegates integration to the Integrations Agent, which delegates the review to
 the PR Reviewer. With `PR Reviewer reports to Mr. Green` set to wake, the closed review wakes the

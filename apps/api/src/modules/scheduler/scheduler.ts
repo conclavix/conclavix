@@ -6,7 +6,7 @@ import { conflict, notFound, unprocessable } from '../../errors.js';
 import { Redactor, errorKind, redactOrWithhold } from '../../runner/redact.js';
 import { generateRunToken } from '../runs/tokens.js';
 import { evaluateWake, type GateResult } from './gates.js';
-import { pauseOnLoop } from './loop-detection.js';
+import { pauseOnLoop, pauseThreshold, runMadeProgress } from './loop-detection.js';
 import { ACTIONABLE_STATUSES, requestWake } from './wakes.js';
 import { disabledAssignments } from '../projects/agent-access.js';
 
@@ -20,13 +20,23 @@ export interface RunDispatcher {
 
 export interface SchedulerOptions {
   heartbeatMinutes: number;
-  loopThreshold: number;
+  /** Wait before the next run once an agent reached its idle-run limit on an issue. */
+  idleBackoffMs: number;
+  /**
+   * Further runs without progress, each after a backoff, before loop detection pauses the agent:
+   * it pauses after `maxIdleRunsPerIssue + idleRunsAfterBackoff` consecutive idle runs.
+   */
+  idleRunsAfterBackoff: number;
+  /** Hard cap on runs of one agent on one issue in 24 hours, progress or not. */
+  maxRunsPerIssuePerDay: number;
   batchSize: number;
 }
 
 export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   heartbeatMinutes: 60,
-  loopThreshold: 3,
+  idleBackoffMs: 10 * 60_000,
+  idleRunsAfterBackoff: 1,
+  maxRunsPerIssuePerDay: 50,
   batchSize: 100,
 };
 
@@ -107,7 +117,7 @@ export class Scheduler {
 
   private async processWake(wake: WakeDoc, now: Date): Promise<WakeResult> {
     const outcome = await this.database.inTransaction(async (session) => {
-      const gate = await evaluateWake(this.collections, wake, now, session);
+      const gate = await evaluateWake(this.collections, wake, now, session, this.options);
       if (gate.kind === 'defer') {
         return { result: 'defer' as const, run: null };
       }
@@ -177,7 +187,7 @@ export class Scheduler {
     return outcome.result;
   }
 
-  /** Keep the wake pending until its limit window frees; it is not selected before then. */
+  /** Keep the wake pending until its window frees; it is not selected before then. */
   private async deferWake(
     wake: WakeDoc,
     gate: Extract<GateResult, { kind: 'defer_until' }>,
@@ -252,7 +262,7 @@ export class Scheduler {
         throw conflict(`run already finished with status ${current.status}`);
       }
       const issue = await this.collections.issues.findOne({ _id: current.issueId }, { session });
-      const madeProgress = (issue?.progress ?? current.progressAtStart) > current.progressAtStart;
+      const madeProgress = runMadeProgress(current, issue?.progress);
       const finished = await this.collections.runs.findOneAndUpdate(
         { _id: runId },
         {
@@ -279,7 +289,15 @@ export class Scheduler {
     if (!run) {
       throw notFound('Run');
     }
-    await pauseOnLoop(this.database, run, this.options.loopThreshold, now);
+    const agent = await this.collections.agents.findOne({ _id: run.agentId });
+    if (agent) {
+      await pauseOnLoop(
+        this.database,
+        run,
+        pauseThreshold(agent, this.options.idleRunsAfterBackoff),
+        now,
+      );
+    }
     return run;
   }
 
