@@ -37,6 +37,14 @@ export interface WorkspaceLimits {
   /** Timeout and size cap of a ZIP download. */
   archiveTimeoutMs: number;
   archiveMaxBytes: number;
+  /** Branches (main and `cvx/*`) the media listing scans. */
+  maxMediaBranches: number;
+  /** Distinct media files (blobs) the media listing collects. */
+  maxMediaItems: number;
+  /** Commits the media listing reads to find who wrote a file and when. */
+  maxMediaLogCommits: number;
+  /** Time budget of one media scan; branches past it are skipped and the scan is `truncated`. */
+  mediaScanBudgetMs: number;
 }
 
 export const DEFAULT_LIMITS: WorkspaceLimits = {
@@ -51,6 +59,10 @@ export const DEFAULT_LIMITS: WorkspaceLimits = {
   timeoutMs: 15_000,
   archiveTimeoutMs: 5 * 60_000,
   archiveMaxBytes: 1024 * 1024 * 1024,
+  maxMediaBranches: 200,
+  maxMediaItems: 5000,
+  maxMediaLogCommits: 5000,
+  mediaScanBudgetMs: 20_000,
 };
 
 export interface ResolvedRef {
