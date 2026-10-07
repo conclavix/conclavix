@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mediaQuerySchema, type MediaListing } from '@conclavix/core';
 import { Git, GitError } from '../src/modules/workspace/git.js';
-import { Workspace } from '../src/modules/workspace/service.js';
+import { Workspace, type WorkspaceLimits } from '../src/modules/workspace/service.js';
 import { createUser, signIn } from './auth-helpers.js';
 import { createTestContext, type TestContext } from './helpers.js';
 import { commitAll, git, tempRoot } from './workspace-helpers.js';
@@ -255,6 +255,7 @@ describe('project media API', () => {
   async function withFailingGit<T>(
     match: (args: readonly string[]) => boolean,
     reason: 'exit' | 'timeout',
+    limits: Partial<WorkspaceLimits>,
     fn: (fresh: Workspace, logCalls: () => number) => Promise<T>,
   ): Promise<T> {
     const run = Git.prototype.run;
@@ -267,7 +268,7 @@ describe('project media API', () => {
       return run.call(this, args, opts);
     });
     try {
-      return await fn(new Workspace(root.dir), () => calls);
+      return await fn(new Workspace(root.dir, { limits }), () => calls);
     } finally {
       spy.mockRestore();
     }
@@ -275,10 +276,15 @@ describe('project media API', () => {
 
   it('lists files without dates when the history walk fails and retries under a new version', async () => {
     const query = mediaQuerySchema.parse({});
-    const { fresh, failed } = await withFailingGit(isLog, 'exit', async (reader) => ({
-      fresh: reader,
-      failed: await reader.media(projectId, query),
-    }));
+    const { fresh, failed } = await withFailingGit(
+      isLog,
+      'exit',
+      { mediaHistoryRetryMs: 0 },
+      async (reader) => ({
+        fresh: reader,
+        failed: await reader.media(projectId, query),
+      }),
+    );
     expect(failed).toMatchObject({ total: 6, history: 'failed', truncated: false });
     expect(failed.items.every((item) => item.commit === null)).toBe(true);
     const retried = await fresh.media(projectId, query);
@@ -287,9 +293,20 @@ describe('project media API', () => {
     expect(retried.items.every((item) => item.commit !== null)).toBe(true);
   });
 
+  it('reuses a scan whose history walk failed for a while, so paging still works', async () => {
+    const query = mediaQuerySchema.parse({ limit: 2 });
+    await withFailingGit(isLog, 'exit', {}, async (reader, logCalls) => {
+      const first = await reader.media(projectId, query);
+      const next = await reader.media(projectId, { ...query, offset: 2 });
+      expect(first.history).toBe('failed');
+      expect(next.version).toBe(first.version);
+      expect(logCalls()).toBe(1);
+    });
+  });
+
   it('treats a history walk that runs out of time as limited and keeps the scan', async () => {
     const query = mediaQuerySchema.parse({});
-    await withFailingGit(isLog, 'timeout', async (reader, logCalls) => {
+    await withFailingGit(isLog, 'timeout', {}, async (reader, logCalls) => {
       const first = await reader.media(projectId, query);
       expect(first.history).toBe('limited');
       const again = await reader.media(projectId, query);
@@ -303,6 +320,7 @@ describe('project media API', () => {
     const listing = await withFailingGit(
       (args) => args.includes('ls-tree'),
       'timeout',
+      {},
       (reader) => reader.media(projectId, query),
     );
     expect(listing).toMatchObject({ total: 0, truncated: true, scannedBranches: 0 });

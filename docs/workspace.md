@@ -185,10 +185,11 @@ is synced, before anything is merged. `GET /api/projects/:id/media` does the wor
   missing), which the tab shows as a notice. `history` tells how far the dating got: `complete`,
   `limited` (the commit or size limit, or a timeout of `git log`, stopped the walk before every
   file was found; those files have no `commit` and sort last) or `failed` (git failed otherwise:
-  the files are listed without author and date, the API logs a warning, and the scan is not
-  cached so the next request tries again). The tab shows a notice for both. The scan is cached in
-  memory per project (the 32 most recently used projects) and reused until a branch tip moves, so
-  paging and filtering do not run git again.
+  the files are listed without author and date, the API logs a warning, and the scan is reused
+  for one minute only, so paging keeps working and a later request tries the history again).
+  The tab shows a notice for both. The scan is cached in memory per project (the 32 most recently
+  used projects) and reused until a branch tip moves, so paging and filtering do not run git
+  again.
 - **Permission.** `read`, like the Code tab.
 
 The tab shows a grid with lazily loaded thumbnails (videos and PDFs get an icon; images above

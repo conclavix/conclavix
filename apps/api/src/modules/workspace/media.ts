@@ -180,7 +180,10 @@ function facetsOf(items: readonly MediaItem[], refs: readonly ScanRef[]): MediaF
  * branch, deduplicated by blob id. A scan is cached per project until a branch tip changes.
  */
 export class MediaReader extends RepoReader {
-  private readonly mediaCache = new Map<string, { key: string; scan: Promise<MediaScan> }>();
+  private readonly mediaCache = new Map<
+    string,
+    { key: string; scan: Promise<MediaScan>; expiresAt?: number }
+  >();
 
   /** One page of the project's media, filtered and sorted as `query` asks. */
   async media(projectId: string, query: MediaQuery): Promise<MediaListing> {
@@ -193,7 +196,7 @@ export class MediaReader extends RepoReader {
     const { refs, truncated } = await this.scanRefs(projectId);
     const key = refs.map((ref) => `${ref.branch}\0${ref.sha}`).join('\n');
     const cached = this.mediaCache.get(projectId);
-    if (cached?.key === key) {
+    if (cached?.key === key && (cached.expiresAt === undefined || Date.now() < cached.expiresAt)) {
       this.mediaCache.delete(projectId);
       this.mediaCache.set(projectId, cached);
       return cached.scan;
@@ -201,17 +204,25 @@ export class MediaReader extends RepoReader {
     const version = randomBytes(8).toString('hex');
     const scan = this.scanMedia(projectId, refs, truncated, version);
     this.mediaCache.delete(projectId);
-    this.mediaCache.set(projectId, { key, scan });
+    const entry: { key: string; scan: Promise<MediaScan>; expiresAt?: number } = { key, scan };
+    this.mediaCache.set(projectId, entry);
     while (this.mediaCache.size > MEDIA_CACHE_SIZE) {
       const oldest = this.mediaCache.keys().next().value;
       if (oldest === undefined) break;
       this.mediaCache.delete(oldest);
     }
-    // A failed scan, or one whose history walk failed, is not kept: the next request tries again.
-    const evict = () => {
-      if (this.mediaCache.get(projectId)?.scan === scan) this.mediaCache.delete(projectId);
-    };
-    scan.then((result) => result.history === 'failed' && evict(), evict);
+    // A failed scan is dropped; one whose history walk failed is kept for a short while only, so
+    // paging keeps working while git fails and a later request tries the history again.
+    scan.then(
+      (result) => {
+        if (result.history === 'failed') {
+          entry.expiresAt = Date.now() + this.limits.mediaHistoryRetryMs;
+        }
+      },
+      () => {
+        if (this.mediaCache.get(projectId) === entry) this.mediaCache.delete(projectId);
+      },
+    );
     return scan;
   }
 

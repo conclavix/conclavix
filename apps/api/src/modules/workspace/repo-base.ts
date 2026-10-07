@@ -45,6 +45,8 @@ export interface WorkspaceLimits {
   maxMediaLogCommits: number;
   /** Time budget of one media scan; branches past it are skipped and the scan is `truncated`. */
   mediaScanBudgetMs: number;
+  /** How long a scan whose history walk failed is reused before the walk is tried again. */
+  mediaHistoryRetryMs: number;
 }
 
 export const DEFAULT_LIMITS: WorkspaceLimits = {
@@ -63,6 +65,7 @@ export const DEFAULT_LIMITS: WorkspaceLimits = {
   maxMediaItems: 5000,
   maxMediaLogCommits: 5000,
   mediaScanBudgetMs: 20_000,
+  mediaHistoryRetryMs: 60_000,
 };
 
 export interface ResolvedRef {
