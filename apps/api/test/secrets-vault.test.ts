@@ -159,6 +159,25 @@ describe('project secrets', () => {
     expect((await attempt(PASSWORD)).statusCode).toBe(429);
   });
 
+  it('counts parallel wrong passwords before they are checked', async () => {
+    const created = await as('owner', 'POST', base(), {
+      name: 'Burst',
+      envName: 'BURST_VALUE',
+      value: VALUE,
+    });
+    const url = `${base()}/${created.json().id as string}/reveal`;
+    await createUser(ctx, 'owner3@example.com', 'owner');
+    const cookie = (await signIn(ctx, 'owner3@example.com')).cookie;
+    const burst = await Promise.all(
+      Array.from({ length: 12 }, (_, i) =>
+        asBrowser(ctx, cookie, { method: 'POST', url, payload: { password: `wrong-${i}` } }),
+      ),
+    );
+    const codes = burst.map((response) => response.statusCode);
+    expect(codes.filter((code) => code === 403)).toHaveLength(5);
+    expect(codes.filter((code) => code === 429)).toHaveLength(7);
+  });
+
   it('refuses reserved, malformed and duplicate variable names and short values', async () => {
     for (const envName of [
       'PATH',

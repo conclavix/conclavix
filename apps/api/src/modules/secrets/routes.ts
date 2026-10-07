@@ -25,14 +25,28 @@ const REVEAL_WINDOW_MS = 10 * 60_000;
 class RevealLimiter {
   private readonly failures = new Map<string, number[]>();
 
-  blocked(userId: string, now = Date.now()): boolean {
+  /**
+   * Counts the attempt as a failure before the password is checked, in the same synchronous step
+   * as the limit check, so parallel requests cannot all pass the check. Returns the attempt's
+   * timestamp, or null when reveals are paused.
+   */
+  reserve(userId: string, now = Date.now()): number | null {
     const recent = (this.failures.get(userId) ?? []).filter((at) => now - at < REVEAL_WINDOW_MS);
-    this.failures.set(userId, recent);
-    return recent.length >= REVEAL_FAILURES;
+    if (recent.length >= REVEAL_FAILURES) {
+      this.failures.set(userId, recent);
+      return null;
+    }
+    this.failures.set(userId, [...recent, now]);
+    return now;
   }
 
-  fail(userId: string, now = Date.now()): void {
-    this.failures.set(userId, [...(this.failures.get(userId) ?? []), now]);
+  /** Takes back a reserved attempt that ended before a password was found wrong. */
+  release(userId: string, at: number): void {
+    const failures = [...(this.failures.get(userId) ?? [])];
+    const index = failures.indexOf(at);
+    if (index < 0) return;
+    failures.splice(index, 1);
+    this.failures.set(userId, failures);
   }
 
   clear(userId: string): void {
@@ -186,18 +200,27 @@ function registerRevealRoute(
       const projectId = await projectOf(database, request.params.id);
       const id = toObjectId(request.params.secretId, 'Secret');
       const { password } = parse(revealSecretSchema, request.body);
-      if (limiter.blocked(principal.userId)) {
+      const attempt = limiter.reserve(principal.userId);
+      if (attempt === null) {
         throw new AppError(429, 'too_many_attempts', 'Too many wrong passwords; try again later');
       }
-      const doc = await secrets.get(projectId, id);
+      let doc: Awaited<ReturnType<SecretRepository['get']>>;
+      let correct: boolean;
+      try {
+        doc = await secrets.get(projectId, id);
+        correct = await checkPassword(principal.userId, password);
+      } catch (error) {
+        limiter.release(principal.userId, attempt);
+        throw error;
+      }
       const details = {
         secretId: id.toHexString(),
         projectId: projectId.toHexString(),
         name: doc.name,
         envName: doc.envName,
       };
-      if (!(await checkPassword(principal.userId, password))) {
-        limiter.fail(principal.userId);
+      if (!correct) {
+        // The reserved attempt stays counted as the failure.
         await audit.record(auditEntry(request, 'secret.reveal_failed', details));
         throw new AppError(403, 'invalid_password', 'The password is not correct');
       }
