@@ -17,7 +17,10 @@ function renderMessage(message: ChatMessageDoc): string {
  * The conversation the lead sees, oldest first: at most `historyMessages` messages and
  * `historyChars` characters, dropping the oldest first, and never the newest message.
  */
-export function chatHistory(messages: readonly ChatMessageDoc[]): {
+export function chatHistory(
+  messages: readonly ChatMessageDoc[],
+  totalMessages = messages.length,
+): {
   text: string;
   omitted: number;
 } {
@@ -31,14 +34,17 @@ export function chatHistory(messages: readonly ChatMessageDoc[]): {
   }
   return {
     text: rendered.slice(start).join('\n\n'),
-    omitted: messages.length - (recent.length - start),
+    omitted: Math.max(totalMessages, messages.length) - (recent.length - start),
   };
 }
 
 export interface ChatPromptInput {
   agent: AgentDoc;
   chat: ChatDoc;
+  /** The newest messages of the chat, oldest first. */
   messages: readonly ChatMessageDoc[];
+  /** All messages of the chat, when only the newest were loaded. */
+  totalMessages?: number;
   /** The existing project the chat is about, if any. */
   project: ProjectDoc | null;
   /**
@@ -85,7 +91,7 @@ const APPROVED_RULES = (revision: number): string[] => [
 export function buildChatPrompt(input: ChatPromptInput): string {
   const { agent, chat, messages, project, code } = input;
   const approved = chat.status === 'approved' && chat.approval !== null;
-  const history = chatHistory(messages);
+  const history = chatHistory(messages, input.totalMessages);
   const tools = ['memory_search', 'memory_save', 'list_projects', 'get_project_board'];
 
   tools.push('write_chat_plan', 'create_project', 'create_planning_issue');

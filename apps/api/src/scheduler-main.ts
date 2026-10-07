@@ -29,14 +29,15 @@ async function main(): Promise<void> {
       const recovered = await scheduler.recoverRuns(maxRunningMs);
       log.debug({ heartbeats, ...recovered }, 'sweep');
     }
-    const counts = await scheduler.processPendingWakes();
-    if (counts.run + counts.skip > 0) {
-      log.info(counts, 'wakes processed');
-    }
-    const chats = await scheduler.processChatTurns();
-    if (chats.run + chats.drop > 0) {
-      log.info(chats, 'chat turns processed');
-    }
+    // Wakes and chat turns fail independently: a broken wake must not hold back the chats.
+    await scheduler.processPendingWakes().then(
+      (counts) => counts.run + counts.skip > 0 && log.info(counts, 'wakes processed'),
+      (error: unknown) => log.error({ err: error }, 'processing wakes failed'),
+    );
+    await scheduler.processChatTurns().then(
+      (chats) => chats.run + chats.drop > 0 && log.info(chats, 'chat turns processed'),
+      (error: unknown) => log.error({ err: error }, 'processing chat turns failed'),
+    );
   };
 
   const loop = async (): Promise<void> => {

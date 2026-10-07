@@ -1,4 +1,5 @@
 import pino from 'pino';
+import { CHAT_LIMITS } from '@conclavix/core';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { ObjectId } from 'mongodb';
@@ -309,10 +310,17 @@ export class RunWorker {
         error: `adapter ${agent.adapter.type} is not available`,
       };
     }
-    const [messages, project] = await Promise.all([
-      collections.chatMessages.find({ chatId: chat._id }).sort({ createdAt: 1, _id: 1 }).toArray(),
+    // Only the newest messages reach the prompt; the count tells the lead how many it does not see.
+    const [newest, total, project] = await Promise.all([
+      collections.chatMessages
+        .find({ chatId: chat._id })
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(CHAT_LIMITS.historyMessages)
+        .toArray(),
+      collections.chatMessages.countDocuments({ chatId: chat._id }),
       chat.projectId ? collections.projects.findOne({ _id: chat.projectId }) : null,
     ]);
+    const messages = newest.reverse();
     await mkdir(workspace, { recursive: true });
     const skills = await loadAgentSkills(collections, agent.skillIds);
     await materializeSkills(workspace, skills);
@@ -327,7 +335,14 @@ export class RunWorker {
       run,
       agent,
       issue: null,
-      prompt: buildChatPrompt({ agent, chat, messages, project, code: project !== null }),
+      prompt: buildChatPrompt({
+        agent,
+        chat,
+        messages,
+        totalMessages: total,
+        project,
+        code: project !== null,
+      }),
       workspace,
       mcpUrl: this.options.mcpUrl,
       token,

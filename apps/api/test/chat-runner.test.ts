@@ -52,6 +52,8 @@ describe('chat run history and prompt', () => {
     expect(history.omitted).toBe(5);
     expect(history.text).not.toContain('message 4\n');
     expect(history.text).toContain(`message ${many.length - 1}`);
+    // The runner loads only the newest messages and passes the total.
+    expect(chatHistory(many.slice(-10), 100).omitted).toBe(90);
 
     const long = [
       message('board', 'x'.repeat(CHAT_LIMITS.historyMessageChars)),
