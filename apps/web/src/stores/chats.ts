@@ -26,9 +26,11 @@ interface OpenChat {
 function chatActions({ current, messages, upsert, refresh }: OpenChat) {
   return {
     async post(content: string): Promise<void> {
-      if (!current.value) return;
-      const { message, chat } = await chatApi.post(current.value.id, content);
-      messages.value = mergeMessage(messages.value, message);
+      const id = current.value?.id;
+      if (!id) return;
+      const { message, chat } = await chatApi.post(id, content);
+      // The view may have moved to another chat meanwhile; the list still gets the update.
+      if (current.value?.id === id) messages.value = mergeMessage(messages.value, message);
       upsert(chat);
     },
     async approve(planRevision: number): Promise<void> {

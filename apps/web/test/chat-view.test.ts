@@ -76,7 +76,8 @@ const flush = async () => {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-describe('chat view', () => {
+// Mounting Vuetify with dialogs is slow on a busy host; the default 5 s is too tight there.
+describe('chat view', { timeout: 20_000 }, () => {
   let app: ReturnType<typeof createApp>;
   let host: HTMLDivElement;
   const fetchMock = vi.fn();

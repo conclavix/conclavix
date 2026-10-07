@@ -1,5 +1,5 @@
 import { ObjectId } from 'mongodb';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestContext, type TestContext } from './helpers.js';
 import { asBrowser, createUser, signIn } from './auth-helpers.js';
 import { createFixture, type Fixture } from './scheduler-helpers.js';
@@ -189,6 +189,23 @@ describe('board chats with the lead', () => {
       );
     }
   }, 30_000);
+
+  it('refuses to archive when the lead started answering after the chat was read', async () => {
+    const { chatId } = await createLeadChat(ctx, fx);
+    const chats = ctx.database.collections.chats;
+    const stale = await chats.findOne({ _id: new ObjectId(chatId) });
+    // The scheduler starts a run between the service's read and its write.
+    await chats.updateOne({ _id: new ObjectId(chatId) }, { $set: { activeRunId: new ObjectId() } });
+    const read = vi.spyOn(chats, 'findOne').mockResolvedValueOnce(stale);
+    const archived = await ctx.request({
+      method: 'PATCH',
+      url: `/api/chats/${chatId}`,
+      payload: { status: 'archived' },
+    });
+    read.mockRestore();
+    expect(archived.statusCode).toBe(409);
+    expect((await chats.findOne({ _id: new ObjectId(chatId) }))?.status).toBe('open');
+  });
 
   it('archives a chat and then refuses messages', async () => {
     const { chatId } = await createLeadChat(ctx, fx);

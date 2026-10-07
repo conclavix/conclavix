@@ -1,6 +1,9 @@
+import pino from 'pino';
 import type { ChatDoc, Database, RunDoc } from '../../db.js';
 import type { RunDispatcher } from '../scheduler/scheduler.js';
 import { chatTurnGate, newChatRun } from './turns.js';
+
+const log = pino({ name: 'scheduler' });
 
 export type ChatTurnCounts = Record<'run' | 'drop' | 'defer', number>;
 
@@ -28,7 +31,12 @@ export async function processChatTurns(
     .limit(batchSize)
     .toArray();
   for (const chat of pending) {
-    counts[await processChatTurn(database, dispatcher, failDispatch, chat, now)] += 1;
+    // One broken chat must not hold back the turns of the others.
+    try {
+      counts[await processChatTurn(database, dispatcher, failDispatch, chat, now)] += 1;
+    } catch (error) {
+      log.error({ err: error, chatId: chat._id.toHexString() }, 'chat turn failed');
+    }
   }
   return counts;
 }
