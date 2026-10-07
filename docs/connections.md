@@ -76,6 +76,8 @@ How the header values travel:
   empty string in MCP headers, the same reason the run token is `CONCLAVIX_RUN_BEARER` there.
   `sandbox-acceptance.sh --with-claude` connects a second MCP server whose header comes from
   `CONCLAVIX_MCP_HEADER_1` and checks it is `connected`.
+- URLs may not contain `$`: claude expands `${NAME}` in MCP server URLs too, which would send
+  the run's variables to the server. The API and the root helper both refuse it.
 - The root helper accepts a connection server only as `type: "http"` with an http(s) URL without
   credentials and header values that are exactly `${CONCLAVIX_MCP_HEADER_<n>}`; at most 8 servers
   plus `conclavix`, 8 headers each, 32 values per run.

@@ -325,6 +325,7 @@ export class ConnectionService {
       Object.entries(credentials).flatMap(([key, value]) => knownValues(doc.name, key, value)),
     );
     outcome = redactor.deep(outcome);
+    outcome = { ...outcome, summary: outcome.summary.slice(0, 300) };
     const lastTest = { ...outcome, at: new Date() };
     // A connection edited while the test ran keeps its cleared result.
     await this.collections.connections.updateOne(

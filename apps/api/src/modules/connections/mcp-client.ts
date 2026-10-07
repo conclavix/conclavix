@@ -41,7 +41,12 @@ export class McpProbeError extends Error {
  * One POST over node:http(s): the SSRF guard on the DNS lookup unless private networks are
  * allowed, a time limit, a size cap and no redirects. Errors never carry the request headers.
  */
-function post(url: URL, options: McpProbeOptions, headers: Record<string, string>, body: string) {
+function post(
+  url: URL,
+  options: McpProbeOptions & { deadline: number },
+  headers: Record<string, string>,
+  body: string,
+) {
   return new Promise<PostResult>((resolve, reject) => {
     const client = url.protocol === 'https:' ? https : http;
     const controller = new AbortController();
@@ -55,7 +60,7 @@ function post(url: URL, options: McpProbeOptions, headers: Record<string, string
     };
     const timer = setTimeout(
       () => fail(new McpProbeError('the server did not answer in time')),
-      options.timeoutMs,
+      Math.max(1, options.deadline - Date.now()),
     );
     const request = client.request(
       url,
@@ -154,7 +159,7 @@ function messageFor(result: PostResult, id: number): Record<string, unknown> {
   if (!message) throw new McpProbeError('the server did not answer the request');
   if (message.error) {
     const text =
-      typeof message.error.message === 'string' ? message.error.message.slice(0, 200) : 'error';
+      typeof message.error.message === 'string' ? message.error.message.slice(0, 2000) : 'error';
     throw new McpProbeError(`the server answered with an error: ${text}`);
   }
   return message.result ?? {};
@@ -178,6 +183,8 @@ function checkStatus(result: PostResult, step: string): void {
  */
 export async function probeMcpServer(options: McpProbeOptions): Promise<McpProbe> {
   const url = assertSafeConnectionUrl(options.url, options.allowPrivate);
+  // One time limit for the whole test, not per request.
+  const timed = { ...options, deadline: Date.now() + options.timeoutMs };
   const base: Record<string, string> = {
     ...options.headers,
     'content-type': 'application/json',
@@ -188,7 +195,7 @@ export async function probeMcpServer(options: McpProbeOptions): Promise<McpProbe
 
   const init = await post(
     url,
-    options,
+    timed,
     base,
     rpc('initialize', 1, {
       protocolVersion: MCP_PROTOCOL_VERSION,
@@ -205,7 +212,7 @@ export async function probeMcpServer(options: McpProbeOptions): Promise<McpProbe
     ...(typeof session === 'string' ? { 'mcp-session-id': session } : {}),
     ...(protocolVersion ? { 'mcp-protocol-version': protocolVersion } : {}),
   };
-  const initialized = await post(url, options, headers, rpc('notifications/initialized', null));
+  const initialized = await post(url, timed, headers, rpc('notifications/initialized', null));
   if (initialized.status >= 400) checkStatus(initialized, 'initialized');
 
   const tools: string[] = [];
@@ -213,7 +220,7 @@ export async function probeMcpServer(options: McpProbeOptions): Promise<McpProbe
   for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
     const listed = await post(
       url,
-      options,
+      timed,
       headers,
       rpc('tools/list', 2 + page, cursor ? { cursor } : {}),
     );

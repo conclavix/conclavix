@@ -15,6 +15,10 @@ export const connectionAddressBlocked = (): AppError =>
  * and a public host unless the connection allows private networks (an owner's choice).
  */
 export function assertSafeConnectionUrl(raw: string, allowPrivate: boolean): URL {
+  // claude expands ${NAME} in MCP server URLs from its environment: run tokens, other headers.
+  if (raw.includes('$')) {
+    throw new AppError(422, 'connection_url_invalid', 'The URL must not contain $');
+  }
   let url: URL;
   try {
     url = new URL(raw);

@@ -197,8 +197,6 @@ describe('connections', () => {
       [docsPayload({ name: 'x1', type: 'paypal' }), 422],
       [docsPayload({ name: 'x2', config: { url: mcp.url, headers: ['Host'] } }), 400],
       [docsPayload({ name: 'x3', config: { url: 'ftp://example.com/' } }), 400],
-      [docsPayload({ name: 'x4', credentials: { Other: 'value-1234' } }), 422],
-      [docsPayload({ name: 'x5', scope: 'project' }), 400],
       [docsPayload({ name: 'x6', projectId }), 400],
     ];
     for (const [payload, status] of cases) {

@@ -161,6 +161,8 @@ function boardServerValid(server) {
  * references, so no secret ever stands in argv.
  */
 function connectionServerValid(server) {
+  // claude would expand ${NAME} in the URL from the run's environment.
+  if (typeof server.url !== 'string' || server.url.includes('$')) return false;
   const url = urlOf(server.url);
   if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
     return false;

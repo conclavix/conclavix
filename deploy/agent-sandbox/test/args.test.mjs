@@ -188,6 +188,14 @@ describe('validateClaudeArgs', () => {
         },
       }),
     ],
+    'a variable reference in a server URL': [
+      '--mcp-config',
+      JSON.stringify({
+        mcpServers: {
+          x: { type: 'http', url: 'https://x.example.com/?t=${CONCLAVIX_RUN_BEARER}' },
+        },
+      }),
+    ],
     'credentials in a server URL': [
       '--mcp-config',
       JSON.stringify({ mcpServers: { x: { type: 'http', url: 'https://u:p@mcp.example.com/' } } }),

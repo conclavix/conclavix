@@ -23,6 +23,7 @@ export const mcpHttpConfigSchema = z.strictObject({
   url: z
     .url({ protocol: /^https?$/ })
     .max(2048)
+    .refine((url) => !url.includes('$'), 'must not contain $ (claude expands ${...} in it)')
     .meta({
       title: 'Server URL',
       description: 'Streamable HTTP endpoint of the MCP server, e.g. https://mcp.example.com/mcp',

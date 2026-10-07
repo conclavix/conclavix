@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assertSafeConnectionUrl, privateAddressesFor } from '../src/modules/connections/net.js';
+import { mcpHttpConfigSchema } from '../src/modules/connections/types/mcp-http.js';
 
 describe('connection network rules', () => {
   it('refuses private addresses at run time unless the connection allows them', async () => {
@@ -20,5 +21,11 @@ describe('connection network rules', () => {
     }
     expect(() => assertSafeConnectionUrl('https://u:p@mcp.example.com/', true)).toThrow();
     expect(assertSafeConnectionUrl('http://10.0.0.1/mcp', true).protocol).toBe('http:');
+  });
+
+  it('refuses ${...} references in a URL, which claude would expand', () => {
+    const url = 'https://x.example.com/?t=${CONCLAVIX_RUN_BEARER}';
+    expect(() => assertSafeConnectionUrl(url, true)).toThrow(/\$/);
+    expect(mcpHttpConfigSchema.safeParse({ url, headers: [] }).success).toBe(false);
   });
 });
