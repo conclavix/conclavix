@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import { reactive, ref, toRefs, watch } from 'vue';
+import { AuthError } from '../api/client';
 import { decisionsApi, type Decision, type DecisionAnswer } from '../api/decisions';
 import { describeError } from '../issues';
 import { useLiveStore } from './live';
@@ -44,8 +45,10 @@ export const useDecisionsStore = defineStore('decisions', () => {
   async function refreshCount(): Promise<void> {
     try {
       lists.openCount = (await decisionsApi.count()).open;
-    } catch {
-      // The badge is a hint; the next event or reconnect refreshes it.
+    } catch (cause) {
+      // Keep the last count; the next event or reconnect retries. A lost session is handled by
+      // the stream's sign-out, so only other failures are reported.
+      if (!(cause instanceof AuthError)) reportError(cause);
     }
   }
 

@@ -147,7 +147,11 @@ export class DecisionService {
     return { open: await this.collections.decisions.countDocuments({ status: 'open' }) };
   }
 
-  /** Answer with an option and/or free text: posted as a board comment, which wakes the agent. */
+  /**
+   * Answer with an option and/or free text: posted as a board comment, which wakes the agent.
+   * The comment is bound to this decision, so a concurrent answer or a newer question makes it a
+   * 409 with nothing written; options are fixed per decision, so checking them here is safe.
+   */
   async answer(id: ObjectId, input: AnswerDecisionInput, author: Author): Promise<Decision> {
     const decision = await this.openDecision(id);
     if (input.option !== undefined && !decision.options.includes(input.option)) {
@@ -159,7 +163,7 @@ export class DecisionService {
       decision.issueId.toHexString(),
       { body: answerComment(input) },
       author,
-      { outcome: 'answered', decisionId: id },
+      { outcome: 'answered', decisionId: decision._id },
     );
     return this.get(id);
   }
@@ -171,7 +175,7 @@ export class DecisionService {
       decision.issueId.toHexString(),
       { body: dismissComment(input) },
       author,
-      { outcome: 'dismissed', decisionId: id },
+      { outcome: 'dismissed', decisionId: decision._id },
     );
     return this.get(id);
   }

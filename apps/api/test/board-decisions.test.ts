@@ -1,4 +1,5 @@
 import { ObjectId } from 'mongodb';
+import { DEFAULT_BOARD_COLUMNS } from '@conclavix/core';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toStreamEvent } from '../src/modules/stream/events.js';
@@ -234,6 +235,48 @@ describe('board decisions', () => {
       .limit(1)
       .toArray();
     expect(thread[0]?.body).toContain('Out of scope.');
+  });
+
+  it('lets only one of two concurrent answers through', async () => {
+    (await ask({ question: 'Which region?', options: ['eu', 'us'] })).close();
+    const [open] = (await decisions()).items as { id: string }[];
+    const answer = (option: string) =>
+      ctx.request({
+        method: 'POST',
+        url: `/api/decisions/${open?.id}/answer`,
+        payload: { option },
+      });
+    const results = await Promise.all([answer('eu'), answer('us')]);
+    expect(results.map((result) => result.statusCode).sort()).toEqual([200, 409]);
+    const winner = results.find((result) => result.statusCode === 200)?.json();
+    expect(
+      await ctx.database.collections.comments.countDocuments({
+        issueId: new ObjectId(issue.id),
+        body: { $regex: '^\\*\\*Decision:' },
+      }),
+    ).toBe(1);
+    expect(await commentWakes()).toBe(1);
+    expect((await decisions('decided')).items[0]).toMatchObject({ answer: winner.answer });
+  });
+
+  it('withdraws the question when a board edit moves the issue out of in_review', async () => {
+    (await ask({ question: 'Need a designer?' })).close();
+    const columns = DEFAULT_BOARD_COLUMNS.map((column) =>
+      column.status === 'in_review' ? { ...column, status: 'in_progress' } : { ...column },
+    );
+    const saved = await ctx.request({
+      method: 'PUT',
+      url: `/api/projects/${fx.projectId}/board`,
+      payload: {
+        revision: 0,
+        columns: [...columns, { id: 'qa', title: 'QA', status: 'in_review' }],
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    const doc = await issueDoc();
+    expect(doc?.status).toBe('in_progress');
+    expect(doc?.awaitingBoard).toBeNull();
+    expect((await decisions('decided')).items[0]).toMatchObject({ status: 'withdrawn' });
   });
 
   it('withdraws the question when the issue leaves in_review without an answer', async () => {

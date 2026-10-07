@@ -1,6 +1,14 @@
 import type { ClientSession, ObjectId } from 'mongodb';
 import type { Author } from '@conclavix/core';
 import type { Collections } from '../../db.js';
+import { AppError } from '../../errors.js';
+
+/** An answer or dismissal for a decision that is no longer the issue's open question. */
+export class DecisionClosed extends AppError {
+  constructor() {
+    super(409, 'conflict', 'the decision is no longer open; reload the list');
+  }
+}
 
 /** How the board settled an open decision. */
 export type BoardOutcome = 'answered' | 'dismissed';
