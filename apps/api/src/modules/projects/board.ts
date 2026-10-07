@@ -10,6 +10,7 @@ import { LOCKS, lock, type Collections, type Database, type IssueDoc } from '../
 import { AppError, conflict, unprocessable } from '../../errors.js';
 import { lockBoard, readBoard } from '../issues/columns.js';
 import { applyStatusChange } from '../issues/status-change.js';
+import { withdrawDecision } from '../decisions/records.js';
 import { wakeOnIssueChange } from '../scheduler/wakes.js';
 
 const MAX_RELOCATED_ISSUES = 1000;
@@ -206,6 +207,9 @@ export class BoardRepository {
     );
     if (!after) {
       throw new Error(`issue ${issue.key} vanished while the board was locked`);
+    }
+    if (issue.awaitingBoard && !after.awaitingBoard) {
+      await withdrawDecision(this.collections, issue.awaitingBoard.decisionId, session);
     }
     return { before: issue, after };
   }

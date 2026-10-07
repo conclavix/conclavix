@@ -13,6 +13,7 @@ import { mdiFolderMultipleOutline } from '@mdi/js';
 import { computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useVuetiwatch } from 'vuetiwatch';
+import DecisionsNavItem from './components/DecisionsNavItem.vue';
 import HeaderStatus from './components/HeaderStatus.vue';
 import ThemeToggle from './components/ThemeToggle.vue';
 import UserMenu from './components/UserMenu.vue';
@@ -92,6 +93,7 @@ watch(
             title="Issues"
             :to="{ name: 'issues' }"
           />
+          <DecisionsNavItem />
           <v-list-item
             :prepend-icon="mdiAccountTieOutline"
             title="Org chart"

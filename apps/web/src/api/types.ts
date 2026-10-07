@@ -39,6 +39,8 @@ export interface Issue {
   checkoutRunId: string | null;
   /** The issue's branch in the project repository, once its workspace exists. */
   branch?: string | null;
+  /** Set while the assignee waits for a board decision (request_board_decision). */
+  awaitingBoard?: { decisionId: string; since: string; question: string } | null;
   updatedAt: string;
 }
 

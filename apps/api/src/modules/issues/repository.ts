@@ -12,6 +12,7 @@ import { toIssue } from './mapping.js';
 import { findIssueByRef, listIssues, type IssuePage } from './queries.js';
 import { applyStatusChange } from './status-change.js';
 import { assertAgentEnabledInProject } from '../projects/agent-access.js';
+import { withdrawDecision } from '../decisions/records.js';
 
 const toIds = (ids: string[]): ObjectId[] => [...new Set(ids)].map((id) => new ObjectId(id));
 const toOptionalId = (id: string | null): ObjectId | null =>
@@ -155,12 +156,13 @@ export class IssueRepository {
   /**
    * `wakes: false` leaves the wakes to a `within` that queues its own in the transaction, so a
    * post-commit wake cannot start a second run after the first one was already picked up.
+   * `set` writes internal fields with the change (e.g. awaitingBoard), after validation.
    */
   async update(
     ref: string,
     input: UpdateIssueInput,
     within?: WithinUpdate,
-    { wakes = true }: { wakes?: boolean } = {},
+    { wakes = true, set }: { wakes?: boolean; set?: Partial<IssueDoc> } = {},
   ): Promise<Issue> {
     const { id } = await this.resolveId(ref);
     const moves = input.status !== undefined || input.columnId !== undefined;
@@ -181,7 +183,7 @@ export class IssueRepository {
           )
         : null;
       const effective = placement ? { ...input, ...placement } : input;
-      const changes = await this.validateChanges(current, effective, session);
+      const changes = { ...(await this.validateChanges(current, effective, session)), ...set };
       const statusChanged = effective.status !== undefined && effective.status !== current.status;
       const updated = await this.collections.issues.findOneAndUpdate(
         { _id: id },
@@ -190,6 +192,9 @@ export class IssueRepository {
       );
       if (updated && within) {
         await within(session, current, updated);
+      }
+      if (updated && current.awaitingBoard && !updated.awaitingBoard) {
+        await withdrawDecision(this.collections, current.awaitingBoard.decisionId, session);
       }
       if (updated && isClosed(updated.status) && !isClosed(current.status)) {
         await reportClosure(this.collections, updated, session);

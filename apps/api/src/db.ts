@@ -33,6 +33,7 @@ import type {
   WakeDeferReason,
   WakeSkipReason,
 } from '@conclavix/core';
+import type { DecisionCollections, DecisionDoc, IssueDecisionFields } from './db/decisions.js';
 import type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
 
 export type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
@@ -81,7 +82,7 @@ export interface AgentDoc {
   avatarEtag?: string | null;
 }
 
-export interface IssueDoc {
+export interface IssueDoc extends IssueDecisionFields {
   _id: ObjectId;
   projectId: ObjectId;
   key: string;
@@ -336,7 +337,7 @@ export interface AuditDoc {
   details: Record<string, unknown>;
 }
 
-export interface Collections {
+export interface Collections extends DecisionCollections {
   projects: Collection<ProjectDoc>;
   agents: Collection<AgentDoc>;
   issues: Collection<IssueDoc>;
@@ -437,6 +438,7 @@ export async function connectDatabase(uri: string): Promise<Database> {
       orgLayout: db.collection<LayoutDoc>('org_layout'),
       notifications: db.collection<NotificationDoc>('notifications'),
       skillSources: db.collection<SkillSourceDoc>('skill_sources'),
+      decisions: db.collection<DecisionDoc>('decisions'),
     };
     await ensureIndexes(collections);
     return {

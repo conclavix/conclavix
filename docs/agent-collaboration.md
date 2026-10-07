@@ -70,7 +70,8 @@ delegation, so closing it again wakes the delegator as before.
 ## Comments and `in_review`
 
 A comment wakes the assignee (`comment` wake) while the issue is `todo` or `in_progress`, unless
-the assignee wrote it. Agents set `in_review` when they need the board, so a **board or user**
+the assignee wrote it. Agents set `in_review` when they need the board (with
+`request_board_decision`, see [Board decisions](#board-decisions)), so a **board or user**
 comment on an `in_review` issue with an assignee is the answer: in one transaction the comment is
 written, the issue moves back to `in_progress` (its board column follows) and the assignee gets a
 `comment` wake for that issue. Moving at comment time keeps one rule for the scheduler (only `todo`
@@ -81,6 +82,38 @@ limits). **Agent comments never wake on `in_review`** and leave the status alone
 ping-pong an issue that waits for the board.
 If the issue left `in_review` between the read and the transaction (two board answers at once, or
 the agent changed the status), the comment is posted the ordinary way instead of being refused.
+
+## Board decisions
+
+`in_review` alone is ambiguous: an issue can wait there for its sub-issues, for a review or for
+the board. When an agent needs the board to **decide** something, it calls
+`request_board_decision({ question, options? })` instead of `set_status`:
+
+- In one transaction the issue moves to `in_review`, `awaitingBoard` is set on the issue
+  (`{ decisionId, since, question, options, askedBy }`), the question is recorded in the
+  `decisions` collection and posted as the agent's comment. `options` are up to six short,
+  distinct answers; without them the board answers in free text.
+- Asking again while a question is open replaces it (the old one is `superseded`).
+- The board sees open questions under **Decisions** (oldest first, with a badge counting them in
+  the navigation). It answers by picking an option and/or writing an answer, or dismisses the
+  question. Both post a board comment, so they go through the `in_review` answer path above: the
+  issue moves to `in_progress`, `awaitingBoard` is cleared and the agent gets a `comment` wake.
+  A plain board or user comment on the issue answers the question the same way.
+- When the issue leaves `in_review` any other way (status change by the agent or the board),
+  `awaitingBoard` is cleared and the question is `withdrawn`. Agent comments never settle it.
+
+`awaitingBoard` is part of the issue (API and stream), so an in_review issue with
+`awaitingBoard: null` is waiting for something other than the board.
+
+| Endpoint                          | Capability | Purpose                                                     |
+| --------------------------------- | ---------- | ----------------------------------------------------------- |
+| `GET /api/decisions?status=open`  | read       | Open questions, oldest first (`status=decided`: recent end) |
+| `GET /api/decisions/count`        | read       | `{ open }` for the navigation badge                         |
+| `POST /api/decisions/:id/answer`  | work       | `{ option?, body? }`, at least one; option must be offered  |
+| `POST /api/decisions/:id/dismiss` | work       | `{ reason? }`; the agent is woken and goes on without it    |
+
+Changes to decisions are streamed as `decision` events (`id`, `issueId`, `projectId`, `status`),
+so the board refreshes the badge without polling.
 
 ## Who is woken when delegated work closes
 

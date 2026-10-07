@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { AwaitingBoard } from './decision.js';
 import { boardColumnIdSchema, idSchema } from './ids.js';
 
 export const issueStatusSchema = z.enum([
@@ -88,4 +89,6 @@ export interface Issue {
   delegatedBy?: string | null;
   /** The issue's branch in the project repository (`cvx/<KEY>`), once its workspace was created. */
   branch: string | null;
+  /** The open board decision the assignee waits for (request_board_decision), or null. */
+  awaitingBoard: AwaitingBoard | null;
 }
