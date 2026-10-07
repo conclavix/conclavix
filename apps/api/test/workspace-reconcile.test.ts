@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ObjectId } from 'mongodb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -119,32 +119,58 @@ describe('CodeWorkspace.reconcileClone', () => {
     expect(git(clone, 'status', '--porcelain')).toBe('');
   });
 
-  it('commits uncommitted leftovers first, so they are merged or kept', async () => {
+  it('sets a clone with uncommitted leftovers aside instead of committing or overwriting them', async () => {
     const before = head();
-    await merge(['cvx/APP-10']);
-    writeFileSync(join(clone, 'left.txt'), 'left behind\n');
-    const merged = await ws.reconcileClone(PROJECT, ISSUE, AGENT);
-    expect(merged.action).toBe('merged');
-    const leftover = git(clone, 'rev-parse', 'HEAD^1');
-    expect(git(clone, 'rev-parse', `${leftover}^`)).toBe(before);
-    expect(git(clone, 'log', '-1', '--format=%an|%s', leftover)).toBe(
-      'Conclavix|Commit work an earlier run left uncommitted',
-    );
-    expect(read('left.txt')).toBe('left behind\n');
-    expect(read('ten.txt')).toBe('ten\n');
-    expect(git(clone, 'status', '--porcelain')).toBe('');
-
-    const conflicting = await merge(['cvx/APP-11']);
+    const merged = await merge(['cvx/APP-11']);
     writeFileSync(join(clone, 'shared.txt'), 'uncommitted\n');
-    const kept = await ws.reconcileClone(PROJECT, ISSUE, AGENT);
-    expect(kept.action).toBe('preserved');
-    const bare = (...args: string[]) => git(root.dir, `--git-dir=${ws.repoDir(PROJECT)}`, ...args);
-    expect(bare('show', `${kept.preservedBranch ?? ''}:shared.txt`)).toBe('uncommitted');
-    expect(head()).toBe(conflicting.after);
+    const result = await ws.reconcileClone(PROJECT, ISSUE, AGENT);
+    expect(result).toMatchObject({ action: 'set_aside', clone: before, head: null });
+    const aside = result.setAside ?? '';
+    expect(aside).toContain(`.stale-${ISSUE}-`);
+    expect(readFileSync(join(aside, 'shared.txt'), 'utf8')).toBe('uncommitted\n');
+    expect(existsSync(clone)).toBe(false);
+    expect(server()).toBe(merged.after);
+    expect(
+      git(root.dir, `--git-dir=${ws.repoDir(PROJECT)}`, 'for-each-ref', 'refs/heads/conflict'),
+    ).toBe('');
+
+    const fresh = await ws.createIssueWorkspace(PROJECT, ISSUE);
+    expect(fresh).toMatchObject({ created: true, head: merged.after });
     expect(read('shared.txt')).toBe('eleven\n');
   });
 
-  it('lets the runner integrate a merge made during the run', async () => {
+  it('overwrites ignored files when fast-forwarding, but sets other untracked files aside', async () => {
+    pushTo('main', 'cvx/APP-20', { 'notes.txt': 'notes\n' });
+    const helper = join(root.dir, 'helper-ignored');
+    git(root.dir, 'clone', '--quiet', '--branch', 'main', ws.repoDir(PROJECT), helper);
+    writeFileSync(join(helper, '.gitignore'), 'dist/\n');
+    commitAll(helper, 'ignore dist');
+    git(helper, 'push', '--quiet', 'origin', 'HEAD:refs/heads/cvx/APP-21');
+    git(helper, 'checkout', '--quiet', '-b', 'build');
+    mkdirSync(join(helper, 'dist'));
+    writeFileSync(join(helper, 'dist', 'app.js'), 'built\n');
+    git(helper, 'add', '-f', 'dist/app.js');
+    git(helper, 'commit', '--quiet', '-m', 'ship dist');
+    git(helper, 'push', '--quiet', 'origin', 'HEAD:refs/heads/cvx/APP-22');
+
+    await merge(['cvx/APP-21']);
+    await ws.reconcileClone(PROJECT, ISSUE, AGENT);
+    mkdirSync(join(clone, 'dist'));
+    writeFileSync(join(clone, 'dist', 'app.js'), 'local build\n');
+    await merge(['cvx/APP-22']);
+    const result = await ws.reconcileClone(PROJECT, ISSUE, AGENT);
+    expect(result.action).toBe('fast_forward');
+    expect(read('dist/app.js')).toBe('built\n');
+
+    writeFileSync(join(clone, 'notes.txt'), 'my notes\n');
+    await merge(['cvx/APP-20']);
+    const aside = await ws.reconcileClone(PROJECT, ISSUE, AGENT);
+    expect(aside.action).toBe('set_aside');
+    expect(readFileSync(join(aside.setAside ?? '', 'notes.txt'), 'utf8')).toBe('my notes\n');
+  });
+
+  /** CodeRuns on the real workspace with a stand-in database. */
+  function runner() {
     const database = {
       inTransaction: vi.fn(async () => false),
       collections: { runs: { updateOne: vi.fn().mockResolvedValue(undefined) } },
@@ -158,6 +184,11 @@ describe('CodeWorkspace.reconcileClone', () => {
       key: ISSUE,
       title: 'Integrate',
     } as IssueDoc;
+    return { runs, events, agent, issue };
+  }
+
+  it('lets the runner integrate a merge made during the run', async () => {
+    const { runs, events, agent, issue } = runner();
     const run = { _id: new ObjectId() } as RunDoc;
     const sandbox = { result: 'success', exitCode: 0, diskBytes: 0 };
 
@@ -185,5 +216,17 @@ describe('CodeWorkspace.reconcileClone', () => {
     expect(next.base).toBe(server());
     expect(head()).toBe(server());
     expect(existsSync(join(clone, 'twelve.txt'))).toBe(true);
+  });
+
+  it('starts the next run in a fresh clone when leftovers were set aside', async () => {
+    const { runs, events, agent, issue } = runner();
+    await runs.prepare(issue, null, events, agent);
+    writeFileSync(join(clone, 'shared.txt'), 'half done\n');
+    await merge(['cvx/APP-10']);
+    const fresh = await runs.prepare(issue, null, events, agent);
+    expect(fresh.base).toBe(server());
+    expect(head()).toBe(server());
+    expect(read('shared.txt')).toBe('one\n');
+    expect(read('ten.txt')).toBe('ten\n');
   });
 });

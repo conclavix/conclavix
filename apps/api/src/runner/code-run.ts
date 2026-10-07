@@ -119,6 +119,10 @@ export class CodeRuns {
         this.author(agent),
       );
       describeReconcile(reconciled, info.branch, events);
+      if (reconciled.action === 'set_aside') {
+        info = await this.workspace.createIssueWorkspace(projectId, issue.key);
+        await recordIssueWorkspace(this.database, this.audit, issue, info, { type: 'system' });
+      }
     }
     const base = await this.workspace.branchTip(projectId, issue.key);
     events.record(
@@ -216,6 +220,9 @@ export class CodeRuns {
         if (reconciled.head) code.head = reconciled.head;
         if (reconciled.action === 'preserved') {
           code.error = `the run's work conflicts with changes merged into ${context.branch} during the run; it was kept on branch ${reconciled.preservedBranch ?? ''} and ${context.branch} continues from the server tip`;
+        } else if (reconciled.action === 'set_aside') {
+          code.error = `the workspace could not be brought up to date with ${context.branch}, which was merged into during the run; it was moved to ${reconciled.setAside ?? ''} and the next run clones the server branch`;
+          return;
         }
       }
     } catch (error) {
@@ -242,6 +249,11 @@ function describeReconcile(result: CloneReconcile, branch: string, events: RunEv
     events.record(
       'runner',
       `workspace ${branch} merged with the server tip ${short(result.server)} (${from})`,
+    );
+  } else if (result.action === 'set_aside') {
+    events.record(
+      'runner',
+      `workspace ${branch} held uncommitted work or files the server tip ${short(result.server)} would overwrite; it was moved to ${result.setAside ?? ''} (nothing deleted) and is cloned again from the server branch`,
     );
   } else {
     const files = (result.conflicts ?? []).map((file) => file.path).slice(0, 20);

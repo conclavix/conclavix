@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { lstat, rename, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { issueBranchName } from '@conclavix/core';
-import { notFound } from '../../errors.js';
+import { AppError, notFound } from '../../errors.js';
 import {
   checkoutClone,
   cloneGit,
@@ -25,13 +25,31 @@ export { CLONE_CONFIG, DEFAULT_EXCLUDES } from './clone-git.js';
 /** Where the runner fetches the server's issue branch into a clone while reconciling the two. */
 const SERVER_TIP_REF = 'refs/conclavix/server';
 
+/** Fast-forward checkout of the clone; false when it would overwrite files in the work tree. */
+async function checkedOut(
+  git: CloneGit,
+  gitDir: string,
+  ref: string,
+  from: string,
+  to: string,
+): Promise<boolean> {
+  try {
+    await checkoutClone(git, gitDir, ref, { from, to, force: false });
+    return true;
+  } catch (error) {
+    if (error instanceof AppError && error.statusCode === 409) return false;
+    throw error;
+  }
+}
+
 export interface CloneReconcile {
   /**
    * none: nothing to do (the clone holds the server tip or is ahead of it); fast_forward: the
    * clone moved to the server tip; merged: both lines were merged; preserved: the merge
-   * conflicted, the clone's tip is kept as `preservedBranch` and the clone was reset.
+   * conflicted, the clone's tip is kept as `preservedBranch` and the clone was reset; set_aside:
+   * the clone was moved to `setAside` and a fresh clone of the server branch is needed.
    */
-  action: 'none' | 'fast_forward' | 'merged' | 'preserved';
+  action: 'none' | 'fast_forward' | 'merged' | 'preserved' | 'set_aside';
   server: string | null;
   clone: string | null;
   /** The clone's tip afterwards. */
@@ -39,6 +57,7 @@ export interface CloneReconcile {
   merge?: string;
   preservedBranch?: string;
   conflicts?: ConflictFile[];
+  setAside?: string;
   /** Problems that did not stop the reconciliation, such as a temporary ref left behind. */
   warnings: string[];
 }
@@ -175,53 +194,42 @@ export class CodeWorkspace extends Workspace {
     });
   }
 
-  /**
-   * Commit what an earlier run left uncommitted in the clone (its sandbox stopped it, or the
-   * commit after it failed) on top of the clone's tip, by the system identity, so that bringing
-   * the clone up to date can neither overwrite it nor refuse because of it. Returns the new tip,
-   * or `tip` when the work tree is clean.
-   */
-  private async commitLeftovers(
-    git: CloneGit,
-    gitDir: string,
-    ref: string,
-    tip: string,
-  ): Promise<string> {
+  /** Whether the work tree holds changes a commit would pick up (tracked, or untracked and not ignored). */
+  private async hasLeftovers(git: CloneGit, gitDir: string, tip: string): Promise<boolean> {
     const index = join(gitDir, `cvx-index-${randomBytes(6).toString('hex')}`);
     try {
       const tree = await snapshotWorkTree(git, index, tip);
-      if (tree === (await git.text(['rev-parse', `${tip}^{tree}`])).trim()) return tip;
-      const commit = await commitTree(
-        git,
-        tree,
-        tip,
-        { name: 'Conclavix', email: `conclavix@${this.agentEmailDomain}` },
-        [
-          'Commit work an earlier run left uncommitted',
-          '',
-          'The runner committed it before bringing the workspace up to date with the server branch.',
-          '',
-        ].join('\n'),
-      );
-      await git.run(['update-ref', ref, commit, tip]);
-      await rename(index, join(gitDir, 'index'));
-      return commit;
+      return tree !== (await git.text(['rev-parse', `${tip}^{tree}`])).trim();
     } finally {
       await rm(index, { force: true });
     }
   }
 
   /**
+   * Move an issue clone out of the way, next to where it was, as `.stale-<KEY>-<time>-<random>`
+   * (never committed, never deleted by the server), so the next workspace call clones the server
+   * branch afresh. Returns the new path.
+   */
+  private async setAside(projectId: string, issueKey: string): Promise<string> {
+    const dir = this.issueWorkspaceDir(projectId, issueKey);
+    const suffix = `${Date.now()}-${randomBytes(3).toString('hex')}`;
+    const target = join(dirname(dir), `.stale-${issueKey}-${suffix}`);
+    await rename(dir, target);
+    return target;
+  }
+
+  /**
    * Bring an issue clone and the server's `cvx/<KEY>` together after the server branch moved
-   * without the clone (an integration merge into it). Work an earlier run left uncommitted is
-   * committed first (see commitLeftovers). Then a clone behind the server is
-   * fast-forwarded; a clone that has
-   * commits the server lacks and lacks the server's is merged with it on the server side (no-ff,
-   * first parent: the clone's line, by `author`) and then fast-forwarded. When that merge
+   * without the clone (an integration merge into it). A clone ahead of the server stays as it is
+   * (the sync after the run brings it over). A clone behind the server is fast-forwarded; a clone
+   * that has commits the server lacks and lacks the server's is merged with it on the server side
+   * (no-ff, first parent: the clone's line, by `author`) and then fast-forwarded. When that merge
    * conflicts, the clone's tip is kept as the branch `conflict/<KEY>/<sha>` in the project
-   * repository and the clone is reset to the server tip, so the issue continues from the server
-   * branch and nothing is lost. The server branch only ever moves forward, with compare-and-swap.
-   * Runs only while no sandbox works in the clone.
+   * repository and the clone is reset to the server tip. A clone that still holds uncommitted
+   * work of an earlier run (its sandbox stopped it, or its commit failed), or whose checkout would
+   * overwrite files, is set aside (see setAside) instead of being committed or overwritten; the
+   * caller then creates a fresh clone. The server branch only moves forward, with
+   * compare-and-swap. Runs only while no sandbox works in the clone.
    */
   async reconcileClone(
     projectId: string,
@@ -236,21 +244,33 @@ export class CodeWorkspace extends Workspace {
       const server = await this.commitOf(projectId, ref);
       await resetCloneConfig(gitDir);
       const git = this.cloneGit(gitDir);
-      const before = await git.commit(ref);
-      if (!server || !before || server === before) {
-        return { action: 'none', server, clone: before, head: before, warnings: [] };
-      }
-      const clone = await this.commitLeftovers(git, gitDir, ref, before);
+      const clone = await git.commit(ref);
       const warnings: string[] = [];
-      const dropServerTip = () =>
-        dropRef(warnings, SERVER_TIP_REF, () => git.run(['update-ref', '-d', SERVER_TIP_REF]));
+      const none: CloneReconcile = { action: 'none', server, clone, head: clone, warnings };
+      if (!server || !clone || server === clone) return none;
+      const state: { aside: string | null } = { aside: null };
+      const aside = async (): Promise<CloneReconcile> => {
+        state.aside = await this.setAside(projectId, issueKey);
+        return { action: 'set_aside', server, clone, head: null, setAside: state.aside, warnings };
+      };
+      const dropServerTip = async () => {
+        if (state.aside) return;
+        await dropRef(warnings, SERVER_TIP_REF, () =>
+          git.run(['update-ref', '-d', SERVER_TIP_REF]),
+        );
+      };
       try {
         await this.fetchIntoClone(projectId, git, ref);
-        let result: CloneReconcile = { action: 'none', server, clone, head: clone, warnings };
-        if (await git.isAncestor(clone, server)) {
-          await checkoutClone(git, gitDir, ref, { from: clone, to: server, force: false });
-          result = { action: 'fast_forward', server, clone, head: server, warnings };
-        } else if (!(await git.isAncestor(server, clone))) {
+        let result = none;
+        if (await git.isAncestor(server, clone)) {
+          result = none;
+        } else if (await this.hasLeftovers(git, gitDir, clone)) {
+          result = await aside();
+        } else if (await git.isAncestor(clone, server)) {
+          result = (await checkedOut(git, gitDir, ref, clone, server))
+            ? { action: 'fast_forward', server, clone, head: server, warnings }
+            : await aside();
+        } else {
           result = await this.mergeDiverged(projectId, issueKey, gitDir, git, {
             ref,
             branch,
@@ -258,6 +278,7 @@ export class CodeWorkspace extends Workspace {
             clone,
             author,
             warnings,
+            aside,
           });
         }
         await dropServerTip();
@@ -282,9 +303,10 @@ export class CodeWorkspace extends Workspace {
       clone: string;
       author: CommitIdentity;
       warnings: string[];
+      aside: () => Promise<CloneReconcile>;
     },
   ): Promise<CloneReconcile> {
-    const { ref, branch, server, clone, author, warnings } = tips;
+    const { ref, branch, server, clone, author, warnings, aside } = tips;
     const incoming = `refs/conclavix/incoming/${issueKey}`;
     await this.fromClone(projectId, gitDir, [
       'fetch',
@@ -330,7 +352,9 @@ export class CodeWorkspace extends Workspace {
       );
       await this.moveBranch(projectId, branch, commit, server);
       await this.fetchIntoClone(projectId, git, ref);
-      await checkoutClone(git, gitDir, ref, { from: clone, to: commit, force: false });
+      if (!(await checkedOut(git, gitDir, ref, clone, commit))) {
+        return { ...(await aside()), merge: commit };
+      }
       return { action: 'merged', server, clone, head: commit, merge: commit, warnings };
     } finally {
       await dropIncoming();

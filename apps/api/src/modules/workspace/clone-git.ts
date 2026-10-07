@@ -85,6 +85,18 @@ export function cloneGit(git: Git, gitDir: string, timeoutMs: number): CloneGit 
   return { run, text, commit, isAncestor };
 }
 
+/** Run `work` with a temporary file listing DEFAULT_EXCLUDES, for `core.excludesFile`. */
+async function withExcludes<T>(work: (excludeFile: string) => Promise<T>): Promise<T> {
+  const excludes = await mkdtemp(join(tmpdir(), 'cvx-commit-'));
+  try {
+    const excludeFile = join(excludes, 'exclude');
+    await writeFile(excludeFile, `${DEFAULT_EXCLUDES.join('\n')}\n`, { mode: 0o600 });
+    return await work(excludeFile);
+  } finally {
+    await rm(excludes, { recursive: true, force: true });
+  }
+}
+
 /**
  * The tree of the clone's work tree as the runner commits it: `parent` read into the index file
  * `index`, then every change added except DEFAULT_EXCLUDES and the clone's ignores.
@@ -94,17 +106,12 @@ export async function snapshotWorkTree(
   index: string,
   parent: string,
 ): Promise<string> {
-  const excludes = await mkdtemp(join(tmpdir(), 'cvx-commit-'));
-  try {
-    const excludeFile = join(excludes, 'exclude');
-    await writeFile(excludeFile, `${DEFAULT_EXCLUDES.join('\n')}\n`, { mode: 0o600 });
+  return withExcludes(async (excludeFile) => {
     const env = { GIT_INDEX_FILE: index };
     await git.run(['read-tree', parent], { env });
     await git.run(['-c', `core.excludesFile=${excludeFile}`, 'add', '-A', '--', '.'], { env });
     return (await git.text(['write-tree'], { env })).trim();
-  } finally {
-    await rm(excludes, { recursive: true, force: true });
-  }
+  });
 }
 
 /** Write a commit of `tree` on `parent` in the clone with a fixed author and committer. */
@@ -132,8 +139,8 @@ export async function commitTree(
 
 /**
  * Move the clone's branch `ref` from `from` to `to` and update the work tree. Without `force` this
- * is git's two-tree checkout, which refuses to overwrite uncommitted changes (409); with `force`
- * the tracked files become `to` exactly. A fresh index is built and moved into place.
+ * is git's two-tree checkout, which refuses (409) to overwrite uncommitted changes and untracked
+ * files that are not ignored; with `force` the tracked files become `to` exactly. A fresh index is built and moved into place.
  */
 export async function checkoutClone(
   git: CloneGit,
@@ -151,7 +158,22 @@ export async function checkoutClone(
     } else {
       await git.run(['update-index', '-q', '--refresh'], { env, allowExitCodes: [1] });
       try {
-        await git.run(['read-tree', '-m', '-u', from, to], { env });
+        // Ignored files (build output, DEFAULT_EXCLUDES) may be overwritten, others not.
+        await withExcludes((excludeFile) =>
+          git.run(
+            [
+              '-c',
+              `core.excludesFile=${excludeFile}`,
+              'read-tree',
+              '-m',
+              '-u',
+              '--exclude-per-directory=.gitignore',
+              from,
+              to,
+            ],
+            { env },
+          ),
+        );
       } catch (error) {
         if (error instanceof GitError && error.reason === 'exit') {
           throw conflict(

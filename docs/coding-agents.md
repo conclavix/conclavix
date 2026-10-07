@@ -186,14 +186,18 @@ The probe mode of the acceptance script checks that such a reference reaches the
   rewritten branch is not forced and the run records the refusal). A clone that is removed and
   created again starts from the server's `cvx/<KEY>`, not from `main`.
 - Before a run in an existing clone, the runner does the same reconciliation when the server
-  branch differs from the clone. Work an earlier run left uncommitted (its sandbox stopped it, or
-  its commit failed) is first committed on the clone's branch by `Conclavix`, so it is merged or
-  kept on the conflict branch like any other work and never overwritten. Then a clone behind the
-  server branch is fast-forwarded (git's two-tree checkout with a fresh index), a diverged one is
-  merged as above. The run then starts from the server tip. Failures to remove the temporary refs
-  (`refs/conclavix/...`) are recorded as run events; the next reconciliation overwrites them. Inside the clone git runs only after
-  its configuration was replaced, with hooks off, and the project repository is marked as a safe
-  directory for the fetch from it.
+  branch differs from the clone: a clone ahead of it stays (the sync after the run brings it
+  over), a clone behind it is fast-forwarded (git's two-tree checkout with a fresh index; ignored
+  files such as build output and `node_modules/` may be overwritten), a diverged one is merged as
+  above. A clone that still holds uncommitted work of an earlier run (its sandbox stopped it, for
+  example at the disk limit, or its commit failed), or whose checkout would overwrite other
+  files, is neither committed nor overwritten: it is moved aside to
+  `workspaces/<projectId>/.stale-<KEY>-<time>-<random>` and the run starts in a fresh clone of the
+  server branch. The server never deletes such directories; look at them and remove them by hand.
+  Inside the clone git runs only after its configuration was replaced, with hooks off, and the
+  project repository is marked as a safe directory for the fetch from it. Failures to remove the
+  temporary refs (`refs/conclavix/...`) are recorded as run events; the next reconciliation
+  overwrites them.
 - The run stores `code` (branch, base, head, commit, agent commits, files, insertions,
   deletions, synced, error); the run view shows it with a link to the Code tab.
 - Two runs never share a clone at the same time: the runner locks the issue clone, and while a
