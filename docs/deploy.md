@@ -228,6 +228,13 @@ password is write-only: an empty `smtp.pass` keeps the stored one, `smtp.pass: n
 (without falling back to `SMTP_PASS`). Only owners change
 the MFA policy and SMTP: whoever controls SMTP receives every password-reset link, including the
 owners'. Every settings change commits together with its audit entry, or not at all.
+
+Owners can send a test mail (`POST /api/settings/smtp/test { to?, smtp? }`, the "Send test mail"
+button in the SMTP section). `smtp` takes unsaved values with the same rules as the PATCH (an
+empty password uses the stored one) and is not saved; `to` defaults to the owner's own address.
+The answer says whether the server accepted the mail and otherwise why not (`connection`, `tls`,
+`auth`, `sender`, `recipient`, `message`), with the server's reply, never the password. Test
+mails are limited to five per user and minute and audited as `settings.smtp_tested`.
 The TOTP issuer is the startup `INSTANCE_NAME` value and does not follow later settings changes.
 Changing password-reset mail content does not change the issuer in generated TOTP URIs.
 
@@ -245,7 +252,10 @@ their access every minute and immediately after sign-out, session or token revoc
 delete, role change or 2FA reset.
 
 Signed-in users keep their theme (`preferences.theme`, `{ template, mode }`) in their profile;
-the board saves every choice there and applies it on each device they sign in on.
+the board saves every choice there and applies it on each device they sign in on. The same
+goes for the sidebar (`preferences.sidebar`, `rail` or `pinned`): a rail that expands on hover, or
+pinned open via the pin at the bottom of the drawer. Screens narrower than 960px always get the
+rail.
 
 Scripts use personal API tokens (`POST /api/me/tokens`, shown once; creating and revoking one is
 audited in the same transaction). `BOARD_TOKEN` still works as
