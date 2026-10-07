@@ -49,13 +49,21 @@ export async function requestWake(
   }
 }
 
-/** Wake the assignees of issues that were waiting only on the issue that just closed. */
+/**
+ * Wake the assignees of issues that were waiting only on the issue that just closed, except the
+ * `resumed` ones, which the closing transaction already woke.
+ */
 export async function wakeUnblocked(
   collections: Collections,
   closedIssueId: ObjectId,
+  resumed: readonly ObjectId[] = [],
 ): Promise<void> {
   const waiting = await collections.issues
-    .find({ blockedBy: closedIssueId, status: { $in: [...ACTIONABLE_STATUSES] } })
+    .find({
+      _id: { $nin: [...resumed] },
+      blockedBy: closedIssueId,
+      status: { $in: [...ACTIONABLE_STATUSES] },
+    })
     .toArray();
   for (const issue of waiting) {
     if (!issue.assigneeAgentId) {
@@ -71,11 +79,15 @@ export async function wakeUnblocked(
   }
 }
 
-/** Create the wakes implied by an issue change; runs after the change is committed. */
+/**
+ * Create the wakes implied by an issue change; runs after the change is committed. `resumed` are
+ * the issues the committing transaction resumed and woke itself.
+ */
 export async function wakeOnIssueChange(
   collections: Collections,
   before: IssueDoc | null,
   after: IssueDoc,
+  resumed?: readonly ObjectId[],
 ): Promise<void> {
   const becameActionable = isActionable(after) && (before === null || !isActionable(before));
   const reassigned =
@@ -96,7 +108,7 @@ export async function wakeOnIssueChange(
     before !== null && (CLOSED_ISSUE_STATUSES as readonly IssueStatus[]).includes(before.status);
   if (closedNow && !closedBefore) {
     try {
-      await wakeUnblocked(collections, after._id);
+      await wakeUnblocked(collections, after._id, resumed);
     } catch (error) {
       logDeferredWake(after._id, error);
     }

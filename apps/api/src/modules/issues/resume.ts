@@ -1,4 +1,4 @@
-import type { ClientSession } from 'mongodb';
+import type { ClientSession, ObjectId } from 'mongodb';
 import { CLOSED_ISSUE_STATUSES, type WakeReason } from '@conclavix/core';
 import type { Collections, IssueDoc } from '../../db.js';
 import { requestWake } from '../scheduler/wakes.js';
@@ -14,7 +14,7 @@ async function resume(
   issue: Waiting,
   reason: WakeReason,
   session: ClientSession,
-): Promise<void> {
+): Promise<ObjectId[]> {
   const { columns } = await lockBoard(collections, issue.projectId, session);
   const placement = placeChangedIssue(columns, issue, { status: 'in_progress' });
   const moved = await collections.issues.updateOne(
@@ -24,7 +24,9 @@ async function resume(
   );
   if (moved.modifiedCount === 1) {
     await requestWake(collections, issue.assigneeAgentId, issue._id, reason, session);
+    return [issue._id];
   }
+  return [];
 }
 
 /**
@@ -34,19 +36,22 @@ async function resume(
  * same agent and issue absorbs further ones, so several closures at once still queue one wake.
  * The waiting agent may also have set in_review for a board decision; it is woken once per
  * closure and sets in_review again if it still needs the board.
+ * Returns the resumed issues; the post-commit wakes must skip them, since their wake may already
+ * have been picked up and a second one would start a second run.
  */
 export async function resumeWaitingIssues(
   collections: Collections,
   closed: IssueDoc,
   session: ClientSession,
-): Promise<void> {
+): Promise<ObjectId[]> {
+  const resumed: ObjectId[] = [];
   if (closed.parentId) {
     const parent = (await collections.issues.findOne(
       { _id: closed.parentId, ...waitingFilter },
       { session },
     )) as Waiting | null;
     if (parent) {
-      await resume(collections, parent, 'subissue_closed', session);
+      resumed.push(...(await resume(collections, parent, 'subissue_closed', session)));
     }
   }
   const blocked = (await collections.issues
@@ -58,7 +63,8 @@ export async function resumeWaitingIssues(
       { session },
     );
     if (open === 0) {
-      await resume(collections, issue, 'unblocked', session);
+      resumed.push(...(await resume(collections, issue, 'unblocked', session)));
     }
   }
+  return resumed;
 }

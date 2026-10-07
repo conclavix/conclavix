@@ -169,7 +169,7 @@ export class IssueRepository {
       graph: input.parentId !== undefined || input.blockedBy !== undefined || moves,
       orgChart: input.assigneeAgentId !== undefined || moves,
     };
-    const { before, after } = await this.transact(needs, async (session) => {
+    const { before, after, resumed } = await this.transact(needs, async (session) => {
       const current = await this.collections.issues.findOne({ _id: id }, { session });
       if (!current) {
         throw notFound('Issue');
@@ -192,18 +192,19 @@ export class IssueRepository {
       if (updated && within) {
         await within(session, current, updated);
       }
+      let resumed: ObjectId[] = [];
       if (updated && isClosed(updated.status) && !isClosed(current.status)) {
         // First, so a delegator waiting in_review gets this wake instead of a notification.
-        await resumeWaitingIssues(this.collections, updated, session);
+        resumed = await resumeWaitingIssues(this.collections, updated, session);
         await reportClosure(this.collections, updated, session);
       }
-      return { before: current, after: updated };
+      return { before: current, after: updated, resumed };
     });
     if (!after) {
       throw notFound('Issue');
     }
     if (wakes) {
-      await wakeOnIssueChange(this.collections, before, after);
+      await wakeOnIssueChange(this.collections, before, after, resumed);
     }
     return toIssue(after);
   }

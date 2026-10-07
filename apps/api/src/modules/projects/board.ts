@@ -64,7 +64,7 @@ export class BoardRepository {
    * that status, under the same rules and wakes as a status change on the issue itself.
    */
   async replace(projectId: ObjectId, input: UpdateBoardInput): Promise<Board> {
-    const { board, transitions } = await this.database.inTransaction(async (session) => {
+    const { board, transitions, resumed } = await this.database.inTransaction(async (session) => {
       await lock(this.collections, LOCKS.issueGraph, session);
       await lock(this.collections, LOCKS.orgChart, session);
       const stored = await lockBoard(this.collections, projectId, session);
@@ -85,15 +85,16 @@ export class BoardRepository {
         throw new Error('project vanished while its board was locked');
       }
       // After every move and the new columns, so a resumed issue is read and placed as it now is.
+      const resumed: ObjectId[] = [];
       for (const { before, after } of transitions) {
         if (isClosed(after.status) && !isClosed(before.status)) {
-          await resumeWaitingIssues(this.collections, after, session);
+          resumed.push(...(await resumeWaitingIssues(this.collections, after, session)));
         }
       }
-      return { board: toBoard(projectId, revision, columns), transitions };
+      return { board: toBoard(projectId, revision, columns), transitions, resumed };
     });
     for (const { before, after } of transitions) {
-      await wakeOnIssueChange(this.collections, before, after);
+      await wakeOnIssueChange(this.collections, before, after, resumed);
     }
     return board;
   }

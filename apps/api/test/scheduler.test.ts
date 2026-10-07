@@ -360,6 +360,48 @@ describe('scheduler', () => {
       expect(await lastWake(waiting.id)).toMatchObject({ reason: 'unblocked', processedAt: null });
     });
 
+    it('does not wake a resumed issue again after commit once its wake was picked up', async () => {
+      const agent = await fx.agent();
+      const blocker = await fx.issue({ title: 'blocker' });
+      const waiting = await fx.issue({
+        title: 'w',
+        assigneeAgentId: agent.id,
+        blockedBy: [blocker.id],
+      });
+      const parent = await fx.issue({ title: 'parent', assigneeAgentId: agent.id });
+      const child = await fx.issue({ title: 'child', parentId: parent.id });
+      await fx.patch(parent.key, { blockedBy: [child.id] });
+      await fx.scheduler.processPendingWakes();
+      await fx.patch(waiting.key, { status: 'in_review' });
+      await fx.patch(parent.key, { status: 'in_review' });
+      for (const run of fx.dispatcher.runs) {
+        await fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd: 0.1 });
+      }
+      const before = fx.dispatcher.runs.length;
+
+      // Another worker picks up the in-transaction wake before the post-commit wakes run.
+      const issues = ctx.database.collections.issues;
+      const count = issues.countDocuments.bind(issues);
+      let pickedUp = false;
+      const spy = vi.spyOn(issues, 'countDocuments').mockImplementation(async (filter, options) => {
+        if (!options && !pickedUp) {
+          pickedUp = true;
+          await fx.scheduler.processPendingWakes();
+        }
+        return count(filter, options);
+      });
+      try {
+        await fx.patch(blocker.key, { status: 'done' });
+        pickedUp = false;
+        await fx.patch(child.key, { status: 'done' });
+      } finally {
+        spy.mockRestore();
+      }
+      await fx.scheduler.processPendingWakes();
+      expect(fx.dispatcher.runs).toHaveLength(before + 2);
+      expect(await fx.pendingWakes()).toBe(0);
+    });
+
     it('resumes the parent when a board edit closes its sub-issue', async () => {
       const { parent, first } = await waitingParent();
       const url = `/api/projects/${fx.projectId}/board`;
