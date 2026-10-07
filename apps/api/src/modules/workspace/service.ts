@@ -311,7 +311,7 @@ export class Workspace extends RepoMerger {
       } catch (error) {
         if (!force && error instanceof GitError && /non-fast-forward|rejected/.test(error.stderr)) {
           throw conflict(`${branch} in the workspace is not a fast-forward of the server branch`, {
-            hint: 'an admin can force the update',
+            hint: 'the server branch has commits the workspace lacks (for example an integration merge); the next coding run merges them, while forcing the update drops them',
           });
         }
         throw error;

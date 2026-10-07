@@ -181,7 +181,9 @@ The probe mode of the acceptance script checks that such a reference reaches the
   run's agent), moves the server branch with compare-and-swap and fast-forwards the clone to the
   merge. If that merge conflicts, the run's tip is kept as the branch `conflict/<KEY>/<sha>`, the
   clone is reset to the server tip and the run records the conflicting files; nothing is lost and
-  the issue continues from the server branch.
+  the issue continues from the server branch. A merge can also land between this check and the sync; a
+  refused fast-forward or compare-and-swap is then retried after another reconciliation, up to
+  three rounds.
 - Then `syncIssueBranch` fetches `cvx/<KEY>` into the project repository (fast-forward only; a
   rewritten branch is not forced and the run records the refusal). A clone that is removed and
   created again starts from the server's `cvx/<KEY>`, not from `main`.

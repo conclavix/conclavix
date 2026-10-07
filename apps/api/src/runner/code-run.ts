@@ -1,4 +1,5 @@
 import type { RunCode } from '@conclavix/core';
+import { AppError } from '../errors.js';
 import type { AgentDoc, Database, IssueDoc, RunDoc } from '../db.js';
 import type { AuditLog } from '../modules/audit/audit.js';
 import type { CloneReconcile, CodeWorkspace } from '../modules/workspace/commit.js';
@@ -22,6 +23,9 @@ export interface CodeRunContext extends CodeRunTarget {
 
 /** Sandbox results after which the clone is not committed (it may be over the disk limit). */
 const NOT_COMMITTED = new Set(['disk-limit', 'disk-check-failed']);
+
+/** Rounds of reconcile and sync after a run, while integration merges keep moving the branch. */
+const SYNC_ATTEMPTS = 3;
 
 const SUBJECT_LENGTH = 72;
 const BODY_LENGTH = 4000;
@@ -207,33 +211,51 @@ export class CodeRuns {
       code.error = redact(`commit failed: ${errorText(error)}`);
       return;
     }
-    try {
-      const server = await this.workspace.branchTip(context.projectId, context.issueKey);
-      if (server !== context.base) {
-        // Something was merged into the issue branch on the server during the run.
-        const reconciled = await this.workspace.reconcileClone(
-          context.projectId,
-          context.issueKey,
-          this.author(agent),
-        );
-        describeReconcile(reconciled, context.branch, events);
-        if (reconciled.head) code.head = reconciled.head;
-        if (reconciled.action === 'preserved') {
-          code.error = `the run's work conflicts with changes merged into ${context.branch} during the run; it was kept on branch ${reconciled.preservedBranch ?? ''} and ${context.branch} continues from the server tip`;
-        } else if (reconciled.action === 'set_aside') {
-          code.error = `the workspace could not be brought up to date with ${context.branch}, which was merged into during the run; it was moved to ${reconciled.setAside ?? ''} and the next run clones the server branch`;
-          return;
+    await this.reconcileAndSync(context, agent, code, events, redact);
+  }
+
+  /**
+   * Bring the run's commit onto the server branch. An integration merge may move the branch from
+   * the API process at any time, also between the check and the sync, so a refused fast-forward
+   * or compare-and-swap (409) is retried after reconciling again, up to SYNC_ATTEMPTS times.
+   */
+  private async reconcileAndSync(
+    context: CodeRunContext,
+    agent: AgentDoc,
+    code: RunCode,
+    events: RunEventRecorder,
+    redact: (text: string) => string,
+  ): Promise<void> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        const server = await this.workspace.branchTip(context.projectId, context.issueKey);
+        if (server !== context.base || attempt > 1) {
+          const reconciled = await this.workspace.reconcileClone(
+            context.projectId,
+            context.issueKey,
+            this.author(agent),
+          );
+          describeReconcile(reconciled, context.branch, events);
+          if (reconciled.head) code.head = reconciled.head;
+          if (reconciled.action === 'preserved') {
+            code.error = `the run's work conflicts with changes merged into ${context.branch} during the run; it was kept on branch ${reconciled.preservedBranch ?? ''} and ${context.branch} continues from the server tip`;
+          } else if (reconciled.action === 'set_aside') {
+            code.error = `the workspace could not be brought up to date with ${context.branch}, which was merged into during the run; it was moved to ${reconciled.setAside ?? ''} and the next run clones the server branch`;
+            return;
+          }
         }
+        await this.workspace.syncIssueBranch(context.projectId, context.issueKey, false);
+        code.synced = true;
+        return;
+      } catch (error) {
+        const moved = error instanceof AppError && error.statusCode === 409;
+        if (moved && attempt < SYNC_ATTEMPTS) {
+          events.record('runner', `${context.branch} moved while syncing; reconciling again`);
+          continue;
+        }
+        code.error = redact(`sync failed: ${errorText(error)}`);
+        return;
       }
-    } catch (error) {
-      code.error = redact(`reconciling with the server branch failed: ${errorText(error)}`);
-      return;
-    }
-    try {
-      await this.workspace.syncIssueBranch(context.projectId, context.issueKey, false);
-      code.synced = true;
-    } catch (error) {
-      code.error = redact(`sync failed: ${errorText(error)}`);
     }
   }
 }

@@ -114,6 +114,39 @@ export async function snapshotWorkTree(
   });
 }
 
+/**
+ * Whether the work tree differs from `tip`: changed or deleted tracked files, or untracked files
+ * that are neither ignored nor in DEFAULT_EXCLUDES. Reads the files but writes no objects, so it
+ * stays cheap and safe on a clone a run left over its disk limit.
+ */
+export async function hasUncommittedWork(
+  git: CloneGit,
+  index: string,
+  tip: string,
+): Promise<boolean> {
+  const env = { GIT_INDEX_FILE: index };
+  await git.run(['read-tree', tip], { env });
+  await git.run(['update-index', '-q', '--refresh'], { env, allowExitCodes: [1] });
+  const tracked = await git.run(['diff-files', '--quiet'], { env, allowExitCodes: [1] });
+  if (tracked.exitCode !== 0) return true;
+  const untracked = await withExcludes((excludeFile) =>
+    git.text(
+      [
+        '-c',
+        `core.excludesFile=${excludeFile}`,
+        'ls-files',
+        '--others',
+        '--exclude-standard',
+        '--directory',
+        '--no-empty-directory',
+        '-z',
+      ],
+      { env, maxBytes: 64 * 1024, allowTruncate: true },
+    ),
+  );
+  return untracked !== '';
+}
+
 /** Write a commit of `tree` on `parent` in the clone with a fixed author and committer. */
 export async function commitTree(
   git: CloneGit,

@@ -8,6 +8,7 @@ import {
   cloneGit,
   commitTree,
   dropRef,
+  hasUncommittedWork,
   resetCloneConfig,
   snapshotWorkTree,
   withWarnings,
@@ -194,12 +195,22 @@ export class CodeWorkspace extends Workspace {
     });
   }
 
-  /** Whether the work tree holds changes a commit would pick up (tracked, or untracked and not ignored). */
-  private async hasLeftovers(git: CloneGit, gitDir: string, tip: string): Promise<boolean> {
+  /**
+   * Whether the clone holds uncommitted work (see hasUncommittedWork). A check that fails counts
+   * as uncommitted work, so the clone is set aside instead of blocking every later run.
+   */
+  private async hasLeftovers(
+    git: CloneGit,
+    gitDir: string,
+    tip: string,
+    warnings: string[],
+  ): Promise<boolean> {
     const index = join(gitDir, `cvx-index-${randomBytes(6).toString('hex')}`);
     try {
-      const tree = await snapshotWorkTree(git, index, tip);
-      return tree !== (await git.text(['rev-parse', `${tip}^{tree}`])).trim();
+      return await hasUncommittedWork(git, index, tip);
+    } catch (error) {
+      warnings.push(`checking the work tree failed: ${(error as Error).message}`);
+      return true;
     } finally {
       await rm(index, { force: true });
     }
@@ -264,7 +275,7 @@ export class CodeWorkspace extends Workspace {
         let result = none;
         if (await git.isAncestor(server, clone)) {
           result = none;
-        } else if (await this.hasLeftovers(git, gitDir, clone)) {
+        } else if (await this.hasLeftovers(git, gitDir, clone, warnings)) {
           result = await aside();
         } else if (await git.isAncestor(clone, server)) {
           result = (await checkedOut(git, gitDir, ref, clone, server))
