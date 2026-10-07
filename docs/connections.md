@@ -38,6 +38,11 @@ networks** for a connection; then http and private addresses are accepted for it
 longer change such a connection's config or credentials (only its agents), so nobody below owner
 can point it elsewhere inside the network.
 
+Known limit: in read-only runs claude is not sandboxed and resolves the host itself, so the
+runner's DNS check before the run cannot rule out a later rebinding or a redirect to a private
+address. Coding runs are covered by the unit's `IPAddressDeny`. Point public-only connections at
+hosts you trust not to do that.
+
 Coding runs need one more step for private servers: the sandbox unit denies private ranges to the
 claude process (`IPAddressDeny`). The runner passes the server's private addresses to the root
 helper (`--allow-address`), which opens them with `IPAddressAllow=` only if they lie inside

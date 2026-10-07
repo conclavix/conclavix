@@ -53,7 +53,9 @@ async function load(): Promise<void> {
 }
 watch(() => props.projectId, load, { immediate: true });
 
+/** Show a saved or tested connection, unless the panel moved on to another project meanwhile. */
 function upsert(connection: Connection): void {
+  if (props.projectId !== null && connection.projectId !== props.projectId) return;
   items.value = [...items.value.filter((item) => item.id !== connection.id), connection].sort(
     (a, b) => a.name.localeCompare(b.name),
   );

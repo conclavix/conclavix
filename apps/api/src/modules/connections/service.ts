@@ -315,7 +315,11 @@ export class ConnectionService {
     );
     outcome = redactor.deep(outcome);
     const lastTest = { ...outcome, at: new Date() };
-    await this.collections.connections.updateOne({ _id: id }, { $set: { lastTest } });
+    // A connection edited while the test ran keeps its cleared result.
+    await this.collections.connections.updateOne(
+      { _id: id, updatedAt: doc.updatedAt },
+      { $set: { lastTest } },
+    );
     return this.view(id);
   }
 }

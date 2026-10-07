@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { z } from 'zod';
 import https from 'node:https';
 import { AppError } from '../../errors.js';
 import { guardedLookup } from '../skill-sources/net-guard.js';
@@ -99,6 +100,32 @@ const errorCode = (error: unknown): string => {
   return typeof code === 'string' && /^[A-Z_]{1,40}$/.test(code) ? code : 'network error';
 };
 
+const responseSchema = z.object({
+  id: z.union([z.number(), z.string(), z.null()]).optional(),
+  result: z.record(z.string(), z.unknown()).optional(),
+  error: z.object({ message: z.unknown().optional() }).loose().optional(),
+});
+
+const initializeSchema = z
+  .object({
+    protocolVersion: z.string().optional().catch(undefined),
+    serverInfo: z
+      .object({
+        name: z.string().optional().catch(undefined),
+        version: z.string().optional().catch(undefined),
+      })
+      .optional()
+      .catch(undefined),
+  })
+  .loose();
+
+const toolsSchema = z
+  .object({
+    tools: z.array(z.object({ name: z.string() }).loose()).catch([]),
+    nextCursor: z.string().optional().catch(undefined),
+  })
+  .loose();
+
 /** The JSON-RPC message with `id` from a JSON or an SSE answer. */
 function messageFor(result: PostResult, id: number): Record<string, unknown> {
   const type = String(result.headers['content-type'] ?? '');
@@ -120,17 +147,17 @@ function messageFor(result: PostResult, id: number): Record<string, unknown> {
     throw new McpProbeError('the server did not answer with JSON-RPC');
   }
   const flat = candidates.flatMap((entry) => (Array.isArray(entry) ? entry : [entry]));
-  const message = flat.find(
-    (entry): entry is Record<string, unknown> =>
-      typeof entry === 'object' && entry !== null && (entry as { id?: unknown }).id === id,
-  );
+  const message = flat
+    .map((entry) => responseSchema.safeParse(entry))
+    .flatMap((parsed) => (parsed.success ? [parsed.data] : []))
+    .find((entry) => entry.id === id);
   if (!message) throw new McpProbeError('the server did not answer the request');
-  const error = message['error'] as { message?: unknown } | undefined;
-  if (error) {
-    const text = typeof error.message === 'string' ? error.message.slice(0, 200) : 'error';
+  if (message.error) {
+    const text =
+      typeof message.error.message === 'string' ? message.error.message.slice(0, 200) : 'error';
     throw new McpProbeError(`the server answered with an error: ${text}`);
   }
-  return (message['result'] ?? {}) as Record<string, unknown>;
+  return message.result ?? {};
 }
 
 function checkStatus(result: PostResult, step: string): void {
@@ -170,10 +197,9 @@ export async function probeMcpServer(options: McpProbeOptions): Promise<McpProbe
     }),
   );
   checkStatus(init, 'initialize');
-  const info = messageFor(init, 1);
+  const info = initializeSchema.parse(messageFor(init, 1));
   const session = init.headers['mcp-session-id'];
-  const protocolVersion =
-    typeof info['protocolVersion'] === 'string' ? info['protocolVersion'] : null;
+  const protocolVersion = info.protocolVersion ?? null;
   const headers = {
     ...base,
     ...(typeof session === 'string' ? { 'mcp-session-id': session } : {}),
@@ -192,18 +218,14 @@ export async function probeMcpServer(options: McpProbeOptions): Promise<McpProbe
       rpc('tools/list', 2 + page, cursor ? { cursor } : {}),
     );
     checkStatus(listed, 'tools/list');
-    const result = messageFor(listed, 2 + page);
-    for (const tool of Array.isArray(result['tools']) ? result['tools'] : []) {
-      const name = (tool as { name?: unknown }).name;
-      if (typeof name === 'string') tools.push(name.slice(0, 128));
-    }
-    cursor = typeof result['nextCursor'] === 'string' ? result['nextCursor'] : undefined;
+    const result = toolsSchema.parse(messageFor(listed, 2 + page));
+    tools.push(...result.tools.map((tool) => tool.name.slice(0, 128)));
+    cursor = result.nextCursor;
     if (!cursor) break;
   }
-  const server = (info['serverInfo'] ?? {}) as { name?: unknown; version?: unknown };
   return {
-    serverName: typeof server.name === 'string' ? server.name.slice(0, 120) : null,
-    serverVersion: typeof server.version === 'string' ? server.version.slice(0, 40) : null,
+    serverName: info.serverInfo?.name?.slice(0, 120) ?? null,
+    serverVersion: info.serverInfo?.version?.slice(0, 40) ?? null,
     protocolVersion,
     tools,
   };

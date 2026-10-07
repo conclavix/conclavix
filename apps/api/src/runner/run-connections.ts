@@ -16,6 +16,8 @@ import type { KnownSecret } from './redact.js';
  */
 export const MCP_HEADER_ENV_PREFIX = 'CONCLAVIX_MCP_HEADER_';
 export const MAX_MCP_HEADER_ENV = 32;
+/** Connection servers per run; the root helper refuses a config with more. */
+export const MAX_MCP_SERVERS = 8;
 
 /** An external MCP server in a run's config; header values are `${VARIABLE}` references. */
 export interface RunMcpServer {
@@ -125,6 +127,13 @@ export async function loadRunConnections(
       result.skipped.push({
         name: doc.name,
         cause: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    if (result.servers.length >= MAX_MCP_SERVERS) {
+      result.skipped.push({
+        name: doc.name,
+        cause: `more than ${MAX_MCP_SERVERS} servers in one run`,
       });
       continue;
     }

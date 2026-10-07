@@ -28,15 +28,25 @@ export interface SecretDoc {
 /** Project secrets only: no connection credentials. */
 export const PROJECT_SECRET = { connectionId: { $exists: false } } as const;
 
+const NAMESPACE_NOT_FOUND = 26;
+const INDEX_NOT_FOUND = 27;
+const errorCode = (error: unknown): unknown => (error as { code?: unknown } | null)?.code;
+
 /** Index names of the first release, which did not leave room for connection credentials. */
 const FULL_INDEXES = ['projectId_1_envName_1', 'projectId_1_name_1'];
 
 /** Unique variable and name per project for project secrets; one value per connection key. */
 export async function ensureSecretIndexes(collections: Collections): Promise<void> {
-  const existing = await collections.secrets.indexes().catch(() => []);
+  const existing = await collections.secrets.indexes().catch((error: unknown) => {
+    if (errorCode(error) === NAMESPACE_NOT_FOUND) return [];
+    throw error;
+  });
   for (const index of existing) {
     if (FULL_INDEXES.includes(index.name ?? '') && !index['partialFilterExpression']) {
-      await collections.secrets.dropIndex(index.name as string);
+      // Another process starting at the same time may have dropped it already.
+      await collections.secrets.dropIndex(index.name as string).catch((error: unknown) => {
+        if (errorCode(error) !== INDEX_NOT_FOUND) throw error;
+      });
     }
   }
   const projectSecrets = { envName: { $type: 'string' } };
