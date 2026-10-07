@@ -1,6 +1,6 @@
 import { CLOSED_ISSUE_STATUSES } from '@conclavix/core';
-import type { ObjectId } from 'mongodb';
-import type { Collections, IssueDoc } from '../../db.js';
+import type { FindCursor, ObjectId } from 'mongodb';
+import type { AgentDoc, Collections, IssueDoc } from '../../db.js';
 import { disabledAssignments } from '../projects/agent-access.js';
 import { idleRunLimit, idleStreak } from './loop-detection.js';
 import { ACTIONABLE_STATUSES, requestWake } from './wakes.js';
@@ -19,21 +19,28 @@ export interface StallSweep {
   pendingWake: number;
   /** Left alone: a run on the issue is queued or running, or finished within the interval. */
   recentRun: number;
-  /** Left alone: the agent reached its idle-run limit on the issue; the heartbeat takes over. */
+  /** Left alone: an idle watchdog run would reach the idle-run limit; the heartbeat takes over. */
   idle: number;
 }
 
-const ids = (values: readonly { _id: ObjectId }[] | readonly ObjectId[]): Set<string> =>
-  new Set(values.map((value) => ('_id' in value ? value._id : value).toHexString()));
+type Skip = Exclude<keyof StallSweep, 'candidates' | 'woken'>;
 
-/** Idle todo/in_progress issues of active agents enabled in their project, and those agents. */
-async function findCandidates(collections: Collections, cutoff: Date, limit: number) {
+const CHUNK = 200;
+
+const hexSet = (values: readonly (ObjectId | null)[]): Set<string> =>
+  new Set(values.flatMap((value) => (value ? [value.toHexString()] : [])));
+
+/** Idle todo/in_progress issues of active agents enabled in their project, oldest change first. */
+async function candidates(
+  collections: Collections,
+  cutoff: Date,
+): Promise<{ agents: AgentDoc[]; cursor: FindCursor<IssueDoc> | null }> {
   const [disabled, agents] = await Promise.all([
     disabledAssignments(collections),
-    collections.agents.find({ status: 'active' }, { projection: { limits: 1 } }).toArray(),
+    collections.agents.find({ status: 'active' }).toArray(),
   ]);
-  if (agents.length === 0) return { agents, issues: [] as IssueDoc[] };
-  const issues: IssueDoc[] = await collections.issues
+  if (agents.length === 0) return { agents, cursor: null };
+  const cursor = collections.issues
     .find({
       status: { $in: [...ACTIONABLE_STATUSES] },
       assigneeAgentId: { $in: agents.map((agent) => agent._id) },
@@ -42,20 +49,57 @@ async function findCandidates(collections: Collections, cutoff: Date, limit: num
       $or: [{ lastRunAt: null }, { lastRunAt: { $lt: cutoff } }],
       ...(disabled.length > 0 ? { $nor: disabled } : {}),
     })
-    .limit(limit)
-    .toArray();
-  return { agents, issues };
+    .sort({ updatedAt: 1, _id: 1 });
+  return { agents, cursor };
+}
+
+/** Why an issue of `chunk` is left alone, by issue id (hex); issues not in the map may be woken. */
+async function skipReasons(
+  collections: Collections,
+  chunk: readonly IssueDoc[],
+  cutoff: Date,
+): Promise<Map<string, Skip>> {
+  const issueIds = chunk.map((issue) => issue._id);
+  const open = { $nin: [...CLOSED_ISSUE_STATUSES] };
+  const [parents, blockers, pending, runs] = await Promise.all([
+    collections.issues.distinct('parentId', { parentId: { $in: issueIds }, status: open }),
+    collections.issues.distinct('_id', {
+      _id: { $in: chunk.flatMap((issue) => issue.blockedBy) },
+      status: open,
+    }),
+    collections.wakes.distinct('issueId', { issueId: { $in: issueIds }, processedAt: null }),
+    collections.runs.distinct('issueId', {
+      issueId: { $in: issueIds },
+      $or: [{ status: { $in: ['queued', 'running'] } }, { finishedAt: { $gte: cutoff } }],
+    }),
+  ]);
+  const withChildren = hexSet(parents);
+  const openBlockers = hexSet(blockers);
+  const withWake = hexSet(pending);
+  const withRun = hexSet(runs);
+  const reasons = new Map<string, Skip>();
+  for (const issue of chunk) {
+    const key = issue._id.toHexString();
+    if (withChildren.has(key)) reasons.set(key, 'openSubIssues');
+    else if (issue.blockedBy.some((id) => openBlockers.has(id.toHexString())))
+      reasons.set(key, 'openBlockers');
+    else if (withWake.has(key)) reasons.set(key, 'pendingWake');
+    else if (withRun.has(key)) reasons.set(key, 'recentRun');
+  }
+  return reasons;
 }
 
 /**
  * Find issues an agent could work on but where nothing happens, and queue one `stall_watchdog`
- * wake for each. Candidates are `todo`/`in_progress` issues (never `in_review`: those wait for the
- * board, and the ones waiting for sub-issues or blockers are handed back when those close) of an
- * active agent enabled in the project, not checked out, with no change and no run start within
- * the interval. Left alone are issues with an open sub-issue or blocker, a pending wake, a queued,
- * running or recently finished run, and issues on which the agent already reached its idle-run
- * limit, so the watchdog never pushes an agent into the idle backoff or the loop pause. The wakes
- * pass the scheduler gates like heartbeat wakes.
+ * wake for each, at most `limit` per sweep. Candidates are `todo`/`in_progress` issues (never
+ * `in_review`: those wait for the board, and the ones waiting for sub-issues or blockers are
+ * handed back when those close) of an active agent enabled in the project, not checked out, with
+ * no change and no run start within the interval. Left alone are issues with an open sub-issue or
+ * blocker, a pending wake, or a queued, running or recently finished run. The watchdog also leaves
+ * an issue alone when one more idle run would reach the agent's idle-run limit there, so its own
+ * runs never put the agent into the idle backoff or the loop pause. The filters run before the
+ * limit, so issues left alone cannot crowd out stalled ones. The wakes pass the scheduler gates
+ * like heartbeat wakes.
  */
 export async function sweepStalls(
   collections: Collections,
@@ -74,53 +118,39 @@ export async function sweepStalls(
   };
   if (intervalMinutes <= 0) return sweep;
   const cutoff = new Date(now.getTime() - intervalMinutes * 60_000);
-  const { agents, issues } = await findCandidates(collections, cutoff, limit);
-  sweep.candidates = issues.length;
-  if (issues.length === 0) return sweep;
-  const issueIds = issues.map((issue) => issue._id);
-  const open = { $nin: [...CLOSED_ISSUE_STATUSES] };
-  const [parents, blockers, pending, runs] = await Promise.all([
-    collections.issues.distinct('parentId', { parentId: { $in: issueIds }, status: open }),
-    collections.issues
-      .find(
-        { _id: { $in: issues.flatMap((issue) => issue.blockedBy) }, status: open },
-        { projection: { _id: 1 } },
-      )
-      .toArray(),
-    collections.wakes.distinct('issueId', { issueId: { $in: issueIds }, processedAt: null }),
-    collections.runs.distinct('issueId', {
-      issueId: { $in: issueIds },
-      $or: [{ status: { $in: ['queued', 'running'] } }, { finishedAt: { $gte: cutoff } }],
-    }),
-  ]);
-  const withChildren = ids(parents.filter((id): id is ObjectId => id !== null));
-  const openBlockers = ids(blockers);
-  const withWake = ids(pending);
-  const withRun = ids(runs);
+  const { agents, cursor } = await candidates(collections, cutoff);
+  if (!cursor) return sweep;
   const limits = new Map(agents.map((agent) => [agent._id.toHexString(), idleRunLimit(agent)]));
-  for (const issue of issues) {
-    const key = issue._id.toHexString();
+  const wake = async (issue: IssueDoc): Promise<void> => {
     const agentId = issue.assigneeAgentId;
-    if (!agentId) continue;
-    if (withChildren.has(key)) {
-      sweep.openSubIssues += 1;
-    } else if (issue.blockedBy.some((id) => openBlockers.has(id.toHexString()))) {
-      sweep.openBlockers += 1;
-    } else if (withWake.has(key)) {
-      sweep.pendingWake += 1;
-    } else if (withRun.has(key)) {
-      sweep.recentRun += 1;
-    } else {
-      const idleLimit = limits.get(agentId.toHexString()) ?? 1;
-      const streak = await idleStreak(collections, agentId, issue._id, idleLimit);
-      if (streak.count >= idleLimit) {
-        sweep.idle += 1;
-      } else if (await requestWake(collections, agentId, issue._id, 'stall_watchdog')) {
-        sweep.woken += 1;
-      } else {
-        sweep.pendingWake += 1;
+    if (!agentId) return;
+    const idleLimit = limits.get(agentId.toHexString()) ?? 1;
+    const streak = await idleStreak(collections, agentId, issue._id, idleLimit);
+    if (streak.count + 1 >= idleLimit) sweep.idle += 1;
+    else if (await requestWake(collections, agentId, issue._id, 'stall_watchdog')) sweep.woken += 1;
+    else sweep.pendingWake += 1;
+  };
+  try {
+    let chunk: IssueDoc[] = [];
+    const flush = async (): Promise<void> => {
+      const reasons = await skipReasons(collections, chunk, cutoff);
+      for (const issue of chunk) {
+        if (sweep.woken >= limit) return;
+        const reason = reasons.get(issue._id.toHexString());
+        if (reason) sweep[reason] += 1;
+        else await wake(issue);
       }
+      chunk = [];
+    };
+    for await (const issue of cursor) {
+      sweep.candidates += 1;
+      chunk.push(issue);
+      if (chunk.length >= CHUNK) await flush();
+      if (sweep.woken >= limit) break;
     }
+    if (chunk.length > 0 && sweep.woken < limit) await flush();
+  } finally {
+    await cursor.close();
   }
   return sweep;
 }

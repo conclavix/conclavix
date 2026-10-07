@@ -35,7 +35,12 @@ async function resume(
   reason: WakeReason,
   session: ClientSession,
 ): Promise<boolean> {
-  if (!(await canRun(collections, issue, session))) {
+  const openBlockers = await collections.issues.countDocuments(
+    { _id: { $in: issue.blockedBy }, status: { $nin: [...CLOSED_ISSUE_STATUSES] } },
+    { session },
+  );
+  // A blocked issue's wake would be skipped; it stays in review until its last blocker closes.
+  if (openBlockers > 0 || !(await canRun(collections, issue, session))) {
     return false;
   }
   const { columns } = await lockBoard(collections, issue.projectId, session);
@@ -81,11 +86,7 @@ export async function resumeWaitingIssues(
     .find({ blockedBy: closed._id, ...waitingFilter }, { session })
     .toArray()) as Waiting[];
   for (const issue of blocked) {
-    const open = await collections.issues.countDocuments(
-      { _id: { $in: issue.blockedBy }, status: { $nin: [...CLOSED_ISSUE_STATUSES] } },
-      { session },
-    );
-    if (open === 0 && (await resume(collections, issue, 'unblocked', session))) {
+    if (await resume(collections, issue, 'unblocked', session)) {
       resumed.push(issue._id);
     }
   }

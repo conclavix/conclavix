@@ -1,5 +1,6 @@
 import { ObjectId } from 'mongodb';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { sweepStalls } from '../src/modules/scheduler/stall-watchdog.js';
 import { createTestContext, type TestContext } from './helpers.js';
 import { createFixture, type Fixture } from './scheduler-helpers.js';
 
@@ -21,6 +22,11 @@ describe('stall watchdog', () => {
     const run = fx.dispatcher.runs.at(-1);
     if (run?.issueId.toHexString() === issue.id) {
       await fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd: 0 });
+      // The run did its step; the watchdog only nudges after progress.
+      await ctx.database.collections.runs.updateOne(
+        { _id: run._id },
+        { $set: { madeProgress: true } },
+      );
     }
     expect(await pendingFor(issue.id)).toHaveLength(0);
     return { agent, issue };
@@ -102,8 +108,18 @@ describe('stall watchdog', () => {
     expect(await pendingFor(review.issue.id)).toHaveLength(0);
   });
 
-  it('stops at the idle-run limit and leaves the issue to the heartbeat', async () => {
+  it('leaves the issue to the heartbeat when one more idle run would reach the idle limit', async () => {
     const { agent, issue } = await idleIssue();
+    await ctx.database.collections.runs.updateMany(
+      { issueId: new ObjectId(issue.id) },
+      { $set: { madeProgress: false } },
+    );
+    expect(await fx.scheduler.sweepStalls(later())).toMatchObject({ idle: 1, woken: 0 });
+
+    await ctx.database.collections.runs.updateMany(
+      { issueId: new ObjectId(issue.id) },
+      { $set: { madeProgress: true } },
+    );
     await ctx.request({
       method: 'PATCH',
       url: `/api/agents/${agent.id}`,
@@ -111,6 +127,17 @@ describe('stall watchdog', () => {
     });
     expect(await fx.scheduler.sweepStalls(later())).toMatchObject({ idle: 1, woken: 0 });
     expect(await pendingFor(issue.id)).toHaveLength(0);
+  });
+
+  it('filters before the per-sweep limit, so waiting issues cannot hide a stalled one', async () => {
+    const waiting = await idleIssue();
+    await fx.issue({ title: 'child', parentId: waiting.issue.id });
+    const stalled = await idleIssue();
+    expect(await sweepStalls(ctx.database.collections, 5, 1, later())).toMatchObject({
+      openSubIssues: 1,
+      woken: 1,
+    });
+    expect(await pendingFor(stalled.issue.id)).toHaveLength(1);
   });
 
   it('does nothing when switched off', async () => {

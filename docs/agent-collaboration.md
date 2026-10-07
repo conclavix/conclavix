@@ -96,8 +96,9 @@ back when what it waits for closes, in the same transaction as the closing statu
   `in_progress` and its assignee gets an `unblocked` wake, as an actionable issue does.
 
 Both also apply when a board edit closes the sub-issue or blocker (a column changing to a closed
-status). An issue whose assignee could not run (paused, deleted or not enabled in the project)
-stays `in_review`, so it remains in the board's review list instead of sitting in `in_progress`
+status). A parent that still has an open blocker stays `in_review` until that blocker closes (then it is
+handed back as above, `unblocked`). An issue whose assignee could not run (paused, deleted or not
+enabled in the project) stays `in_review` as well, so it remains in the board's review list instead of sitting in `in_progress`
 with nobody working on it. The post-commit `unblocked` wakes leave out the issues handed back this
 way, because their wake is already queued: a scheduler tick that picks it up before the post-commit
 step would otherwise be followed by a second run for the same closure. A pending wake for the same agent and issue absorbs further ones, so several sub-issues
@@ -208,9 +209,14 @@ issues an agent could work on but where nothing happened for that long, and queu
 - no change to the issue and no run start within the interval (`updatedAt`, `lastRunAt`);
 - no pending wake for the issue (a deferred one counts), no open sub-issue (its closing wakes the
   issue) and no open blocker (its closing wakes the issue, `unblocked`);
-- the agent has not reached its idle-run limit on the issue (`maxIdleRunsPerIssue` consecutive
-  runs without progress). The watchdog never drives an agent into the idle backoff or the loop
-  pause; past the limit the issue is left to the heartbeat.
+- one more run without progress would not reach the agent's idle-run limit on the issue
+  (`maxIdleRunsPerIssue` consecutive runs without progress). With the default limit of 2 the
+  watchdog nudges once after a run that made progress; if that run changes nothing, the issue is
+  left to the heartbeat. With a limit of 1 the watchdog never wakes. Its own runs therefore never
+  put an agent into the idle backoff or the loop pause.
+
+At most `batchSize * 5` (500) wakes are queued per sweep, oldest change first; the filters above run
+before that limit, so issues that wait cannot crowd out stalled ones.
 
 `in_review` issues are never woken by the watchdog: they wait for the board, and those that waited
 for a sub-issue or blocker were already handed back when it closed (see above). Watchdog wakes
