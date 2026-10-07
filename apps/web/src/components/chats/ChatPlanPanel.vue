@@ -11,6 +11,11 @@ const emit = defineEmits<{ approve: [revision: number] }>();
 
 const auth = useAuthStore();
 const confirming = ref(false);
+/** The revision on screen when the board opened the confirmation; exactly this one is approved. */
+const seen = ref<number | null>(null);
+const changed = computed(
+  () => seen.value !== null && props.chat.plan !== null && props.chat.plan.revision !== seen.value,
+);
 
 const blocked = computed(() => approveBlock(props.chat, auth.me?.role));
 const approver = computed(() => {
@@ -19,10 +24,15 @@ const approver = computed(() => {
 });
 const created = computed(() => props.chat.created);
 
+function ask(): void {
+  seen.value = props.chat.plan?.revision ?? null;
+  confirming.value = true;
+}
+
 function confirm(): void {
-  if (!props.chat.plan) return;
+  if (seen.value === null || changed.value) return;
   confirming.value = false;
-  emit('approve', props.chat.plan.revision);
+  emit('approve', seen.value);
 }
 </script>
 
@@ -84,7 +94,7 @@ function confirm(): void {
           :disabled="blocked !== null"
           :loading="approving"
           data-test="approve-plan"
-          @click="confirming = true"
+          @click="ask"
         >
           Approve plan
         </v-btn>
@@ -94,13 +104,26 @@ function confirm(): void {
     <v-dialog v-model="confirming" max-width="480">
       <v-card title="Approve the plan?" data-test="approve-dialog">
         <v-card-text>
-          This freezes revision {{ chat.plan?.revision }}. {{ leadName }} then creates the project
-          (if the plan needs a new one) and the initial planning issue, once.
+          This freezes revision {{ seen }}. {{ leadName }} then creates the project (if the plan
+          needs a new one) and the initial planning issue, once.
+          <v-alert
+            v-if="changed"
+            type="warning"
+            variant="tonal"
+            density="compact"
+            class="mt-2"
+            data-test="approve-changed"
+          >
+            The lead changed the plan meanwhile (now revision {{ chat.plan?.revision }}). Close this
+            dialog and review the new revision first.
+          </v-alert>
         </v-card-text>
         <v-card-actions>
           <v-spacer />
           <v-btn @click="confirming = false">Cancel</v-btn>
-          <v-btn color="success" data-test="approve-confirm" @click="confirm">Approve</v-btn>
+          <v-btn color="success" data-test="approve-confirm" :disabled="changed" @click="confirm">
+            Approve
+          </v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

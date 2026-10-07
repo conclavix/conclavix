@@ -52,7 +52,12 @@ export const approveChatPlanSchema = z.strictObject({
 });
 
 export const listChatsQuerySchema = z.strictObject({
-  status: chatStatusSchema.optional(),
+  /** One or more statuses, comma-separated (e.g. `open,approved`). */
+  status: z
+    .string()
+    .transform((value) => value.split(','))
+    .pipe(z.array(chatStatusSchema))
+    .optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   before: idSchema.optional(),
 });

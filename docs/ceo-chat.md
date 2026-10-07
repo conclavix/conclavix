@@ -17,9 +17,9 @@ issue. Open it under **CEO Chat** in the navigation.
    going; each reply links to its run log. One turn at a time: while the lead answers, the board
    waits.
 3. **Approve.** The side panel shows the current plan revision. **Approve plan** freezes exactly
-   the revision the board sees (a newer revision or a running reply makes the approval fail with
-   `409`), records who approved when, and wakes the lead once with "Plan approved - create the
-   project and the initial planning issue as agreed".
+   the revision the board saw when it opened the confirmation (a newer revision or a running
+   reply makes the approval fail with `409`), records who approved when, and wakes the lead once
+   with "Plan approved - create the project and the initial planning issue as agreed".
 4. **Create.** In that run the lead calls `create_project` (skipped when the chat is about an
    existing project) and `create_planning_issue`. The planning issue is assigned to the lead and
    labelled `planning`; the assignment wakes the lead on it as usual, so planning continues on the
@@ -72,14 +72,14 @@ only the run currently answering the chat may act on it.
 
 ## Permissions and audit
 
-| Route                                  | Capability | Purpose                            |
-| -------------------------------------- | ---------- | ---------------------------------- |
-| `GET /api/chats`, `GET /api/chats/:id` | `read`     | Chats with messages                |
-| `GET /api/chats/:id/plan/revisions`    | `read`     | Every plan revision                |
-| `POST /api/chats`                      | `agents`   | `{ title, projectId? }`            |
-| `PATCH /api/chats/:id`                 | `agents`   | Rename or `{ status: 'archived' }` |
-| `POST /api/chats/:id/messages`         | `agents`   | `{ content }`; answers `202`       |
-| `POST /api/chats/:id/approve`          | `agents`   | `{ planRevision }`                 |
+| Route                                  | Capability | Purpose                                                                |
+| -------------------------------------- | ---------- | ---------------------------------------------------------------------- |
+| `GET /api/chats`, `GET /api/chats/:id` | `read`     | Chats (`?status=open,approved`); one chat with its newest 500 messages |
+| `GET /api/chats/:id/plan/revisions`    | `read`     | Every plan revision                                                    |
+| `POST /api/chats`                      | `agents`   | `{ title, projectId? }`                                                |
+| `PATCH /api/chats/:id`                 | `agents`   | Rename or `{ status: 'archived' }`                                     |
+| `POST /api/chats/:id/messages`         | `agents`   | `{ content }`; answers `202`                                           |
+| `POST /api/chats/:id/approve`          | `agents`   | `{ planRevision }`                                                     |
 
 Owners and admins talk to the lead and approve, because an approved plan makes the lead create a
 project and work; members and viewers read along. Approvals are audited as `chat.plan_approved`

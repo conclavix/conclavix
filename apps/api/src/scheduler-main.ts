@@ -2,6 +2,7 @@ import { credentialWarnings, loadConfig } from '@conclavix/core';
 import pino from 'pino';
 import { connectDatabase } from './db.js';
 import { Scheduler } from './modules/scheduler/scheduler.js';
+import { processQueues } from './modules/scheduler/passes.js';
 import { QueueDispatcher, redisConnection } from './runner/queue.js';
 
 async function main(): Promise<void> {
@@ -29,15 +30,7 @@ async function main(): Promise<void> {
       const recovered = await scheduler.recoverRuns(maxRunningMs);
       log.debug({ heartbeats, ...recovered }, 'sweep');
     }
-    // Wakes and chat turns fail independently: a broken wake must not hold back the chats.
-    await scheduler.processPendingWakes().then(
-      (counts) => counts.run + counts.skip > 0 && log.info(counts, 'wakes processed'),
-      (error: unknown) => log.error({ err: error }, 'processing wakes failed'),
-    );
-    await scheduler.processChatTurns().then(
-      (chats) => chats.run + chats.drop > 0 && log.info(chats, 'chat turns processed'),
-      (error: unknown) => log.error({ err: error }, 'processing chat turns failed'),
-    );
+    await processQueues(scheduler, log);
   };
 
   const loop = async (): Promise<void> => {

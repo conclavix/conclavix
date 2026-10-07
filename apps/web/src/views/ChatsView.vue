@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { mdiChatProcessingOutline, mdiPlus } from '@mdi/js';
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { CHAT_STATUS_COLORS, canChat } from '../chats/logic';
 import NewChatDialog from '../components/chats/NewChatDialog.vue';
@@ -25,7 +25,15 @@ const leadName = (id: string): string => live.state.agents[id]?.name ?? 'the lea
 
 const stop = live.subscribe((type, data) => chats.applyStream(type, data));
 onBeforeUnmount(stop);
-onMounted(() => chats.load().catch((cause) => (error.value = describeError(cause))));
+async function reload(): Promise<void> {
+  try {
+    await chats.load(showArchived.value);
+  } catch (cause) {
+    error.value = describeError(cause);
+  }
+}
+onMounted(reload);
+watch(showArchived, reload);
 
 async function created(id: string): Promise<void> {
   await router.push({ name: 'chat', params: { chatId: id } });

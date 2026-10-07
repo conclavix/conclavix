@@ -207,6 +207,27 @@ describe('chat view', { timeout: 20_000 }, () => {
     expect(host.querySelector('[data-test="created-issue"]')?.textContent).toContain('PORT-1');
   });
 
+  it('approves only the revision on screen when the dialog opened', async () => {
+    mount();
+    await flush();
+    button('approve-plan')?.click();
+    await flush();
+    // The lead writes revision 3 while the dialog is open.
+    current = chat({
+      plan: { revision: 3, markdown: '# Changed', runId: 'r1', updatedAt: '2026-01-02T00:00:00Z' },
+    });
+    listeners.forEach((listener) => listener('chat', { ...current }));
+    await flush();
+    const confirm = document.querySelector<HTMLButtonElement>('[data-test="approve-confirm"]');
+    expect(document.querySelector('[data-test="approve-changed"]')?.textContent).toContain(
+      'revision 3',
+    );
+    expect(confirm?.disabled).toBe(true);
+    confirm?.click();
+    await flush();
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/chats/c1/approve')).toBe(false);
+  });
+
   it('drops the outcome of a request for a chat the view has left', async () => {
     let refuse: (response: Response) => void = () => undefined;
     const base = fetchMock.getMockImplementation();

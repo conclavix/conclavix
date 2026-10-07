@@ -25,11 +25,11 @@ interface OpenChat {
   current: Ref<Chat | null>;
   messages: Ref<ChatMessage[]>;
   upsert(chat: Chat): void;
-  refresh(): Promise<void>;
+  refreshQuietly(): Promise<void>;
 }
 
 /** What the board does in the open chat: write to the lead, approve its plan, archive. */
-function chatActions({ current, messages, upsert, refresh }: OpenChat) {
+function chatActions({ current, messages, upsert, refreshQuietly }: OpenChat) {
   return {
     async post(content: string): Promise<void> {
       const id = current.value?.id;
@@ -42,7 +42,8 @@ function chatActions({ current, messages, upsert, refresh }: OpenChat) {
     async approve(planRevision: number): Promise<void> {
       if (!current.value) return;
       upsert(await chatApi.approve(current.value.id, planRevision));
-      await refresh();
+      // The approval stands even if the reload fails; that failure is shown on its own.
+      await refreshQuietly();
     },
     async archive(): Promise<void> {
       if (!current.value) return;
@@ -69,8 +70,8 @@ export const useChatsStore = defineStore('chats', () => {
     if (current.value?.id === chat.id) current.value = { ...current.value, ...chat };
   }
 
-  async function load(): Promise<void> {
-    items.value = (await chatApi.list()).items;
+  async function load(includeArchived = false): Promise<void> {
+    items.value = (await chatApi.list(includeArchived)).items;
     loaded.value = true;
   }
 
@@ -142,7 +143,7 @@ export const useChatsStore = defineStore('chats', () => {
     refresh,
     refreshQuietly,
     create,
-    ...chatActions({ current, messages, upsert, refresh }),
+    ...chatActions({ current, messages, upsert, refreshQuietly }),
     applyStream,
     close,
   };

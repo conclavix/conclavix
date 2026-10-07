@@ -36,6 +36,15 @@ describe('board chats with the lead', () => {
     });
     const list = await ctx.request({ method: 'GET', url: '/api/chats' });
     expect(list.json().items.map((chat: { id: string }) => chat.id)).toEqual([chatId]);
+    await ctx.request({
+      method: 'PATCH',
+      url: `/api/chats/${chatId}`,
+      payload: { status: 'archived' },
+    });
+    const active = await ctx.request({ method: 'GET', url: '/api/chats?status=open,approved' });
+    expect(active.json().items).toEqual([]);
+    const archived = await ctx.request({ method: 'GET', url: '/api/chats?status=archived' });
+    expect(archived.json().items).toHaveLength(1);
   });
 
   it('turns a board message into one chat run of the lead, one turn at a time', async () => {

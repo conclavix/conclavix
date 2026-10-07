@@ -68,7 +68,9 @@ export interface ChatPlanRevision {
 const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body) });
 
 export const chatApi = {
-  list: () => api<Page<Chat>>('/chats?limit=100'),
+  /** The newest 100 chats; without archived ones unless asked for. */
+  list: (includeArchived: boolean) =>
+    api<Page<Chat>>(`/chats?limit=100${includeArchived ? '' : '&status=open,approved'}`),
   get: (id: string) => api<{ chat: Chat; messages: ChatMessage[] }>(`/chats/${id}`),
   create: (input: { title: string; projectId: string | null }) =>
     api<Chat>('/chats', { method: 'POST', ...json(input) }),

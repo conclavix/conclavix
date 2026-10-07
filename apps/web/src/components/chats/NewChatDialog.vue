@@ -32,6 +32,7 @@ watch(open, (isOpen) => {
 });
 
 async function submit(): Promise<void> {
+  if (saving.value) return;
   if (!title.value.trim()) {
     error.value = 'Give the chat a title.';
     return;

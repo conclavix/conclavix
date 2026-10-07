@@ -97,7 +97,7 @@ export class ChatService {
   async list(query: ListChatsQuery): Promise<{ items: Chat[]; nextCursor: string | null }> {
     const filter: Filter<ChatDoc> = {};
     if (query.status) {
-      filter.status = query.status;
+      filter.status = { $in: query.status };
     }
     if (query.before) {
       filter._id = { $lt: new ObjectId(query.before) };
