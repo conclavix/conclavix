@@ -26,6 +26,7 @@ const leadName = (id: string): string => live.state.agents[id]?.name ?? 'the lea
 const stop = live.subscribe((type, data) => chats.applyStream(type, data));
 onBeforeUnmount(stop);
 async function reload(): Promise<void> {
+  error.value = '';
   try {
     await chats.load(showArchived.value);
   } catch (cause) {

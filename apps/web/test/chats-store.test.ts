@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type { Chat } from '../src/chats/api';
 
-const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+const { get, post, list } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), list: vi.fn() }));
 vi.mock('../src/chats/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/chats/api')>()),
-  chatApi: { get, post },
+  chatApi: { get, post, list },
 }));
 const { useChatsStore } = await import('../src/stores/chats');
 
@@ -100,5 +100,18 @@ describe('chats store', () => {
     expect(store.messages).toEqual([]);
     expect(store.current?.status).toBe('open');
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the newest chat list when an older request answers last', async () => {
+    let older: (value: unknown) => void = () => undefined;
+    list
+      .mockReturnValueOnce(new Promise((resolve) => (older = resolve)))
+      .mockResolvedValueOnce({ items: [chat('archived-too')] });
+    const store = useChatsStore();
+    const first = store.load(false);
+    await store.load(true);
+    older({ items: [chat('open-only')] });
+    await first;
+    expect(store.items.map((item) => item.id)).toEqual(['archived-too']);
   });
 });

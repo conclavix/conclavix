@@ -52,6 +52,9 @@ function chatActions({ current, messages, upsert, refreshQuietly }: OpenChat) {
   };
 }
 
+/** Numbers the chat list requests; only the answer to the newest one is kept. */
+let listRequest = 0;
+
 /** Chats with the lead: the list, and the one chat that is open in the view. */
 export const useChatsStore = defineStore('chats', () => {
   const items = ref<Chat[]>([]);
@@ -71,7 +74,11 @@ export const useChatsStore = defineStore('chats', () => {
   }
 
   async function load(includeArchived = false): Promise<void> {
-    items.value = (await chatApi.list(includeArchived)).items;
+    // Only the newest list request counts (e.g. when "Show archived" is toggled quickly).
+    const request = ++listRequest;
+    const page = await chatApi.list(includeArchived);
+    if (request !== listRequest) return;
+    items.value = page.items;
     loaded.value = true;
   }
 
