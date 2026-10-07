@@ -1,10 +1,13 @@
 import type { ObjectId } from 'mongodb';
+import pino from 'pino';
 import { secretEnvNameProblem } from '@conclavix/core';
 import type { Collections } from '../db.js';
 import type { AuditLog } from '../modules/audit/audit.js';
 import type { SecretBox } from '../modules/settings/secret-box.js';
 import { secretContext } from '../modules/secrets/repository.js';
 import type { KnownSecret } from './redact.js';
+
+const log = pino({ name: 'runner' });
 
 /** A project secret one run receives. */
 export interface RunSecret {
@@ -81,7 +84,12 @@ export async function recordSecretUse(
       { _id: { $in: secrets.map((secret) => secret.id) } },
       { $set: { lastUsedAt: now, lastUsedRunId: run.runId } },
     )
-    .catch(() => undefined);
+    .catch((error: unknown) =>
+      log.warn(
+        { runId: run.runId.toHexString(), err: error },
+        'recording the last use of project secrets failed',
+      ),
+    );
   for (const secret of secrets) {
     await audit?.record({
       action: 'secret.used',

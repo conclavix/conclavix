@@ -91,14 +91,25 @@ export class SecretRepository {
     }
   }
 
-  private async checkAgents(ids: readonly string[], session: ClientSession): Promise<ObjectId[]> {
+  /**
+   * The agents to store: unknown ids are refused, except ids already on the secret whose agent
+   * was deleted since, which are dropped.
+   */
+  private async checkAgents(
+    ids: readonly string[],
+    session: ClientSession,
+    current: readonly ObjectId[] = [],
+  ): Promise<ObjectId[]> {
     const objectIds = ids.map((id) => new ObjectId(id));
-    const found = await this.collections.agents.countDocuments(
-      { _id: { $in: objectIds } },
-      { session },
-    );
-    if (found !== objectIds.length) throw unprocessable('Unknown agent in agentIds');
-    return objectIds;
+    const existing = await this.collections.agents
+      .find({ _id: { $in: objectIds } }, { session, projection: { _id: 1 } })
+      .toArray();
+    const known = new Set(existing.map((agent) => agent._id.toHexString()));
+    const before = new Set(current.map((id) => id.toHexString()));
+    if (ids.some((id) => !known.has(id) && !before.has(id))) {
+      throw unprocessable('Unknown agent in agentIds');
+    }
+    return objectIds.filter((id) => known.has(id.toHexString()));
   }
 
   async create(
@@ -150,7 +161,7 @@ export class SecretRepository {
       changes['value'] = 'replaced';
     }
     if (input.agentIds !== undefined) {
-      const next = await this.checkAgents(input.agentIds, session);
+      const next = await this.checkAgents(input.agentIds, session, current.agentIds);
       const before = new Set(current.agentIds.map((agent) => agent.toHexString()));
       const after = new Set(input.agentIds);
       const added = input.agentIds.filter((agent) => !before.has(agent));

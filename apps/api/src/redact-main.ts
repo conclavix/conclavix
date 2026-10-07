@@ -10,7 +10,11 @@ import type { KnownSecret } from './runner/redact.js';
 import type { Database } from './db.js';
 
 /** The current values of all project secrets, when AUTH_SECRET is there to open them. */
-async function projectSecrets(database: Database, authSecret: string | undefined) {
+async function projectSecrets(
+  database: Database,
+  authSecret: string | undefined,
+  log: pino.Logger,
+) {
   if (!authSecret) return [];
   const box = vaultBox(authSecret);
   const found: KnownSecret[] = [];
@@ -21,7 +25,10 @@ async function projectSecrets(database: Database, authSecret: string | undefined
         value: box.open(doc.valueEncrypted, secretContext(doc._id)),
       });
     } catch {
-      // A value that cannot be opened cannot be searched for either; the scan goes on.
+      log.warn(
+        { secretId: doc._id.toHexString() },
+        'a project secret cannot be decrypted; its value is not searched for',
+      );
     }
   }
   return found;
@@ -41,7 +48,7 @@ async function main(): Promise<void> {
       database.collections,
       new Redactor([
         ...knownSecretsFromEnv(process.env),
-        ...(await projectSecrets(database, config.AUTH_SECRET)),
+        ...(await projectSecrets(database, config.AUTH_SECRET, log)),
       ]),
       { force: true, onError: (details) => log.error(details, 'stored run log redaction failed') },
     );

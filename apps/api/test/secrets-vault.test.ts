@@ -212,6 +212,30 @@ describe('project secrets', () => {
     expect(unknownAgent.statusCode).toBe(422);
   });
 
+  it('drops agents deleted since instead of refusing later edits', async () => {
+    const temp = (
+      await ctx.request({
+        method: 'POST',
+        url: '/api/agents',
+        payload: { name: 'Temp', role: 'engineer', adapter: { type: 'claude_cli' } },
+      })
+    ).json().id as string;
+    const created = await as('admin', 'POST', base(), {
+      name: 'With temp',
+      envName: 'WITH_TEMP',
+      value: VALUE,
+      agentIds: [temp],
+    });
+    expect((await ctx.request({ method: 'DELETE', url: `/api/agents/${temp}` })).statusCode).toBe(
+      204,
+    );
+    const edited = await as('admin', 'PATCH', `${base()}/${created.json().id as string}`, {
+      agentIds: [temp, coderId],
+    });
+    expect(edited.statusCode).toBe(200);
+    expect(edited.json().agentIds).toEqual([coderId]);
+  });
+
   it('audits every change without the value', async () => {
     const entries = await ctx.database.collections.audit.find({ action: /^secret\./ }).toArray();
     const actions = new Set(entries.map((entry) => entry.action));
@@ -226,7 +250,10 @@ describe('project secrets', () => {
     const stored = JSON.stringify(entries);
     expect(stored).not.toContain(VALUE);
     expect(stored).not.toContain('a-new-value');
-    const updated = entries.find((entry) => entry.action === 'secret.updated');
+    const updated = entries.find(
+      (entry) =>
+        entry.action === 'secret.updated' && JSON.stringify(entry.details).includes('replaced'),
+    );
     expect(updated?.details).toMatchObject({
       changes: { value: 'replaced', agentsAdded: [coderId] },
     });

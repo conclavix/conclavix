@@ -16,10 +16,13 @@ async function reveal(): Promise<void> {
   if (!secret || !password.value) return;
   revealBusy.value = true;
   revealError.value = '';
+  const current = () => open.value && props.secret?.id === secret.id;
   try {
-    revealed.value = (await secretsApi.reveal(props.projectId, secret.id, password.value)).value;
+    const { value } = await secretsApi.reveal(props.projectId, secret.id, password.value);
+    // A late answer for a dialog closed or reopened for another secret is dropped.
+    if (current()) revealed.value = value;
   } catch (cause) {
-    revealError.value = secretErrorText(cause);
+    if (current()) revealError.value = secretErrorText(cause);
   } finally {
     password.value = '';
     revealBusy.value = false;
