@@ -7,6 +7,7 @@ import {
   mediaContentType,
   mediaKindOf,
   type MediaFacets,
+  type MediaHistory,
   type MediaItem,
   type MediaKind,
   type MediaListing,
@@ -26,6 +27,9 @@ interface ScanRef {
 
 /** The result of one scan of a repository, before filters and pages. */
 export interface MediaScan {
+  history: MediaHistory;
+  /** Why the history walk failed, for the log; never sent to clients. */
+  historyError?: string;
   /** Changes whenever a scanned branch tip moves; pages of different versions do not fit together. */
   version: string;
   items: MediaItem[];
@@ -141,6 +145,7 @@ export function pageMedia(scan: MediaScan, query: MediaQuery): MediaListing {
     nextOffset: end < matches.length ? end : null,
     facets: scan.facets,
     truncated: scan.truncated,
+    history: scan.history,
     scannedBranches: scan.scannedBranches,
     version: scan.version,
   };
@@ -202,9 +207,11 @@ export class MediaReader extends RepoReader {
       if (oldest === undefined) break;
       this.mediaCache.delete(oldest);
     }
-    scan.catch(() => {
+    // A failed scan, or one whose history walk failed, is not kept: the next request tries again.
+    const evict = () => {
       if (this.mediaCache.get(projectId)?.scan === scan) this.mediaCache.delete(projectId);
-    });
+    };
+    scan.then((result) => result.history === 'failed' && evict(), evict);
     return scan;
   }
 
@@ -304,33 +311,45 @@ export class MediaReader extends RepoReader {
     }
 
     const items = [...byOid.values()];
-    if (items.length > 0 && Date.now() <= deadline) {
-      try {
-        await this.attachCommits(projectId, scanned, items, deadline);
-      } catch (error) {
-        // Without the history the files are still listed, only without author and date.
-        if (!(error instanceof GitError)) throw error;
-      }
-    }
+    const dated = await this.datedHistory(projectId, scanned, items, deadline);
     return {
       items,
       facets: facetsOf(items, scanned),
       truncated,
+      ...dated,
       scannedBranches: scanned.length,
       version,
     };
   }
 
+  /** Run the history walk within the scan's time budget; a git failure only loses the dates. */
+  private async datedHistory(
+    projectId: string,
+    refs: ScanRef[],
+    items: MediaItem[],
+    deadline: number,
+  ): Promise<{ history: MediaHistory; historyError?: string }> {
+    if (items.length === 0) return { history: 'complete' };
+    if (Date.now() > deadline) return { history: 'limited' };
+    try {
+      return { history: await this.attachCommits(projectId, refs, items, deadline) };
+    } catch (error) {
+      if (!(error instanceof GitError)) throw error;
+      return { history: 'failed', historyError: error.message };
+    }
+  }
+
   /**
    * Find the newest commit that wrote each item's blob at its path, walking the history of the
-   * scanned branches up to the commit limit. Items it does not find keep the branch tip as `ref`.
+   * scanned branches up to the commit limit. Items it does not find keep the branch tip as `ref`;
+   * the result is `limited` when a limit stopped the walk before every item was found.
    */
   private async attachCommits(
     projectId: string,
     refs: ScanRef[],
     items: MediaItem[],
     deadline: number,
-  ): Promise<void> {
+  ): Promise<MediaHistory> {
     const paths = [...new Set(items.map((item) => item.path))];
     const tips = [...new Set(refs.map((ref) => ref.sha))];
     const args = [
@@ -370,5 +389,8 @@ export class MediaReader extends RepoReader {
         item.ref = write.sha;
       }
     }
+    const commits = text.split('\u001e').length - 1;
+    const stopped = truncated || commits >= this.limits.maxMediaLogCommits;
+    return stopped && items.some((item) => item.commit === null) ? 'limited' : 'complete';
   }
 }

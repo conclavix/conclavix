@@ -89,6 +89,12 @@ export interface MediaFacets {
   branches: { name: string; issueKey: string | null; count: number }[];
 }
 
+/**
+ * How far the history walk that dates the files got: `complete`, `limited` (a commit, size or time
+ * limit stopped it, so some files have no `commit`) or `failed` (git failed; no file has one).
+ */
+export type MediaHistory = 'complete' | 'limited' | 'failed';
+
 export interface MediaListing {
   items: MediaItem[];
   /** Matches of the filters in total, across all pages. */
@@ -97,8 +103,9 @@ export interface MediaListing {
   nextOffset: number | null;
   /** Counts over the whole (unfiltered) scan, for the filter controls. */
   facets: MediaFacets;
-  /** True when a branch, file or time limit cut the scan short. */
+  /** True when a branch, file or time limit cut the scan short, so files may be missing. */
   truncated: boolean;
+  history: MediaHistory;
   /** Branches the scan covered. */
   scannedBranches: number;
   /**

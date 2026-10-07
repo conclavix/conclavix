@@ -92,6 +92,7 @@ describe('ProjectMediaTab', () => {
     total: items.length,
     nextOffset: null,
     truncated: false,
+    history: 'complete',
     scannedBranches: 2,
     version: 'v1',
     facets: {
@@ -229,10 +230,19 @@ describe('ProjectMediaTab', () => {
     expect(host.querySelectorAll('[data-test^="media-item-"]')).toHaveLength(3);
   });
 
+  it('says when files have no dates because the history walk stopped or failed', async () => {
+    pages['first'] = listing([item('one.png', { commit: null })], { history: 'failed' });
+    await mount();
+    expect(host.querySelector('[data-test="media-history"]')?.textContent).toContain(
+      'could not be read',
+    );
+  });
+
   it('warns when the scan was truncated', async () => {
     pages['first'] = listing([item('one.png')], { truncated: true });
     await mount();
     expect(host.querySelector('[data-test="media-truncated"]')).not.toBeNull();
+    expect(host.querySelector('[data-test="media-history"]')).toBeNull();
   });
 
   const inBox = (test: string): HTMLElement | null =>

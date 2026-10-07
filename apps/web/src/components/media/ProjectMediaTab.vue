@@ -236,6 +236,20 @@ const subtitle = (item: MediaItem): string => {
       The scan stopped at a size or time limit after {{ listing.scannedBranches }} branches; some
       files may be missing.
     </v-alert>
+    <v-alert
+      v-if="listing && listing.history !== 'complete'"
+      type="info"
+      variant="tonal"
+      density="compact"
+      class="mb-3"
+      data-test="media-history"
+    >
+      {{
+        listing.history === 'failed'
+          ? 'Author and date could not be read from the history; refresh to try again.'
+          : 'The history scan stopped at a limit, so some files show no author and date and sort last.'
+      }}
+    </v-alert>
 
     <v-progress-linear v-if="loading && items.length === 0" indeterminate class="mb-3" />
 

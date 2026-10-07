@@ -19,6 +19,7 @@ import type { AuditLog } from '../audit/audit.js';
 import { actorOf } from '../auth/principal.js';
 import { matchesEtag } from '../avatars/routes.js';
 import { findIssueByRef } from '../issues/queries.js';
+import { pageMedia } from './media.js';
 import { recordIssueWorkspace } from './record.js';
 import type { Workspace } from './service.js';
 
@@ -82,7 +83,15 @@ function registerReadRoutes({ app, project }: RouteContext): void {
 
   app.get<{ Params: IdParams }>('/api/projects/:id/media', async (request) => {
     const { ws, id } = await project(request);
-    return ws.media(id, parse(mediaQuerySchema, request.query));
+    const query = parse(mediaQuerySchema, request.query);
+    const scan = await ws.mediaScan(id);
+    if (scan.historyError) {
+      request.log.warn(
+        { projectId: id, reason: scan.historyError },
+        'media history walk failed; files are listed without author and date',
+      );
+    }
+    return pageMedia(scan, query);
   });
 
   app.get<{ Params: IdParams }>('/api/projects/:id/compare', async (request) => {

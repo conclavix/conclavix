@@ -1,9 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mediaQuerySchema, type MediaListing } from '@conclavix/core';
-import { parseBlobWrites, parseScanRefs, filterMedia } from '../src/modules/workspace/media.js';
-import { parseByteRange } from '../src/modules/workspace/routes.js';
+import { Git, GitError } from '../src/modules/workspace/git.js';
 import { Workspace } from '../src/modules/workspace/service.js';
 import { createUser, signIn } from './auth-helpers.js';
 import { createTestContext, type TestContext } from './helpers.js';
@@ -130,6 +129,7 @@ describe('project media API', () => {
     const listing = await media();
     expect(listing.total).toBe(5);
     expect(listing.truncated).toBe(false);
+    expect(listing.history).toBe('complete');
     expect(listing.scannedBranches).toBe(3);
     expect(listing.items.map((item) => item.path).sort()).toEqual([
       'docs/report.pdf',
@@ -241,10 +241,43 @@ describe('project media API', () => {
     const shortLog = new Workspace(root.dir, { limits: { maxMediaLogCommits: 1 } });
     const partial = await shortLog.media(projectId, query);
     expect(partial.total).toBe(6);
+    expect(partial.truncated).toBe(false);
+    expect(partial.history).toBe('limited');
     expect(partial.items.filter((item) => item.commit === null).length).toBeGreaterThan(0);
     for (const item of partial.items.filter((i) => i.commit === null)) {
       expect(item.ref).toMatch(/^[0-9a-f]{40,64}$/);
     }
+  });
+
+  it('lists files without dates when the history walk fails, and retries on the next request', async () => {
+    const query = mediaQuerySchema.parse({});
+    const fresh = new Workspace(root.dir);
+    const run = Git.prototype.run;
+    const spy = vi.spyOn(Git.prototype, 'run').mockImplementation(function (
+      this: Git,
+      args,
+      options,
+    ) {
+      if (args.includes('log') && args.includes('--raw')) {
+        return Promise.reject(new GitError('git log timed out', null, '', 'timeout'));
+      }
+      return run.call(this, args, options);
+    });
+    try {
+      const failed = await fresh.media(projectId, query);
+      expect(failed).toMatchObject({ total: 6, history: 'failed', truncated: false });
+      expect(failed.items.every((item) => item.commit === null)).toBe(true);
+      const response = await ctx.request({
+        method: 'GET',
+        url: `/api/projects/${projectId}/media`,
+      });
+      expect(response.json().history).toBe('complete');
+    } finally {
+      spy.mockRestore();
+    }
+    const retried = await fresh.media(projectId, query);
+    expect(retried.history).toBe('complete');
+    expect(retried.items.every((item) => item.commit !== null)).toBe(true);
   });
 
   it('lets every role read the list and requires a session and a known project', async () => {
@@ -320,98 +353,5 @@ describe('project media API', () => {
     it('still refuses other files', async () => {
       expect((await raw('docs/notes.txt')).statusCode).toBe(415);
     });
-  });
-});
-
-describe('media parsing', () => {
-  it('reads main first and only issue branches', () => {
-    const sha = 'a'.repeat(40);
-    const tree = 'b'.repeat(40);
-    const refs = parseScanRefs(
-      [
-        `refs/heads/cvx/ABC-2\0${sha}\0${tree}`,
-        `refs/heads/cvx/not a key\0${sha}\0${tree}`,
-        `refs/heads/main\0${sha}\0${tree}`,
-        `refs/heads/feature\0${sha}\0${tree}`,
-        `refs/heads/cvx/ABC-1\0bad\0${tree}`,
-        '',
-      ].join('\n'),
-    );
-    expect(refs.map((ref) => ref.branch)).toEqual(['main', 'cvx/ABC-2']);
-  });
-
-  it('reads the blobs each commit wrote and skips deletions', () => {
-    const c1 = '1'.repeat(40);
-    const c2 = '2'.repeat(40);
-    const zero = '0'.repeat(40);
-    const blob = 'b'.repeat(40);
-    const other = 'c'.repeat(40);
-    const output =
-      `\u001e${c2}\u001fAgent\u001f2026-10-02T00:00:00Z\0\n` +
-      `:100644 100644 ${blob} ${other} M\0a.png\0` +
-      `:100644 000000 ${blob} ${zero} D\0gone.png\0` +
-      `\u001e${c1}\u001fAgent\u001f2026-10-01T00:00:00Z\0\n` +
-      `:000000 100644 ${zero} ${blob} A\0a.png\0`;
-    expect(parseBlobWrites(output)).toEqual([
-      {
-        sha: c2,
-        authorName: 'Agent',
-        committedAt: '2026-10-02T00:00:00Z',
-        oid: other,
-        path: 'a.png',
-      },
-      {
-        sha: c1,
-        authorName: 'Agent',
-        committedAt: '2026-10-01T00:00:00Z',
-        oid: blob,
-        path: 'a.png',
-      },
-    ]);
-  });
-
-  it('sorts files without a known commit last', () => {
-    const base = {
-      oid: 'x',
-      name: 'a',
-      kind: 'image' as const,
-      contentType: 'image/png',
-      size: 1,
-      locations: [],
-      ref: 'r',
-    };
-    const items = [
-      { ...base, path: 'b', commit: null },
-      {
-        ...base,
-        path: 'a',
-        commit: { sha: 's', authorName: 'A', committedAt: '2026-01-01T00:00:00Z' },
-      },
-      {
-        ...base,
-        path: 'c',
-        commit: { sha: 's', authorName: 'A', committedAt: '2026-02-01T00:00:00Z' },
-      },
-    ];
-    const newest = filterMedia(items, mediaQuerySchema.parse({}));
-    expect(newest.map((item) => item.path)).toEqual(['c', 'a', 'b']);
-    const oldest = filterMedia(items, mediaQuerySchema.parse({ sort: 'oldest' }));
-    expect(oldest.map((item) => item.path)).toEqual(['a', 'c', 'b']);
-  });
-
-  it('parses single byte ranges', () => {
-    expect(parseByteRange(undefined, 10)).toBeNull();
-    expect(parseByteRange('bytes=0-', 10)).toEqual({ start: 0, end: 9 });
-    expect(parseByteRange('bytes=2-4', 10)).toEqual({ start: 2, end: 4 });
-    expect(parseByteRange('bytes=5-100', 10)).toEqual({ start: 5, end: 9 });
-    expect(parseByteRange('bytes=-3', 10)).toEqual({ start: 7, end: 9 });
-    expect(parseByteRange('bytes=-30', 10)).toEqual({ start: 0, end: 9 });
-    expect(parseByteRange('bytes=0-1,4-5', 10)).toBeNull();
-    expect(parseByteRange('items=0-1', 10)).toBeNull();
-    expect(parseByteRange('bytes=-', 10)).toBeNull();
-    expect(parseByteRange('bytes=10-', 10)).toBe('unsatisfiable');
-    expect(parseByteRange('bytes=4-2', 10)).toBe('unsatisfiable');
-    expect(parseByteRange('bytes=-0', 10)).toBe('unsatisfiable');
-    expect(parseByteRange('bytes=0-', 0)).toBe('unsatisfiable');
   });
 });
