@@ -317,13 +317,17 @@ describe('project media API', () => {
 
   it('skips a branch whose tree listing times out and marks the scan truncated', async () => {
     const query = mediaQuerySchema.parse({});
-    const listing = await withFailingGit(
+    const reader = await withFailingGit(
       (args) => args.includes('ls-tree'),
       'timeout',
-      {},
-      (reader) => reader.media(projectId, query),
+      { mediaHistoryRetryMs: 0 },
+      async (fresh) => {
+        const listing = await fresh.media(projectId, query);
+        expect(listing).toMatchObject({ total: 0, truncated: true, scannedBranches: 0 });
+        return fresh;
+      },
     );
-    expect(listing).toMatchObject({ total: 0, truncated: true, scannedBranches: 0 });
+    expect((await reader.media(projectId, query)).total).toBe(6);
   });
 
   it('lets every role read the list and requires a session and a known project', async () => {

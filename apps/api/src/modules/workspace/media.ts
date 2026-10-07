@@ -30,6 +30,11 @@ export interface MediaScan {
   history: MediaHistory;
   /** Why the history walk failed, for the log; never sent to clients. */
   historyError?: string;
+  /**
+   * True when a git call failed in a way that may pass (a branch listing timed out, or the history
+   * walk failed): the scan is reused only for `mediaHistoryRetryMs`, then built again.
+   */
+  transient: boolean;
   /** New for every scan built (a tip moved, or a failed scan was retried); pages of different versions do not fit together. */
   version: string;
   items: MediaItem[];
@@ -211,11 +216,11 @@ export class MediaReader extends RepoReader {
       if (oldest === undefined) break;
       this.mediaCache.delete(oldest);
     }
-    // A failed scan is dropped; one whose history walk failed is kept for a short while only, so
-    // paging keeps working while git fails and a later request tries the history again.
+    // A failed scan is dropped; a transient one is kept for a short while only, so paging keeps
+    // working while git fails and a later request tries again.
     scan.then(
       (result) => {
-        if (result.history === 'failed') {
+        if (result.transient) {
           entry.expiresAt = Date.now() + this.limits.mediaHistoryRetryMs;
         }
       },
@@ -284,6 +289,7 @@ export class MediaReader extends RepoReader {
     const byOid = new Map<string, MediaItem>();
     const trees = new Map<string, ReturnType<MediaReader['mediaInTree']>>();
     const scanned: ScanRef[] = [];
+    let skipped = false;
 
     for (let start = 0; start < refs.length; start += LS_TREE_CONCURRENCY) {
       if (Date.now() > deadline) {
@@ -305,6 +311,7 @@ export class MediaReader extends RepoReader {
         const listing = listings[index];
         if (!listing) {
           truncated = true;
+          skipped = true;
           return;
         }
         scanned.push(ref);
@@ -341,6 +348,7 @@ export class MediaReader extends RepoReader {
     const items = [...byOid.values()];
     const dated = await this.datedHistory(projectId, scanned, items);
     return {
+      transient: skipped || dated.history === 'failed',
       items,
       facets: facetsOf(items, scanned),
       truncated,

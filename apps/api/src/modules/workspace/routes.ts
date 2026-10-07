@@ -19,7 +19,7 @@ import type { AuditLog } from '../audit/audit.js';
 import { actorOf } from '../auth/principal.js';
 import { matchesEtag } from '../avatars/routes.js';
 import { findIssueByRef } from '../issues/queries.js';
-import { pageMedia } from './media.js';
+import { pageMedia, type MediaScan } from './media.js';
 import { recordIssueWorkspace } from './record.js';
 import type { Workspace } from './service.js';
 
@@ -53,6 +53,8 @@ interface RouteContext {
 
 /** Branches, history, commits, tree, files and branch comparison. */
 function registerReadRoutes({ app, project }: RouteContext): void {
+  /** Scans whose failed history walk was logged already; a reused scan is not logged again. */
+  const reported = new WeakSet<MediaScan>();
   app.get<{ Params: IdParams }>('/api/projects/:id/branches', async (request) => {
     const { ws, id } = await project(request);
     return { items: await ws.listBranches(id) };
@@ -85,7 +87,8 @@ function registerReadRoutes({ app, project }: RouteContext): void {
     const { ws, id } = await project(request);
     const query = parse(mediaQuerySchema, request.query);
     const scan = await ws.mediaScan(id);
-    if (scan.historyError) {
+    if (scan.historyError && !reported.has(scan)) {
+      reported.add(scan);
       request.log.warn(
         { projectId: id, reason: scan.historyError },
         'media history walk failed; files are listed without author and date',
