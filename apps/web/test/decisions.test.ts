@@ -121,6 +121,27 @@ describe('decisions store', () => {
     await vi.advanceTimersByTimeAsync(400);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
+  it('drops a list response that an answer or a newer refresh overtook', async () => {
+    const replies: ((response: Response) => void)[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.includes('/answer')
+          ? json(decision({ status: 'answered', answer: 'Mongo' }))
+          : new Promise<Response>((resolve) => replies.push(resolve)),
+      ),
+    );
+    const store = useDecisionsStore();
+    const loading = store.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    await store.answer('d1', { option: 'Mongo' });
+    expect(store.recent.map((item) => item.status)).toEqual(['answered']);
+    replies.forEach((reply) => reply(json({ items: [decision()], total: 1 })));
+    await loading;
+    expect(store.open).toEqual([]);
+    expect(store.recent.map((item) => item.status)).toEqual(['answered']);
+    store.release();
+  });
 });
 
 // Mounting Vuetify in jsdom is slow on a loaded machine; the default 5 s is too tight.

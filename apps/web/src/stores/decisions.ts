@@ -41,10 +41,14 @@ export const useDecisionsStore = defineStore('decisions', () => {
   let started = false;
   let viewers = 0;
   let pending: ReturnType<typeof setTimeout> | undefined;
+  /** Bumped by every refresh and local change; a response for an older value is dropped. */
+  let generation = 0;
 
   async function refreshCount(): Promise<void> {
+    const mine = ++generation;
     try {
-      lists.openCount = (await decisionsApi.count()).open;
+      const { open } = await decisionsApi.count();
+      if (mine === generation) lists.openCount = open;
     } catch (cause) {
       // Keep the last count; the next event or reconnect retries. A lost session is handled by
       // the stream's sign-out, so only other failures are reported.
@@ -53,11 +57,13 @@ export const useDecisionsStore = defineStore('decisions', () => {
   }
 
   async function refreshLists(): Promise<void> {
+    const mine = ++generation;
     try {
       const [open, recent] = await Promise.all([
         decisionsApi.list('open'),
         decisionsApi.list('decided', RECENT_LIMIT),
       ]);
+      if (mine !== generation) return;
       Object.assign(lists, { open: open.items, recent: recent.items, openCount: open.total });
       error.value = '';
     } catch (cause) {
@@ -104,6 +110,7 @@ export const useDecisionsStore = defineStore('decisions', () => {
 
   /** Show a settled decision right away; the stream event then reloads the lists. */
   function settled(decision: Decision): void {
+    generation += 1;
     Object.assign(lists, withSettled(lists, decision));
     refreshSoon();
   }
