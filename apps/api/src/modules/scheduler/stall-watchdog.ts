@@ -96,8 +96,9 @@ async function skipReasons(
  * handed back when those close) of an active agent enabled in the project, not checked out, with
  * no change and no run start within the interval. Left alone are issues with an open sub-issue or
  * blocker, a pending wake, or a queued, running or recently finished run. The watchdog also leaves
- * an issue alone when one more idle run would reach the agent's idle-run limit there, so its own
- * runs never put the agent into the idle backoff or the loop pause. The filters run before the
+ * an issue alone when one more idle run would reach the agent's idle-run limit there, so a
+ * watchdog run alone never reaches the idle backoff; an idle one still counts toward the streak
+ * that later heartbeat runs continue. The filters run before the
  * limit, so issues left alone cannot crowd out stalled ones. The wakes pass the scheduler gates
  * like heartbeat wakes.
  */

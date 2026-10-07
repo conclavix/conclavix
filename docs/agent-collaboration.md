@@ -212,8 +212,9 @@ issues an agent could work on but where nothing happened for that long, and queu
 - one more run without progress would not reach the agent's idle-run limit on the issue
   (`maxIdleRunsPerIssue` consecutive runs without progress). With the default limit of 2 the
   watchdog nudges once after a run that made progress; if that run changes nothing, the issue is
-  left to the heartbeat. With a limit of 1 the watchdog never wakes. Its own runs therefore never
-  put an agent into the idle backoff or the loop pause.
+  left to the heartbeat. With a limit of 1 the watchdog never wakes. A watchdog run alone never
+  reaches the idle backoff or the loop pause, but an idle one counts toward the streak like any
+  run, so later heartbeat runs reach the backoff and the pause one run earlier.
 
 At most `batchSize * 5` (500) wakes are queued per sweep, oldest change first; the filters above run
 before that limit, so issues that wait cannot crowd out stalled ones.
