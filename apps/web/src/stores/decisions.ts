@@ -67,9 +67,10 @@ export const useDecisionsStore = defineStore('decisions', () => {
       Object.assign(lists, { open: open.items, recent: recent.items, openCount: open.total });
       error.value = '';
     } catch (cause) {
-      error.value = describeError(cause);
+      if (mine === generation) error.value = describeError(cause);
     } finally {
-      loaded.value = true;
+      // A newer refresh is in flight and will finish loading; an older one must not decide it.
+      if (mine === generation) loaded.value = true;
     }
   }
 

@@ -259,6 +259,28 @@ describe('board decisions', () => {
     expect((await decisions('decided')).items[0]).toMatchObject({ answer: winner.answer });
   });
 
+  it('leaves a question open that arrived after a plain board comment was read', async () => {
+    const before = await issueDoc();
+    if (!before) throw new Error('issue missing');
+    (await ask({ question: 'Ship on Friday?' })).close();
+    // The comment read the issue before the agent asked: in_progress, nothing awaiting.
+    vi.spyOn(ctx.database.collections.issues, 'findOne').mockResolvedValueOnce({
+      ...before,
+      status: 'in_progress',
+      awaitingBoard: null,
+    });
+    const comment = await ctx.request({
+      method: 'POST',
+      url: `/api/issues/${issue.key}/comments`,
+      payload: { body: 'Looks good so far.' },
+    });
+    expect(comment.statusCode).toBe(201);
+    const doc = await issueDoc();
+    expect(doc?.status).toBe('in_review');
+    expect(doc?.awaitingBoard?.question).toBe('Ship on Friday?');
+    expect(await openCount()).toBe(1);
+  });
+
   it('withdraws the question when a board edit moves the issue out of in_review', async () => {
     (await ask({ question: 'Need a designer?' })).close();
     const columns = DEFAULT_BOARD_COLUMNS.map((column) =>

@@ -95,9 +95,16 @@ export class CommentRepository {
       const fresh = await collections.issues.findOne({ _id: current._id }, { session });
       const awaiting = fresh?.awaitingBoard ?? null;
       assertBound(awaiting, options.decisionId);
+      // An assignee can only be answered through answerReview, which hands the issue back and
+      // wakes it. Reaching here with one means the question arrived after this comment was read:
+      // the plain comment predates it, and an answer bound to it has to be sent again.
+      const settles = awaiting !== null && isBoardSide(author) && !fresh?.assigneeAgentId;
+      if (options.decisionId && !settles) {
+        throw new DecisionClosed();
+      }
       await collections.comments.insertOne(doc, { session });
       // Without an assignee the issue stays in_review, but the board has still answered.
-      if (awaiting && isBoardSide(author)) {
+      if (awaiting && settles) {
         await collections.issues.updateOne(
           { _id: current._id, 'awaitingBoard.decisionId': awaiting.decisionId },
           { $set: { awaitingBoard: null, updatedAt: new Date() } },
