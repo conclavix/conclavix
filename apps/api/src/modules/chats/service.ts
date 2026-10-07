@@ -216,7 +216,14 @@ export class ChatService {
     };
     const updated = await this.database.inTransaction(async (session) => {
       const next = await this.collections.chats.findOneAndUpdate(
-        { _id: id, status: chat.status, activeRunId: null, pendingTurn: null },
+        // The conditions acceptsMessages() checked, again at write time.
+        {
+          _id: id,
+          status: chat.status,
+          createdIssueId: null,
+          activeRunId: null,
+          pendingTurn: null,
+        },
         {
           $set: {
             pendingTurn: { reason: 'chat', requestedAt: now, notBefore: null, deferReason: null },
@@ -227,7 +234,7 @@ export class ChatService {
         { returnDocument: 'after', session },
       );
       if (!next) {
-        throw conflict('the lead is still answering the previous message');
+        throw conflict('the lead is still answering, or the chat changed meanwhile; reload it');
       }
       await this.collections.chatMessages.insertOne(message, { session });
       return next;

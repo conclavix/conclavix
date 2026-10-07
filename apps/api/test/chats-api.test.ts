@@ -260,6 +260,24 @@ describe('board chats with the lead', () => {
     expect(await fx.scheduler.processChatTurns()).toEqual({ run: 1, drop: 0, defer: 0 });
   });
 
+  it('refuses a message when the planning issue was created after the chat was read', async () => {
+    const { chatId } = await createLeadChat(ctx, fx);
+    const chats = ctx.database.collections.chats;
+    const id = new ObjectId(chatId);
+    await chats.updateOne({ _id: id }, { $set: { status: 'approved' } });
+    const stale = await chats.findOne({ _id: id });
+    await chats.updateOne({ _id: id }, { $set: { createdIssueId: new ObjectId() } });
+    const read = vi.spyOn(chats, 'findOne').mockResolvedValueOnce(stale);
+    const posted = await ctx.request({
+      method: 'POST',
+      url: `/api/chats/${chatId}/messages`,
+      payload: { content: 'One more thing' },
+    });
+    read.mockRestore();
+    expect(posted.statusCode).toBe(409);
+    expect((await chats.findOne({ _id: id }))?.pendingTurn).toBeNull();
+  });
+
   it('archives a chat and then refuses messages', async () => {
     const { chatId } = await createLeadChat(ctx, fx);
     const run = await chatTurn(ctx, fx, chatId);
