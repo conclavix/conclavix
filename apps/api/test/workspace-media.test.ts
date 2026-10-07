@@ -249,15 +249,18 @@ describe('project media API', () => {
     }
   });
 
-  /** A fresh reader whose `git log --raw` fails with `reason` while `fn` runs. */
-  async function withFailingLog<T>(
+  const isLog = (args: readonly string[]) => args.includes('log') && args.includes('--raw');
+
+  /** A fresh reader whose git calls matching `match` fail with `reason` while `fn` runs. */
+  async function withFailingGit<T>(
+    match: (args: readonly string[]) => boolean,
     reason: 'exit' | 'timeout',
     fn: (fresh: Workspace, logCalls: () => number) => Promise<T>,
   ): Promise<T> {
     const run = Git.prototype.run;
     let calls = 0;
     const spy = vi.spyOn(Git.prototype, 'run').mockImplementation(function (this: Git, args, opts) {
-      if (args.includes('log') && args.includes('--raw')) {
+      if (match(args)) {
         calls += 1;
         return Promise.reject(new GitError('git log failed', null, '', reason));
       }
@@ -272,7 +275,7 @@ describe('project media API', () => {
 
   it('lists files without dates when the history walk fails and retries under a new version', async () => {
     const query = mediaQuerySchema.parse({});
-    const { fresh, failed } = await withFailingLog('exit', async (reader) => ({
+    const { fresh, failed } = await withFailingGit(isLog, 'exit', async (reader) => ({
       fresh: reader,
       failed: await reader.media(projectId, query),
     }));
@@ -286,13 +289,23 @@ describe('project media API', () => {
 
   it('treats a history walk that runs out of time as limited and keeps the scan', async () => {
     const query = mediaQuerySchema.parse({});
-    await withFailingLog('timeout', async (reader, logCalls) => {
+    await withFailingGit(isLog, 'timeout', async (reader, logCalls) => {
       const first = await reader.media(projectId, query);
       expect(first.history).toBe('limited');
       const again = await reader.media(projectId, query);
       expect(again.version).toBe(first.version);
       expect(logCalls()).toBe(1);
     });
+  });
+
+  it('skips a branch whose tree listing times out and marks the scan truncated', async () => {
+    const query = mediaQuerySchema.parse({});
+    const listing = await withFailingGit(
+      (args) => args.includes('ls-tree'),
+      'timeout',
+      (reader) => reader.media(projectId, query),
+    );
+    expect(listing).toMatchObject({ total: 0, truncated: true, scannedBranches: 0 });
   });
 
   it('lets every role read the list and requires a session and a known project', async () => {

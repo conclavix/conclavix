@@ -234,12 +234,26 @@ export class MediaReader extends RepoReader {
     return { refs: refs.slice(0, max), truncated: truncated || refs.length > max };
   }
 
-  /** The media entries of one tree, recursively; cut at the list limit. */
+  /**
+   * The media entries of one tree, recursively; cut at the list limit. Null when listing it timed
+   * out: the scan skips that branch and is truncated.
+   */
   private async mediaInTree(projectId: string, tree: string) {
-    const { stdout, truncated } = await this.git.run(
-      this.repoArgs(projectId, ['ls-tree', '-r', '-z', '-l', '--full-tree', tree]),
-      { timeoutMs: this.limits.timeoutMs, maxBytes: this.limits.maxListBytes, allowTruncate: true },
-    );
+    let result;
+    try {
+      result = await this.git.run(
+        this.repoArgs(projectId, ['ls-tree', '-r', '-z', '-l', '--full-tree', tree]),
+        {
+          timeoutMs: this.limits.timeoutMs,
+          maxBytes: this.limits.maxListBytes,
+          allowTruncate: true,
+        },
+      );
+    } catch (error) {
+      if (error instanceof GitError && error.reason === 'timeout') return null;
+      throw error;
+    }
+    const { stdout, truncated } = result;
     let text = stdout.toString('utf8');
     if (truncated) text = text.slice(0, text.lastIndexOf('\0') + 1);
     const entries = parseLsTree(text).filter(
@@ -278,7 +292,10 @@ export class MediaReader extends RepoReader {
       );
       batch.forEach((ref, index) => {
         const listing = listings[index];
-        if (!listing) return;
+        if (!listing) {
+          truncated = true;
+          return;
+        }
         scanned.push(ref);
         if (listing.truncated) truncated = true;
         const issueKey = issueKeyOf(ref.branch);
@@ -311,7 +328,7 @@ export class MediaReader extends RepoReader {
     }
 
     const items = [...byOid.values()];
-    const dated = await this.datedHistory(projectId, scanned, items, deadline);
+    const dated = await this.datedHistory(projectId, scanned, items);
     return {
       items,
       facets: facetsOf(items, scanned),
@@ -322,17 +339,18 @@ export class MediaReader extends RepoReader {
     };
   }
 
-  /** Run the history walk within the scan's time budget; a git failure only loses the dates. */
+  /**
+   * Run the history walk with its own git timeout (not the rest of the branch budget, so a slow
+   * branch listing does not leave every file undated); a git failure only loses the dates.
+   */
   private async datedHistory(
     projectId: string,
     refs: ScanRef[],
     items: MediaItem[],
-    deadline: number,
   ): Promise<{ history: MediaHistory; historyError?: string }> {
     if (items.length === 0) return { history: 'complete' };
-    if (Date.now() > deadline) return { history: 'limited' };
     try {
-      return { history: await this.attachCommits(projectId, refs, items, deadline) };
+      return { history: await this.attachCommits(projectId, refs, items) };
     } catch (error) {
       if (!(error instanceof GitError)) throw error;
       // Running out of time is a limit like the others, and retrying would only run out again.
@@ -350,7 +368,6 @@ export class MediaReader extends RepoReader {
     projectId: string,
     refs: ScanRef[],
     items: MediaItem[],
-    deadline: number,
   ): Promise<MediaHistory> {
     const paths = [...new Set(items.map((item) => item.path))];
     const tips = [...new Set(refs.map((ref) => ref.sha))];
@@ -371,7 +388,7 @@ export class MediaReader extends RepoReader {
         : []),
     ];
     const { stdout, truncated } = await this.git.run(this.repoArgs(projectId, args), {
-      timeoutMs: Math.max(1000, Math.min(this.limits.timeoutMs, deadline - Date.now())),
+      timeoutMs: this.limits.timeoutMs,
       maxBytes: this.limits.maxListBytes,
       allowTruncate: true,
     });

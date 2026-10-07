@@ -101,23 +101,23 @@ and retries do not repeat it),
 
 ### Limits
 
-| What                     | Limit                                          |
-| ------------------------ | ---------------------------------------------- |
-| File shown in the viewer | 1 MiB (larger: `tooLarge`, no content)         |
-| File served raw          | 10 MiB (larger: 413 `file_too_large`)          |
-| Binary detection         | NUL byte in the first 8000 bytes (as git)      |
-| Patch text of one diff   | 2 MiB, then `truncated`                        |
-| Patch text of one file   | 256 KiB, then `truncated`                      |
-| Files in one diff        | 1000                                           |
-| File list of one diff    | 4 MiB of `--raw`/`--numstat`, then `truncated` |
-| Branches listed          | 200                                            |
-| Commits in a comparison  | 250                                            |
-| One git call             | 15 s                                           |
-| ZIP download             | 5 min, 1 GiB                                   |
-| Media scan: branches     | `main` plus 199 issue branches, newest first   |
-| Media scan: files        | 5000 distinct blobs                            |
-| Media scan: history      | 5000 commits, 4 MiB of `git log --raw`         |
-| Media scan: time         | 20 s, then the remaining branches are skipped  |
+| What                     | Limit                                            |
+| ------------------------ | ------------------------------------------------ |
+| File shown in the viewer | 1 MiB (larger: `tooLarge`, no content)           |
+| File served raw          | 10 MiB (larger: 413 `file_too_large`)            |
+| Binary detection         | NUL byte in the first 8000 bytes (as git)        |
+| Patch text of one diff   | 2 MiB, then `truncated`                          |
+| Patch text of one file   | 256 KiB, then `truncated`                        |
+| Files in one diff        | 1000                                             |
+| File list of one diff    | 4 MiB of `--raw`/`--numstat`, then `truncated`   |
+| Branches listed          | 200                                              |
+| Commits in a comparison  | 250                                              |
+| One git call             | 15 s                                             |
+| ZIP download             | 5 min, 1 GiB                                     |
+| Media scan: branches     | `main` plus 199 issue branches, newest first     |
+| Media scan: files        | 5000 distinct blobs                              |
+| Media scan: history      | 5000 commits, 4 MiB of `git log --raw`           |
+| Media scan: time         | 20 s of branch listings (the history walk: 15 s) |
 
 ### Images
 
@@ -181,14 +181,14 @@ is synced, before anything is merged. `GET /api/projects/:id/media` does the wor
   is new for every scan built (a branch tip moved, or a failed history walk was retried); a next page with another `version` does not
   continue the previous one, so the tab starts over at offset 0 (and skips items it already shows).
 - **Limits and cache.** See [Limits](#limits): past the branch, file or time limit the scan stops
-  and sets `truncated` (files may be missing), which the tab shows as a notice. `history` tells
-  how far the dating got: `complete`, `limited` (the commit, size or time limit, including a timeout of `git log`, stopped the walk
-  before every file was found; those files have no `commit` and sort last) or `failed` (git
-  failed otherwise: the files are listed without author and date, the API logs a
-  warning, and the scan is not cached so the next request tries again). The tab shows a notice
-  for both. The scan is cached in memory per project
-  (the 32 most recently used projects) and reused until a branch tip moves, so paging and
-  filtering do not run git again.
+  (a branch whose listing times out is skipped as well) and sets `truncated` (files may be
+  missing), which the tab shows as a notice. `history` tells how far the dating got: `complete`,
+  `limited` (the commit or size limit, or a timeout of `git log`, stopped the walk before every
+  file was found; those files have no `commit` and sort last) or `failed` (git failed otherwise:
+  the files are listed without author and date, the API logs a warning, and the scan is not
+  cached so the next request tries again). The tab shows a notice for both. The scan is cached in
+  memory per project (the 32 most recently used projects) and reused until a branch tip moves, so
+  paging and filtering do not run git again.
 - **Permission.** `read`, like the Code tab.
 
 The tab shows a grid with lazily loaded thumbnails (videos and PDFs get an icon; images above
