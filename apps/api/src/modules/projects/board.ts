@@ -9,6 +9,8 @@ import {
 import { LOCKS, lock, type Collections, type Database, type IssueDoc } from '../../db.js';
 import { AppError, conflict, unprocessable } from '../../errors.js';
 import { lockBoard, readBoard } from '../issues/columns.js';
+import { isClosed } from '../issues/graph.js';
+import { resumeWaitingIssues } from '../issues/resume.js';
 import { applyStatusChange } from '../issues/status-change.js';
 import { wakeOnIssueChange } from '../scheduler/wakes.js';
 
@@ -81,6 +83,12 @@ export class BoardRepository {
       );
       if (written.matchedCount !== 1) {
         throw new Error('project vanished while its board was locked');
+      }
+      // After every move and the new columns, so a resumed issue is read and placed as it now is.
+      for (const { before, after } of transitions) {
+        if (isClosed(after.status) && !isClosed(before.status)) {
+          await resumeWaitingIssues(this.collections, after, session);
+        }
       }
       return { board: toBoard(projectId, revision, columns), transitions };
     });

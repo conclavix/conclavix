@@ -47,7 +47,8 @@ issue`). The new sub-issue uses the normal blocker mechanism:
 
 - its assignee's wake is skipped with `skipReason: 'blocked'` while any blocker is open;
 - when the last open blocker closes (`done` or `cancelled`), the assignee gets an `unblocked`
-  wake for the sub-issue.
+  wake for the sub-issue; an `in_review` sub-issue is moved back to `in_progress` first (see
+  [Waiting in `in_review`](#waiting-in-in_review-for-sub-issues-and-blockers)).
 
 ## Sending work back: `reopen_issue`
 
@@ -82,13 +83,38 @@ ping-pong an issue that waits for the board.
 If the issue left `in_review` between the read and the transaction (two board answers at once, or
 the agent changed the status), the comment is posted the ordinary way instead of being refused.
 
+### Waiting in `in_review` for sub-issues and blockers
+
+An agent that waits for work below it (a delegator waiting for a merge on a sub-issue) often sets
+its own issue to `in_review`. The scheduler never runs `in_review` issues, so the issue is handed
+back when what it waits for closes, in the same transaction as the closing status change:
+
+- **A sub-issue closes** (`done` or `cancelled`) and its direct parent is assigned and `in_review`:
+  the parent moves to `in_progress` (its board column follows) and its assignee gets one
+  `subissue_closed` wake for the parent.
+- **The last open blocker closes** for an assigned `in_review` issue: the issue moves to
+  `in_progress` and its assignee gets an `unblocked` wake, as an actionable issue does.
+
+Both also apply when a board edit closes the sub-issue or blocker (a column changing to a closed
+status). A pending wake for the same agent and issue absorbs further ones, so several sub-issues
+closing at once still give one wake, and the delegator's `delegation_closed` wake for the same
+closure is absorbed too (it is woken instead of getting a notification). Only the direct parent is
+handed back; issues further up are reached through the delegation and report wakes below, which
+still need an actionable issue.
+
+The status does not say why the agent set `in_review`: it may also have been waiting for a board
+decision, such as an escalation. It is woken once per closure anyway, sees the open question in its
+issue and sets `in_review` again if it still needs the board. That costs one run per closure, which
+is bounded by the number of sub-issues and blockers, and is preferable to a chain that stops until
+someone comments.
+
 ## Who is woken when delegated work closes
 
 When an issue that an agent delegated (`delegatedBy`) closes:
 
 1. **The delegator** is woken (`delegation_closed`) on the issue it delegated from, if that issue
-   is still assigned to it and actionable (`todo` or `in_progress`). Otherwise it gets a
-   notification.
+   is still assigned to it and actionable (`todo` or `in_progress`; an `in_review` parent was just
+   moved back to `in_progress`, see above). Otherwise it gets a notification.
 2. **Every other `reports` target** of the assignee gets a notification (`list_notifications`,
    also listed in the next run's prompt) naming the closed issue.
 3. **A `reports` link with `wakeOnReport: true`** additionally wakes its target (`report_closed`)

@@ -10,6 +10,7 @@ import { reportClosure } from '../org/reporting.js';
 import { lockBoard, placeChangedIssue, placeNewIssue } from './columns.js';
 import { toIssue } from './mapping.js';
 import { findIssueByRef, listIssues, type IssuePage } from './queries.js';
+import { resumeWaitingIssues } from './resume.js';
 import { applyStatusChange } from './status-change.js';
 import { assertAgentEnabledInProject } from '../projects/agent-access.js';
 
@@ -192,6 +193,8 @@ export class IssueRepository {
         await within(session, current, updated);
       }
       if (updated && isClosed(updated.status) && !isClosed(current.status)) {
+        // First, so a delegator waiting in_review gets this wake instead of a notification.
+        await resumeWaitingIssues(this.collections, updated, session);
         await reportClosure(this.collections, updated, session);
       }
       return { before: current, after: updated };
