@@ -18,6 +18,7 @@ export const MCP_HEADER_ENV_PREFIX = 'CONCLAVIX_MCP_HEADER_';
 export const MAX_MCP_HEADER_ENV = 32;
 /** Connection servers per run; the root helper refuses a config with more. */
 export const MAX_MCP_SERVERS = 8;
+export const MAX_ALLOW_ADDRESSES = 16;
 
 /** An external MCP server in a run's config; header values are `${VARIABLE}` references. */
 export interface RunMcpServer {
@@ -49,7 +50,7 @@ export const noConnections = (): RunConnections => ({
 });
 
 /** Credential values and, for `Bearer x` style values, the token alone. */
-function knownValues(name: string, key: string, value: string): KnownSecret[] {
+export function knownValues(name: string, key: string, value: string): KnownSecret[] {
   const label = `${name}:${key}`;
   const token = /^(?:Bearer|Basic|Token)\s+(\S.*)$/i.exec(value)?.[1];
   return [{ name: label, value }, ...(token ? [{ name: label, value: token }] : [])];
@@ -59,6 +60,20 @@ interface Loaded {
   url: URL;
   headers: Record<string, string>;
   privateAddresses: string[];
+}
+
+/**
+ * The connection and its credentials are read one after the other; an edit committed in between
+ * (it always moves updatedAt) could pair a new credential with the old URL.
+ */
+export async function assertUnchanged(collections: Collections, doc: ConnectionDoc) {
+  const fresh = await collections.connections.findOne(
+    { _id: doc._id },
+    { projection: { updatedAt: 1 } },
+  );
+  if (fresh?.updatedAt.getTime() !== doc.updatedAt.getTime()) {
+    throw new Error('it was changed while it was loaded');
+  }
 }
 
 async function loadOne(
@@ -81,6 +96,7 @@ async function loadOne(
       throw new Error(`credential ${entry.credentialKey ?? ''} cannot be decrypted`);
     }
   }
+  await assertUnchanged(collections, doc);
   const missing = type.credentialKeys(config).filter((key) => !(key in credentials));
   if (missing.length > 0) throw new Error(`no value stored for ${missing.join(', ')}`);
   const spec = type.mcpServer({
@@ -155,7 +171,8 @@ export async function loadRunConnections(
     result.privateAddresses.push(...loaded.privateAddresses);
     result.used.push({ _id: doc._id, name: doc.name, type: doc.type });
   }
-  result.privateAddresses = [...new Set(result.privateAddresses)];
+  // The root helper takes at most 16 --allow-address values.
+  result.privateAddresses = [...new Set(result.privateAddresses)].slice(0, MAX_ALLOW_ADDRESSES);
   return result;
 }
 

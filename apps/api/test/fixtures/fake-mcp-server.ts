@@ -39,7 +39,10 @@ export async function startFakeMcpServer(
             JSON.stringify({
               jsonrpc: '2.0',
               id: 1,
-              error: { code: -32000, message: `bad header ${request.headers.authorization}` },
+              error: {
+                code: -32000,
+                message: `bad token ${(request.headers.authorization ?? '').replace(/^Bearer /, '')}`,
+              },
             }),
           );
           return;

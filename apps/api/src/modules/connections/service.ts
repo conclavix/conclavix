@@ -8,6 +8,7 @@ import { Redactor } from '../../runner/redact.js';
 import type { SecretBox } from '../settings/secret-box.js';
 import { checkAgentIds } from '../secrets/agent-ids.js';
 import { secretContext } from '../secrets/repository.js';
+import { assertUnchanged, knownValues } from '../../runner/run-connections.js';
 import { assertSafeConnectionUrl } from './net.js';
 import { connectionType } from './types/index.js';
 import type { ConnectionContext, ConnectionType } from './types/types.js';
@@ -230,7 +231,14 @@ export class ConnectionService {
       input.credentials,
       session,
     );
-    if (written.length > 0) changes['credentials'] = written;
+    if (written.length > 0) {
+      changes['credentials'] = written;
+      await this.collections.connections.updateOne(
+        { _id: id },
+        { $set: { lastTest: null } },
+        { session },
+      );
+    }
     if (changes['name']) {
       for (const key of keys) {
         await this.collections.secrets.updateOne(
@@ -295,6 +303,9 @@ export class ConnectionService {
     const doc = await this.getDoc(id);
     const type = typeOf(doc.type);
     const credentials = await this.credentials(doc);
+    await assertUnchanged(this.collections, doc).catch(() => {
+      throw conflict('The connection was changed meanwhile; test it again');
+    });
     const context: ConnectionContext<Record<string, unknown>> = {
       name: doc.name,
       config: type.configSchema.parse(doc.config),
@@ -311,7 +322,7 @@ export class ConnectionService {
         });
     // A server could echo a credential in an error; the stored result never holds one.
     const redactor = new Redactor(
-      Object.entries(credentials).map(([key, value]) => ({ name: key, value })),
+      Object.entries(credentials).flatMap(([key, value]) => knownValues(doc.name, key, value)),
     );
     outcome = redactor.deep(outcome);
     const lastTest = { ...outcome, at: new Date() };

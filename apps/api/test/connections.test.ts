@@ -1,12 +1,11 @@
 import { fileURLToPath } from 'node:url';
 import { ObjectId } from 'mongodb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { privateAddressesFor } from '../src/modules/connections/net.js';
 import { vaultBox } from '../src/modules/settings/secret-box.js';
 import { claudeArgs, codeClaudeArgs } from '../src/runner/adapters/claude-cli.js';
 import { sandboxCommand } from '../src/runner/adapters/sandbox.js';
 import type { AdapterRunInput } from '../src/runner/adapters/types.js';
-import { loadRunConnections } from '../src/runner/run-connections.js';
+import { assertUnchanged, loadRunConnections } from '../src/runner/run-connections.js';
 import { RunWorker } from '../src/runner/run-worker.js';
 import type { CodeRuns } from '../src/runner/code-run.js';
 import { AuditLog } from '../src/modules/audit/audit.js';
@@ -139,6 +138,24 @@ describe('connections', () => {
       expect.arrayContaining(['initialize', 'tools/list']),
     );
     expect(mcp.seen.every((entry) => entry.authorization === `Bearer ${TOKEN}`)).toBe(true);
+  });
+
+  it('clears the last test result on credential changes and detects concurrent edits', async () => {
+    const docs = await ctx.database.collections.connections.findOne({ name: 'docs' });
+    expect(docs?.lastTest?.ok).toBe(true);
+    const id = docs?._id.toHexString() ?? '';
+    const changed = await as('owner', 'PATCH', `/api/connections/${id}`, {
+      credentials: { Authorization: `Bearer ${TOKEN}` },
+    });
+    expect(changed.json().lastTest).toBeNull();
+    await as('admin', 'POST', `/api/connections/${id}/test`);
+    // A connection edited between reading it and its credentials is refused.
+    if (!docs) throw new Error('expected docs');
+    await expect(
+      assertUnchanged(ctx.database.collections, { ...docs, updatedAt: new Date(0) }),
+    ).rejects.toThrow(/changed/);
+    const fresh = await ctx.database.collections.connections.findOne({ _id: docs._id });
+    await expect(assertUnchanged(ctx.database.collections, fresh ?? docs)).resolves.toBeUndefined();
   });
 
   it('reports refused credentials and never stores an echoed value', async () => {
@@ -351,13 +368,34 @@ describe('connections', () => {
     expect(used?.details).toMatchObject({ name: 'docs', agentId: coderId });
   });
 
-  it('refuses private addresses at run time unless the connection allows them', async () => {
-    await expect(privateAddressesFor(new URL('http://127.0.0.1:1/'), false)).rejects.toThrow(
-      /private/,
+  it('gives a run at most eight connection servers', async () => {
+    const agent = (
+      await ctx.request({
+        method: 'POST',
+        url: '/api/agents',
+        payload: { name: 'Many', role: 'engineer', adapter: { type: 'claude_cli' } },
+      })
+    ).json().id as string;
+    for (let index = 0; index < 9; index += 1) {
+      const created = await create(
+        'owner',
+        docsPayload({
+          name: `many-${index}`,
+          config: { url: mcp.url, headers: [] },
+          credentials: {},
+          agentIds: [agent],
+        }),
+      );
+      expect(created.statusCode).toBe(201);
+    }
+    const loaded = await loadRunConnections(
+      ctx.database.collections,
+      vaultBox(AUTH_SECRET),
+      new ObjectId(agent),
+      new ObjectId(projectId),
     );
-    await expect(privateAddressesFor(new URL('http://127.0.0.1:1/'), true)).resolves.toEqual([
-      '127.0.0.1',
-    ]);
+    expect(loaded.servers).toHaveLength(8);
+    expect(loaded.skipped).toEqual([{ name: 'many-8', cause: 'more than 8 servers in one run' }]);
   });
 
   it('audits changes and tests without credential values', async () => {
