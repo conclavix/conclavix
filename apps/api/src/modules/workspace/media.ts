@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import {
   DEFAULT_BRANCH,
   ISSUE_BRANCH_PREFIX,
@@ -30,7 +30,7 @@ export interface MediaScan {
   history: MediaHistory;
   /** Why the history walk failed, for the log; never sent to clients. */
   historyError?: string;
-  /** Changes whenever a scanned branch tip moves; pages of different versions do not fit together. */
+  /** New for every scan built (a tip moved, or a failed scan was retried); pages of different versions do not fit together. */
   version: string;
   items: MediaItem[];
   facets: MediaFacets;
@@ -198,7 +198,7 @@ export class MediaReader extends RepoReader {
       this.mediaCache.set(projectId, cached);
       return cached.scan;
     }
-    const version = createHash('sha256').update(key).digest('hex').slice(0, 16);
+    const version = randomBytes(8).toString('hex');
     const scan = this.scanMedia(projectId, refs, truncated, version);
     this.mediaCache.delete(projectId);
     this.mediaCache.set(projectId, { key, scan });
@@ -335,6 +335,8 @@ export class MediaReader extends RepoReader {
       return { history: await this.attachCommits(projectId, refs, items, deadline) };
     } catch (error) {
       if (!(error instanceof GitError)) throw error;
+      // Running out of time is a limit like the others, and retrying would only run out again.
+      if (error.reason === 'timeout') return { history: 'limited' };
       return { history: 'failed', historyError: error.message };
     }
   }

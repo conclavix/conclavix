@@ -178,13 +178,13 @@ is synced, before anything is merged. `GET /api/projects/:id/media` does the wor
   without a known commit last), `limit` (1-200, default 60) and `offset`. The answer has `items`,
   `total`, `nextOffset` (null on the last page), `facets` (counts per kind and per branch over
   the whole scan, for the filters), `scannedBranches`, `truncated`, `history` and `version`. `version`
-  changes whenever a scanned branch tip moves; a next page with another `version` does not
+  is new for every scan built (a branch tip moved, or a failed history walk was retried); a next page with another `version` does not
   continue the previous one, so the tab starts over at offset 0 (and skips items it already shows).
 - **Limits and cache.** See [Limits](#limits): past the branch, file or time limit the scan stops
   and sets `truncated` (files may be missing), which the tab shows as a notice. `history` tells
-  how far the dating got: `complete`, `limited` (the commit, size or time limit stopped the walk
+  how far the dating got: `complete`, `limited` (the commit, size or time limit, including a timeout of `git log`, stopped the walk
   before every file was found; those files have no `commit` and sort last) or `failed` (git
-  failed, for example a timeout: the files are listed without author and date, the API logs a
+  failed otherwise: the files are listed without author and date, the API logs a
   warning, and the scan is not cached so the next request tries again). The tab shows a notice
   for both. The scan is cached in memory per project
   (the 32 most recently used projects) and reused until a branch tip moves, so paging and

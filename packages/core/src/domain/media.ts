@@ -109,8 +109,9 @@ export interface MediaListing {
   /** Branches the scan covered. */
   scannedBranches: number;
   /**
-   * Identifies the scan behind this page; it changes when a branch tip moves. A page with
-   * another version than the previous one does not continue it: start again at offset 0.
+   * Identifies the scan behind this page; every new scan (a branch tip moved, or a failed history
+   * walk was retried) gets a new one. A page with another version than the previous one does not
+   * continue it: start again at offset 0.
    */
   version: string;
 }

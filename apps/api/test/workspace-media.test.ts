@@ -249,35 +249,50 @@ describe('project media API', () => {
     }
   });
 
-  it('lists files without dates when the history walk fails, and retries on the next request', async () => {
-    const query = mediaQuerySchema.parse({});
-    const fresh = new Workspace(root.dir);
+  /** A fresh reader whose `git log --raw` fails with `reason` while `fn` runs. */
+  async function withFailingLog<T>(
+    reason: 'exit' | 'timeout',
+    fn: (fresh: Workspace, logCalls: () => number) => Promise<T>,
+  ): Promise<T> {
     const run = Git.prototype.run;
-    const spy = vi.spyOn(Git.prototype, 'run').mockImplementation(function (
-      this: Git,
-      args,
-      options,
-    ) {
+    let calls = 0;
+    const spy = vi.spyOn(Git.prototype, 'run').mockImplementation(function (this: Git, args, opts) {
       if (args.includes('log') && args.includes('--raw')) {
-        return Promise.reject(new GitError('git log timed out', null, '', 'timeout'));
+        calls += 1;
+        return Promise.reject(new GitError('git log failed', null, '', reason));
       }
-      return run.call(this, args, options);
+      return run.call(this, args, opts);
     });
     try {
-      const failed = await fresh.media(projectId, query);
-      expect(failed).toMatchObject({ total: 6, history: 'failed', truncated: false });
-      expect(failed.items.every((item) => item.commit === null)).toBe(true);
-      const response = await ctx.request({
-        method: 'GET',
-        url: `/api/projects/${projectId}/media`,
-      });
-      expect(response.json().history).toBe('complete');
+      return await fn(new Workspace(root.dir), () => calls);
     } finally {
       spy.mockRestore();
     }
+  }
+
+  it('lists files without dates when the history walk fails and retries under a new version', async () => {
+    const query = mediaQuerySchema.parse({});
+    const { fresh, failed } = await withFailingLog('exit', async (reader) => ({
+      fresh: reader,
+      failed: await reader.media(projectId, query),
+    }));
+    expect(failed).toMatchObject({ total: 6, history: 'failed', truncated: false });
+    expect(failed.items.every((item) => item.commit === null)).toBe(true);
     const retried = await fresh.media(projectId, query);
     expect(retried.history).toBe('complete');
+    expect(retried.version).not.toBe(failed.version);
     expect(retried.items.every((item) => item.commit !== null)).toBe(true);
+  });
+
+  it('treats a history walk that runs out of time as limited and keeps the scan', async () => {
+    const query = mediaQuerySchema.parse({});
+    await withFailingLog('timeout', async (reader, logCalls) => {
+      const first = await reader.media(projectId, query);
+      expect(first.history).toBe('limited');
+      const again = await reader.media(projectId, query);
+      expect(again.version).toBe(first.version);
+      expect(logCalls()).toBe(1);
+    });
   });
 
   it('lets every role read the list and requires a session and a known project', async () => {
