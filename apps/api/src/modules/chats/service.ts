@@ -17,8 +17,8 @@ import { resolveLead, storedLeadId } from '../org/lead.js';
 import { costToday } from '../scheduler/gates.js';
 import { toChat, toChatMessage, toChatPlanRevision } from './mapping.js';
 
-/** Messages one chat read returns; a planning chat stays far below this. */
-const MAX_MESSAGES = 500;
+/** Messages one chat read returns (the newest); a planning chat stays far below this. */
+export const MAX_MESSAGES = 500;
 
 /** The board message that hands the approved plan to the lead. */
 export const approvalMessage = (revision: number): string =>
@@ -117,12 +117,13 @@ export class ChatService {
 
   async get(id: ObjectId): Promise<{ chat: Chat; messages: ChatMessage[] }> {
     const chat = await this.load(id);
-    const messages = await this.collections.chatMessages
+    // The newest MAX_MESSAGES, returned oldest first.
+    const newest = await this.collections.chatMessages
       .find({ chatId: id })
-      .sort({ createdAt: 1, _id: 1 })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(MAX_MESSAGES)
       .toArray();
-    return { chat: await this.view(chat), messages: messages.map(toChatMessage) };
+    return { chat: await this.view(chat), messages: newest.reverse().map(toChatMessage) };
   }
 
   /** Start a chat with the organisation's current lead, optionally about an existing project. */

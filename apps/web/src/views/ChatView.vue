@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { mdiArchiveArrowDownOutline, mdiArrowLeft } from '@mdi/js';
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import { CHAT_STATUS_COLORS, acceptsMessages, canChat, isBusy, turnStatus } from '../chats/logic';
 import ChatComposer from '../components/chats/ChatComposer.vue';
 import ChatPlanPanel from '../components/chats/ChatPlanPanel.vue';
@@ -54,14 +54,18 @@ onBeforeUnmount(() => {
 watch(
   () => props.chatId,
   async (id) => {
+    // A new chat starts clean; requests still running for the previous one are dropped below.
+    draft.value = '';
+    sending.value = false;
+    approving.value = false;
     loading.value = true;
     error.value = '';
     try {
       await chats.open(id);
     } catch (cause) {
-      error.value = describeError(cause);
+      if (props.chatId === id) error.value = describeError(cause);
     } finally {
-      loading.value = false;
+      if (props.chatId === id) loading.value = false;
     }
   },
   { immediate: true },
@@ -71,45 +75,52 @@ watch(
 watch(
   activeRunId,
   (runId) => {
-    if (runId) void live.loadLog(runId).catch(() => undefined);
+    if (!runId) return;
+    live.loadLog(runId).catch(() => {
+      if (activeRunId.value === runId) {
+        error.value = 'Could not load what the lead wrote so far; new lines still arrive.';
+      }
+    });
   },
   { immediate: true },
 );
 
-async function send(content: string): Promise<void> {
-  sending.value = true;
+/**
+ * Run a request for the open chat. Its outcome (error text, busy flag, follow-up) is dropped once
+ * the route moved on to another chat.
+ */
+async function act(
+  busy: Ref<boolean> | null,
+  work: (stillHere: () => boolean) => Promise<void>,
+  onError?: () => Promise<void>,
+): Promise<void> {
+  const id = props.chatId;
+  const stillHere = (): boolean => props.chatId === id;
+  if (busy) busy.value = true;
   error.value = '';
   try {
+    await work(stillHere);
+  } catch (cause) {
+    if (stillHere()) {
+      error.value = describeError(cause);
+      await onError?.();
+    }
+  } finally {
+    if (busy && stillHere()) busy.value = false;
+  }
+}
+
+const send = (content: string): Promise<void> =>
+  act(sending, async (stillHere) => {
     await chats.post(content);
-    draft.value = '';
-  } catch (cause) {
-    error.value = describeError(cause);
-  } finally {
-    sending.value = false;
-  }
-}
+    if (stillHere()) draft.value = '';
+  });
 
-async function approve(revision: number): Promise<void> {
-  approving.value = true;
-  error.value = '';
-  try {
-    await chats.approve(revision);
-  } catch (cause) {
-    error.value = describeError(cause);
-    await chats.refresh().catch(() => undefined);
-  } finally {
-    approving.value = false;
-  }
-}
+// A refused approval usually means the chat changed: reload it so the panel shows why.
+const approve = (revision: number): Promise<void> =>
+  act(approving, () => chats.approve(revision), chats.refreshQuietly);
 
-async function archive(): Promise<void> {
-  error.value = '';
-  try {
-    await chats.archive();
-  } catch (cause) {
-    error.value = describeError(cause);
-  }
-}
+const archive = (): Promise<void> => act(null, () => chats.archive());
 </script>
 
 <template>

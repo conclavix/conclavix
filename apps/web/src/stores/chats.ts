@@ -129,6 +129,7 @@ export const useChatsStore = defineStore('chats', () => {
     load,
     open,
     refresh,
+    refreshQuietly,
     create,
     ...chatActions({ current, messages, upsert, refresh }),
     applyStream,

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApp, defineComponent, h, nextTick } from 'vue';
+import { createApp, defineComponent, h, nextTick, reactive } from 'vue';
 import { createPinia } from 'pinia';
 import { createVuetify } from 'vuetify';
 import ChatView from '../src/views/ChatView.vue';
@@ -141,8 +141,11 @@ describe('chat view', { timeout: 20_000 }, () => {
     fetchMock.mockReset();
   });
 
+  const route = reactive({ chatId: 'c1' });
+
   function mount() {
-    app = createApp(ChatView, { chatId: 'c1' });
+    route.chatId = 'c1';
+    app = createApp({ render: () => h(ChatView, { chatId: route.chatId }) });
     app.use(createPinia());
     app.use(createVuetify());
     app.component('RouterLink', RouterLink);
@@ -202,6 +205,36 @@ describe('chat view', { timeout: 20_000 }, () => {
     await flush();
     expect(host.querySelector('[data-test="created-project"]')?.textContent).toContain('PORT');
     expect(host.querySelector('[data-test="created-issue"]')?.textContent).toContain('PORT-1');
+  });
+
+  it('drops the outcome of a request for a chat the view has left', async () => {
+    let refuse: (response: Response) => void = () => undefined;
+    const base = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (url: string, init: RequestInit = {}) => {
+      if (url === '/api/chats/c1/messages') return new Promise<Response>((done) => (refuse = done));
+      if (url === '/api/chats/c2') {
+        return json({ chat: chat({ id: 'c2', title: 'Second chat', plan: null }), messages: [] });
+      }
+      return base?.(url, init);
+    });
+    mount();
+    await flush();
+    const input = host.querySelector<HTMLTextAreaElement>('[data-test="chat-composer"] textarea');
+    if (!input) throw new Error('no composer');
+    input.value = 'For c1';
+    input.dispatchEvent(new Event('input'));
+    await flush();
+    button('chat-send')?.click();
+    await flush();
+    route.chatId = 'c2';
+    await flush();
+    refuse(json({ message: 'the lead is still answering' }, 409));
+    await flush();
+    expect(host.textContent).toContain('Second chat');
+    expect(host.textContent).not.toContain('the lead is still answering');
+    const fresh = host.querySelector<HTMLTextAreaElement>('[data-test="chat-composer"] textarea');
+    expect(fresh?.value).toBe('');
+    expect(button('chat-send')?.querySelector('.v-progress-circular')).toBeNull();
   });
 
   it('is read-only for viewers', async () => {

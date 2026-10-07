@@ -1,5 +1,6 @@
 import { ObjectId } from 'mongodb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MAX_MESSAGES } from '../src/modules/chats/service.js';
 import { createTestContext, type TestContext } from './helpers.js';
 import { asBrowser, createUser, signIn } from './auth-helpers.js';
 import { createFixture, type Fixture } from './scheduler-helpers.js';
@@ -205,6 +206,49 @@ describe('board chats with the lead', () => {
     read.mockRestore();
     expect(archived.statusCode).toBe(409);
     expect((await chats.findOne({ _id: new ObjectId(chatId) }))?.status).toBe('open');
+  });
+
+  it('returns the newest messages of a long chat, oldest first', async () => {
+    const { chatId } = await createLeadChat(ctx, fx);
+    const start = Date.now();
+    await ctx.database.collections.chatMessages.insertMany(
+      Array.from({ length: MAX_MESSAGES + 3 }, (_, index) => ({
+        _id: new ObjectId(),
+        chatId: new ObjectId(chatId),
+        role: 'board' as const,
+        author: { type: 'board' as const },
+        content: `message ${index}`,
+        runId: null,
+        error: null,
+        createdAt: new Date(start + index),
+      })),
+    );
+    const { messages } = (await ctx.request({ method: 'GET', url: `/api/chats/${chatId}` })).json();
+    expect(messages).toHaveLength(MAX_MESSAGES);
+    expect(messages[0].content).toBe('message 3');
+    expect(messages.at(-1).content).toBe(`message ${MAX_MESSAGES + 2}`);
+  });
+
+  it('keeps starting other chat turns when one of them fails', async () => {
+    const { chatId } = await createLeadChat(ctx, fx);
+    const other = (
+      await ctx.request({ method: 'POST', url: '/api/chats', payload: { title: 'Second' } })
+    ).json().id as string;
+    for (const id of [chatId, other]) {
+      await ctx.request({
+        method: 'POST',
+        url: `/api/chats/${id}/messages`,
+        payload: { content: 'Hello' },
+      });
+    }
+    const transaction = vi
+      .spyOn(ctx.database, 'inTransaction')
+      .mockRejectedValueOnce(new Error('write conflict'));
+    expect(await fx.scheduler.processChatTurns()).toEqual({ run: 1, drop: 0, defer: 0 });
+    transaction.mockRestore();
+    const first = (await ctx.request({ method: 'GET', url: `/api/chats/${chatId}` })).json().chat;
+    expect(first).toMatchObject({ activeRunId: null, pendingTurn: { reason: 'chat' } });
+    expect(await fx.scheduler.processChatTurns()).toEqual({ run: 1, drop: 0, defer: 0 });
   });
 
   it('archives a chat and then refuses messages', async () => {

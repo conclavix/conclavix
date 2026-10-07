@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type { Chat } from '../src/chats/api';
 
-const { get } = vi.hoisted(() => ({ get: vi.fn() }));
-vi.mock('../src/chats/api', () => ({ chatApi: { get } }));
+const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+vi.mock('../src/chats/api', () => ({ chatApi: { get, post } }));
 const { useChatsStore } = await import('../src/stores/chats');
 
 const chat = (id: string): Chat => ({
@@ -26,6 +26,37 @@ describe('chats store', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     get.mockReset();
+    post.mockReset();
+  });
+
+  it('keeps the answer to a message out of a chat the view moved to', async () => {
+    get.mockImplementation(async (id: string) => ({ chat: chat(id), messages: [] }));
+    let answer: (value: unknown) => void = () => undefined;
+    post.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    const store = useChatsStore();
+    await store.open('a');
+    const sending = store.post('Hello');
+    await store.open('b');
+    answer({
+      message: {
+        id: 'm1',
+        chatId: 'a',
+        role: 'board',
+        author: { type: 'board' },
+        content: 'Hello',
+        runId: null,
+        error: null,
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+      chat: {
+        ...chat('a'),
+        pendingTurn: { reason: 'chat', requestedAt: '', notBefore: null, deferReason: null },
+      },
+    });
+    await sending;
+    expect(store.current?.id).toBe('b');
+    expect(store.messages).toEqual([]);
+    expect(store.items.find((item) => item.id === 'a')?.pendingTurn).not.toBeNull();
   });
 
   it('drops an answer for a chat the view has moved away from', async () => {
