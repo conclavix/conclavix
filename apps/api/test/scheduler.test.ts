@@ -402,6 +402,18 @@ describe('scheduler', () => {
       expect(await fx.pendingWakes()).toBe(0);
     });
 
+    it('keeps the issue in review when its assignee could not run', async () => {
+      const { agent, parent, first } = await waitingParent();
+      await ctx.request({
+        method: 'PATCH',
+        url: `/api/agents/${agent.id}`,
+        payload: { status: 'paused' },
+      });
+      await fx.patch(first.key, { status: 'done' });
+      expect(await issueDoc(parent.id)).toMatchObject({ status: 'in_review' });
+      expect(await fx.pendingWakes()).toBe(0);
+    });
+
     it('resumes the parent when a board edit closes its sub-issue', async () => {
       const { parent, first } = await waitingParent();
       const url = `/api/projects/${fx.projectId}/board`;

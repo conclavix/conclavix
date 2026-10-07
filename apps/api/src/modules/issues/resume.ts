@@ -1,6 +1,7 @@
 import type { ClientSession, ObjectId } from 'mongodb';
 import { CLOSED_ISSUE_STATUSES, type WakeReason } from '@conclavix/core';
 import type { Collections, IssueDoc } from '../../db.js';
+import { projectAccessChecker } from '../projects/agent-access.js';
 import { requestWake } from '../scheduler/wakes.js';
 import { lockBoard, placeChangedIssue } from './columns.js';
 
@@ -8,13 +9,35 @@ type Waiting = IssueDoc & { assigneeAgentId: NonNullable<IssueDoc['assigneeAgent
 
 const waitingFilter = { status: 'in_review', assigneeAgentId: { $ne: null } } as const;
 
-/** Move an in_review issue to in_progress (its board column follows) and wake its assignee. */
+/** True when the assignee could run now: it exists, is active and is enabled in the project. */
+async function canRun(
+  collections: Collections,
+  issue: Waiting,
+  session: ClientSession,
+): Promise<boolean> {
+  const agent = await collections.agents.findOne(
+    { _id: issue.assigneeAgentId },
+    { projection: { status: 1, projectDefault: 1 }, session },
+  );
+  if (!agent || agent.status !== 'active') {
+    return false;
+  }
+  return (await projectAccessChecker(collections, issue.projectId, session)).isEnabled(agent);
+}
+
+/**
+ * Move an in_review issue to in_progress (its board column follows) and wake its assignee.
+ * An assignee that could not run keeps the issue in_review, so the board still sees it.
+ */
 async function resume(
   collections: Collections,
   issue: Waiting,
   reason: WakeReason,
   session: ClientSession,
-): Promise<ObjectId[]> {
+): Promise<boolean> {
+  if (!(await canRun(collections, issue, session))) {
+    return false;
+  }
   const { columns } = await lockBoard(collections, issue.projectId, session);
   const placement = placeChangedIssue(columns, issue, { status: 'in_progress' });
   const moved = await collections.issues.updateOne(
@@ -22,11 +45,11 @@ async function resume(
     { $set: { ...placement, updatedAt: new Date() }, $inc: { progress: 1 } },
     { session },
   );
-  if (moved.modifiedCount === 1) {
-    await requestWake(collections, issue.assigneeAgentId, issue._id, reason, session);
-    return [issue._id];
+  if (moved.modifiedCount !== 1) {
+    return false;
   }
-  return [];
+  await requestWake(collections, issue.assigneeAgentId, issue._id, reason, session);
+  return true;
 }
 
 /**
@@ -36,8 +59,8 @@ async function resume(
  * same agent and issue absorbs further ones, so several closures at once still queue one wake.
  * The waiting agent may also have set in_review for a board decision; it is woken once per
  * closure and sets in_review again if it still needs the board.
- * Returns the resumed issues; the post-commit wakes must skip them, since their wake may already
- * have been picked up and a second one would start a second run.
+ * Returns the resumed issues: their wake is already queued, so the post-commit unblocked wakes
+ * must leave them out, or a wake picked up in between would be followed by a second run.
  */
 export async function resumeWaitingIssues(
   collections: Collections,
@@ -50,8 +73,8 @@ export async function resumeWaitingIssues(
       { _id: closed.parentId, ...waitingFilter },
       { session },
     )) as Waiting | null;
-    if (parent) {
-      resumed.push(...(await resume(collections, parent, 'subissue_closed', session)));
+    if (parent && (await resume(collections, parent, 'subissue_closed', session))) {
+      resumed.push(parent._id);
     }
   }
   const blocked = (await collections.issues
@@ -62,8 +85,8 @@ export async function resumeWaitingIssues(
       { _id: { $in: issue.blockedBy }, status: { $nin: [...CLOSED_ISSUE_STATUSES] } },
       { session },
     );
-    if (open === 0) {
-      resumed.push(...(await resume(collections, issue, 'unblocked', session)));
+    if (open === 0 && (await resume(collections, issue, 'unblocked', session))) {
+      resumed.push(issue._id);
     }
   }
   return resumed;

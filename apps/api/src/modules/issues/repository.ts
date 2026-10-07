@@ -169,7 +169,9 @@ export class IssueRepository {
       graph: input.parentId !== undefined || input.blockedBy !== undefined || moves,
       orgChart: input.assigneeAgentId !== undefined || moves,
     };
-    const { before, after, resumed } = await this.transact(needs, async (session) => {
+    let resumed: ObjectId[] = [];
+    const { before, after } = await this.transact(needs, async (session) => {
+      resumed = [];
       const current = await this.collections.issues.findOne({ _id: id }, { session });
       if (!current) {
         throw notFound('Issue');
@@ -192,13 +194,12 @@ export class IssueRepository {
       if (updated && within) {
         await within(session, current, updated);
       }
-      let resumed: ObjectId[] = [];
       if (updated && isClosed(updated.status) && !isClosed(current.status)) {
         // First, so a delegator waiting in_review gets this wake instead of a notification.
         resumed = await resumeWaitingIssues(this.collections, updated, session);
         await reportClosure(this.collections, updated, session);
       }
-      return { before: current, after: updated, resumed };
+      return { before: current, after: updated };
     });
     if (!after) {
       throw notFound('Issue');
