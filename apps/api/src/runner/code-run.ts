@@ -1,7 +1,13 @@
 import type { RunCode } from '@conclavix/core';
 import type { AgentDoc, Database, IssueDoc, RunDoc } from '../db.js';
 import type { AuditLog } from '../modules/audit/audit.js';
-import type { CodeWorkspace } from '../modules/workspace/commit.js';
+import type { CloneReconcile, CodeWorkspace } from '../modules/workspace/commit.js';
+import {
+  DEFAULT_AGENT_EMAIL_DOMAIN,
+  agentIdentity,
+  oneLine,
+  type CommitIdentity,
+} from '../modules/workspace/identity.js';
 import { recordIssueWorkspace } from '../modules/workspace/record.js';
 import type { AdapterResult } from './adapters/types.js';
 import type { CodeRunTarget } from './adapters/sandbox.js';
@@ -21,13 +27,6 @@ const SUBJECT_LENGTH = 72;
 const BODY_LENGTH = 4000;
 
 const short = (sha: string | null): string => (sha ? sha.slice(0, 12) : 'none');
-
-/** One line of plain text: control characters become spaces. */
-const oneLine = (text: string): string =>
-  text
-    .replace(/\p{Cc}/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
 
 /**
  * The runner's commit message: a subject from the first line of the agent's result (or a fixed
@@ -58,11 +57,11 @@ export function commitMessage(
 }
 
 /** Author of a coding agent's commits: `Conclavix <agent name>` with a per-agent address. */
-export function commitAuthor(agent: Pick<AgentDoc, '_id' | 'name'>) {
-  return {
-    name: `Conclavix ${oneLine(agent.name)}`,
-    email: `agent-${agent._id.toHexString()}@conclavix.invalid`,
-  };
+export function commitAuthor(
+  agent: Pick<AgentDoc, '_id' | 'name'>,
+  domain: string = DEFAULT_AGENT_EMAIL_DOMAIN,
+) {
+  return agentIdentity(agent, domain);
 }
 
 /**
@@ -82,11 +81,19 @@ export class CodeRuns {
       Promise.resolve({ ok: false, detail: 'no sandbox helper' }),
   ) {}
 
+  /** The identity reconciling merges are written with: the run's agent, else the system. */
+  private author(agent: Pick<AgentDoc, '_id' | 'name'> | null): CommitIdentity {
+    return agent
+      ? commitAuthor(agent, this.workspace.agentEmailDomain)
+      : { name: 'Conclavix', email: `conclavix@${this.workspace.agentEmailDomain}` };
+  }
+
   /** Make sure the issue has its clone and branch, and note the branch tip the run starts from. */
   async prepare(
     issue: IssueDoc,
     skillsDir: string | null,
     events: RunEventRecorder,
+    agent: Pick<AgentDoc, '_id' | 'name'> | null = null,
   ): Promise<CodeRunContext> {
     const projectId = issue.projectId.toHexString();
     let info;
@@ -104,6 +111,15 @@ export class CodeRuns {
       info = await this.workspace.createIssueWorkspace(projectId, issue.key);
     }
     await recordIssueWorkspace(this.database, this.audit, issue, info, { type: 'system' });
+    if (!info.created) {
+      // The server branch may have moved since the last run (an integration merge into it).
+      const reconciled = await this.workspace.reconcileClone(
+        projectId,
+        issue.key,
+        this.author(agent),
+      );
+      describeReconcile(reconciled, info.branch, events);
+    }
     const base = await this.workspace.branchTip(projectId, issue.key);
     events.record(
       'runner',
@@ -167,7 +183,7 @@ export class CodeRuns {
   ): Promise<void> {
     try {
       const commit = await this.workspace.commitIssueWork(context.projectId, context.issueKey, {
-        author: commitAuthor(agent),
+        author: commitAuthor(agent, this.workspace.agentEmailDomain),
         message: redact(commitMessage(agent, issue, run, result)),
         base: context.base,
       });
@@ -188,11 +204,50 @@ export class CodeRuns {
       return;
     }
     try {
+      const server = await this.workspace.branchTip(context.projectId, context.issueKey);
+      if (server !== context.base) {
+        // Something was merged into the issue branch on the server during the run.
+        const reconciled = await this.workspace.reconcileClone(
+          context.projectId,
+          context.issueKey,
+          this.author(agent),
+        );
+        describeReconcile(reconciled, context.branch, events);
+        if (reconciled.head) code.head = reconciled.head;
+        if (reconciled.action === 'preserved') {
+          code.error = `the run's work conflicts with changes merged into ${context.branch} during the run; it was kept on branch ${reconciled.preservedBranch ?? ''} and ${context.branch} continues from the server tip`;
+        }
+      }
+    } catch (error) {
+      code.error = redact(`reconciling with the server branch failed: ${errorText(error)}`);
+      return;
+    }
+    try {
       await this.workspace.syncIssueBranch(context.projectId, context.issueKey, false);
       code.synced = true;
     } catch (error) {
       code.error = redact(`sync failed: ${errorText(error)}`);
     }
+  }
+}
+
+/** One run event for what reconciling a clone with its server branch did. */
+function describeReconcile(result: CloneReconcile, branch: string, events: RunEventRecorder): void {
+  if (result.action === 'none') return;
+  const from = `${short(result.clone)} -> ${short(result.head)}`;
+  if (result.action === 'fast_forward') {
+    events.record('runner', `workspace ${branch} fast-forwarded to the server tip (${from})`);
+  } else if (result.action === 'merged') {
+    events.record(
+      'runner',
+      `workspace ${branch} merged with the server tip ${short(result.server)} (${from})`,
+    );
+  } else {
+    const files = (result.conflicts ?? []).map((file) => file.path).slice(0, 20);
+    events.record(
+      'runner',
+      `workspace ${branch} conflicts with the server tip ${short(result.server)} in ${files.join(', ')}; its work was kept on ${result.preservedBranch ?? ''} and the workspace was reset to the server tip`,
+    );
   }
 }
 

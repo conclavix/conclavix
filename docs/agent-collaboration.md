@@ -22,6 +22,15 @@ their documents do not.
 documents; `truncated: true` says the list was cut. It returns no document bodies; read them with
 `read_document` and the issue key.
 
+## Integrating branches
+
+Agents with the git integration permission (off by default, set per agent by admins) merge
+branches of their project into an issue branch with `merge_branches`, preview that with
+`get_merge_status` and move `main` forward to a reviewed branch with `fast_forward_main`. The
+target of a merge is the branch of the own issue or of an issue assigned to the agent; conflicts
+are refused with the conflicting files and change nothing. This replaces asking the board to
+merge `cvx/<A>` and `cvx/<B>` into `cvx/<C>`. Details and limits: [Workspace](workspace.md#git-integration-merge-tools).
+
 ## Screenshots in documents and comments
 
 Coding agents save screenshots in the repository under `docs/screenshots/<module>/` (the runner

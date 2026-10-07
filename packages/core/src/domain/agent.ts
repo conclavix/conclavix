@@ -86,6 +86,13 @@ export const projectDefaultSchema = z.enum(['enabled', 'disabled']);
  */
 export const codeAccessSchema = z.enum(['none', 'write']);
 
+/**
+ * Whether the agent may integrate branches of its project's repository through the agent API:
+ * merge branches into an issue branch (`merge_branches`) and fast-forward main
+ * (`promote_branch`). Off by default; agents stored before this field count as false.
+ */
+export const gitIntegrationSchema = z.boolean();
+
 export const createAgentSchema = z.strictObject({
   name: z.string().trim().min(1).max(80),
   role: z.string().trim().min(1).max(80),
@@ -97,6 +104,7 @@ export const createAgentSchema = z.strictObject({
   skillIds: skillIdsSchema.default([]),
   projectDefault: projectDefaultSchema.default('enabled'),
   codeAccess: codeAccessSchema.default('none'),
+  gitIntegration: gitIntegrationSchema.default(false),
 });
 
 export const updateAgentSchema = z
@@ -112,6 +120,7 @@ export const updateAgentSchema = z
     skillIds: skillIdsSchema,
     projectDefault: projectDefaultSchema,
     codeAccess: codeAccessSchema,
+    gitIntegration: gitIntegrationSchema,
   })
   .partial()
   .refine((value) => Object.keys(value).length > 0, 'at least one field is required');
@@ -137,6 +146,7 @@ export interface Agent {
   skillIds: string[];
   projectDefault: ProjectDefault;
   codeAccess: CodeAccess;
+  gitIntegration: boolean;
   avatarUrl: string | null;
   createdAt: Date;
   updatedAt: Date;

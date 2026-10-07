@@ -32,6 +32,7 @@ async function codingAgents(
   const { CodeWorkspace } = await import('./modules/workspace/commit.js');
   const workspace = new CodeWorkspace(resolve(config.WORKSPACE_ROOT), {
     gitBin: config.GIT_BIN,
+    agentEmailDomain: config.AGENT_EMAIL_DOMAIN,
     limits: { archiveTimeoutMs: COMMIT_GIT_TIMEOUT_MS },
   });
   log.info({ helper, workspaceRoot: workspace.root }, 'coding agents enabled');

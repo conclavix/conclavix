@@ -3,12 +3,35 @@ import { lstat, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { issueBranchName } from '@conclavix/core';
-import { notFound } from '../../errors.js';
+import { conflict, notFound } from '../../errors.js';
 import type { GitCallOptions } from './git.js';
 import { GitError } from './git.js';
+import { safeIdent, type CommitIdentity } from './identity.js';
+import type { ConflictFile } from './merge.js';
 import { removeSandboxPlaceholders } from './placeholders.js';
 import { EMPTY_TREE, NO_REF, OBJECT_ID, isMissing } from './repo-base.js';
 import { Workspace } from './service.js';
+
+export { safeIdent };
+
+/** Where the runner fetches the server's issue branch into a clone while reconciling the two. */
+const SERVER_TIP_REF = 'refs/conclavix/server';
+
+export interface CloneReconcile {
+  /**
+   * none: nothing to do (the clone holds the server tip or is ahead of it); fast_forward: the
+   * clone moved to the server tip; merged: both lines were merged; preserved: the merge
+   * conflicted, the clone's tip is kept as `preservedBranch` and the clone was reset.
+   */
+  action: 'none' | 'fast_forward' | 'merged' | 'preserved';
+  server: string | null;
+  clone: string | null;
+  /** The clone's tip afterwards. */
+  head: string | null;
+  merge?: string;
+  preservedBranch?: string;
+  conflicts?: ConflictFile[];
+}
 
 /**
  * The only configuration an issue clone keeps when the runner commits in it; whatever an agent
@@ -86,16 +109,6 @@ export function sumNumstat(output: string): DiffStats {
     stats.deletions += /^\d+$/.test(removed) ? Number(removed) : 0;
   }
   return stats;
-}
-
-/** An identity git accepts: no angle brackets, newlines or other control characters. */
-export function safeIdent(value: string, fallback: string): string {
-  const cleaned = value
-    .replace(/[<>\p{Cc}]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 100);
-  return cleaned === '' ? fallback : cleaned;
 }
 
 /**
@@ -184,6 +197,181 @@ export class CodeWorkspace extends Workspace {
         await rm(excludes, { recursive: true, force: true });
       }
     });
+  }
+
+  /**
+   * Bring an issue clone and the server's `cvx/<KEY>` together after the server branch moved
+   * without the clone (an integration merge into it): a clone behind the server is
+   * fast-forwarded (a checkout that refuses to overwrite uncommitted changes); a clone that has
+   * commits the server lacks and lacks the server's is merged with it on the server side (no-ff,
+   * first parent: the clone's line, by `author`) and then fast-forwarded. When that merge
+   * conflicts, the clone's tip is kept as the branch `conflict/<KEY>/<sha>` in the project
+   * repository and the clone is reset to the server tip, so the issue continues from the server
+   * branch and nothing is lost. The server branch only ever moves forward, with compare-and-swap.
+   * Runs only while no sandbox works in the clone.
+   */
+  async reconcileClone(
+    projectId: string,
+    issueKey: string,
+    author: CommitIdentity,
+  ): Promise<CloneReconcile> {
+    const branch = await this.assertBranchName(issueBranchName(issueKey));
+    const ref = `refs/heads/${branch}`;
+    await this.ensureRepo(projectId);
+    return this.queue.run(`workspace:${projectId}:${issueKey}`, async () => {
+      const gitDir = await this.cloneGitDir(projectId, issueKey);
+      const server = await this.commitOf(projectId, ref);
+      await this.resetCloneConfig(gitDir);
+      const git = this.cloneGit(gitDir);
+      const clone = await git.commit(ref);
+      const unchanged = { action: 'none', server, clone, head: clone } as const;
+      if (!server || !clone || server === clone) return unchanged;
+      await this.fetchIntoClone(projectId, git, ref);
+      try {
+        if (await git.isAncestor(server, clone)) return unchanged;
+        if (await git.isAncestor(clone, server)) {
+          await this.checkoutClone(git, gitDir, ref, clone, server, false);
+          return { action: 'fast_forward', server, clone, head: server };
+        }
+        return await this.mergeDiverged(projectId, issueKey, gitDir, git, {
+          ref,
+          branch,
+          server,
+          clone,
+          author,
+        });
+      } finally {
+        await git.run(['update-ref', '-d', SERVER_TIP_REF]).catch(() => undefined);
+      }
+    });
+  }
+
+  /** Merge a diverged clone with the server branch on the server side; see reconcileClone. */
+  private async mergeDiverged(
+    projectId: string,
+    issueKey: string,
+    gitDir: string,
+    git: ReturnType<CodeWorkspace['cloneGit']>,
+    tips: { ref: string; branch: string; server: string; clone: string; author: CommitIdentity },
+  ): Promise<CloneReconcile> {
+    const { ref, branch, server, clone, author } = tips;
+    const incoming = `refs/conclavix/incoming/${issueKey}`;
+    await this.fromClone(projectId, gitDir, [
+      'fetch',
+      '--no-tags',
+      '--no-write-fetch-head',
+      '--no-recurse-submodules',
+      '--no-auto-gc',
+      gitDir,
+      `+${ref}:${incoming}`,
+    ]);
+    try {
+      const merged = await this.mergeTrees(projectId, clone, server);
+      if (merged.conflicts.length > 0) {
+        const preserved = `conflict/${issueKey}/${clone.slice(0, 12)}`;
+        const existing = await this.commitOf(projectId, `refs/heads/${preserved}`);
+        if (existing !== clone) await this.moveBranch(projectId, preserved, clone, existing);
+        await this.checkoutClone(git, gitDir, ref, clone, server, true);
+        return {
+          action: 'preserved',
+          server,
+          clone,
+          head: server,
+          preservedBranch: preserved,
+          conflicts: merged.conflicts,
+        };
+      }
+      const message = [
+        `Merge the server's ${branch} into the workspace's work`,
+        '',
+        `The server branch moved to ${server.slice(0, 12)} while the workspace was at`,
+        `${clone.slice(0, 12)}; both lines are kept.`,
+        '',
+      ].join('\n');
+      const commit = await this.writeCommit(
+        projectId,
+        merged.tree,
+        [clone, server],
+        message,
+        author,
+      );
+      await this.moveBranch(projectId, branch, commit, server);
+      await this.fetchIntoClone(projectId, git, ref);
+      await this.checkoutClone(git, gitDir, ref, clone, commit, false);
+      return { action: 'merged', server, clone, head: commit, merge: commit };
+    } finally {
+      await this.run(projectId, ['update-ref', '-d', incoming]).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Fetch the server's `cvx/<KEY>` into the clone as SERVER_TIP_REF. git runs in the clone (its
+   * configuration was just replaced); the other side is the bare repository, which belongs to
+   * the API user, so it is marked as a safe directory for this call.
+   */
+  private async fetchIntoClone(
+    projectId: string,
+    git: ReturnType<CodeWorkspace['cloneGit']>,
+    ref: string,
+  ): Promise<void> {
+    const repo = this.repoDir(projectId);
+    await this.withSafeDirectory(repo, (env) =>
+      git.run(
+        [
+          '-c',
+          'protocol.file.allow=always',
+          'fetch',
+          '--no-tags',
+          '--no-write-fetch-head',
+          '--no-recurse-submodules',
+          '--no-auto-gc',
+          repo,
+          `+${ref}:${SERVER_TIP_REF}`,
+        ],
+        { env },
+      ),
+    );
+  }
+
+  /**
+   * Move the clone's branch from `from` to `to` and update the work tree. Without `force` this is
+   * git's two-tree checkout, which refuses to overwrite uncommitted changes; with `force` the
+   * work tree's tracked files become `to` exactly. A fresh index is built and moved into place.
+   */
+  private async checkoutClone(
+    git: ReturnType<CodeWorkspace['cloneGit']>,
+    gitDir: string,
+    ref: string,
+    from: string,
+    to: string,
+    force: boolean,
+  ): Promise<void> {
+    const index = join(gitDir, `cvx-index-${randomBytes(6).toString('hex')}`);
+    const env = { GIT_INDEX_FILE: index };
+    try {
+      await git.run(['read-tree', from], { env });
+      if (force) {
+        await git.run(['read-tree', '--reset', '-u', to], { env });
+      } else {
+        await git.run(['update-index', '-q', '--refresh'], { env, allowExitCodes: [1] });
+        try {
+          await git.run(['read-tree', '-m', '-u', from, to], { env });
+        } catch (error) {
+          if (error instanceof GitError && error.reason === 'exit') {
+            throw conflict(
+              `the workspace of ${ref.slice('refs/heads/'.length)} has uncommitted changes that the server branch would overwrite`,
+              { hint: 'an admin can remove the workspace; the next run clones the server branch' },
+            );
+          }
+          throw error;
+        }
+      }
+      await git.run(['update-ref', ref, to, from]);
+      await git.run(['symbolic-ref', 'HEAD', ref]);
+      await rename(index, join(gitDir, 'index'));
+    } finally {
+      await rm(index, { force: true });
+    }
   }
 
   private async resetCloneConfig(gitDir: string): Promise<void> {
