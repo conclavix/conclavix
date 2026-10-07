@@ -7,6 +7,8 @@ import { assertSafeConnectionUrl, connectionAddressBlocked } from './net.js';
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_TOOL_PAGES = 10;
+/** Tool names kept for the board; the count covers all of them. */
+const MAX_TOOLS = 200;
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
 
 interface PostResult {
@@ -27,7 +29,9 @@ export interface McpProbe {
   serverName: string | null;
   serverVersion: string | null;
   protocolVersion: string | null;
+  /** The first tool names, at most 200. */
   tools: string[];
+  toolCount: number;
 }
 
 export class McpProbeError extends Error {
@@ -215,6 +219,7 @@ export async function probeMcpServer(options: McpProbeOptions): Promise<McpProbe
   if (initialized.status >= 400) checkStatus(initialized, 'initialized');
 
   const tools: string[] = [];
+  let toolCount = 0;
   let cursor: string | undefined;
   for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
     const listed = await post(
@@ -225,7 +230,10 @@ export async function probeMcpServer(options: McpProbeOptions): Promise<McpProbe
     );
     checkStatus(listed, 'tools/list');
     const result = toolsSchema.parse(messageFor(listed, 2 + page));
-    tools.push(...result.tools.map((tool) => tool.name.slice(0, 128)));
+    tools.push(
+      ...result.tools.slice(0, MAX_TOOLS - tools.length).map((tool) => tool.name.slice(0, 128)),
+    );
+    toolCount += result.tools.length;
     cursor = result.nextCursor;
     if (!cursor) break;
   }
@@ -234,5 +242,6 @@ export async function probeMcpServer(options: McpProbeOptions): Promise<McpProbe
     serverVersion: info.serverInfo?.version?.slice(0, 40) ?? null,
     protocolVersion,
     tools,
+    toolCount,
   };
 }

@@ -26,7 +26,7 @@ const credentialValueSchema = z
   .string()
   .min(1)
   .max(CONNECTION_LIMITS.credentialValueLength)
-  .regex(/^[^\r\n\0]*$/, 'must be a single line');
+  .regex(/^[\t\x20-\x7e]*$/, 'printable ASCII on a single line (an HTTP header value)');
 
 const credentialsSchema = z
   .record(z.string().min(1).max(64), credentialValueSchema)

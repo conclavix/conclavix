@@ -70,11 +70,11 @@ export const mcpHttpType: ConnectionType<McpHttpConfig> = {
         timeoutMs: context.timeoutMs,
         clientVersion: clientVersion.value,
       });
-      const count = probe.tools.length;
+      const count = probe.toolCount;
       return {
         ok: true,
         summary: `Connected${probe.serverName ? ` to ${probe.serverName}` : ''}: ${count} ${count === 1 ? 'tool' : 'tools'}`,
-        details: { ...probe, toolCount: count },
+        details: { ...probe },
       };
     } catch (error) {
       if (error instanceof McpProbeError) return { ok: false, summary: error.message };
