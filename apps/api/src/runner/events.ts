@@ -7,6 +7,11 @@ import { RECORDER_TEXT_CAP, REDACTION_FAILED, Redactor, errorKind } from './reda
 const log = pino({ name: 'runner' });
 
 const FLUSH_SIZE = 50;
+/**
+ * Longest time an event waits in the buffer, so the live view and a chat reply follow a run while
+ * it is going instead of in batches of FLUSH_SIZE.
+ */
+export const FLUSH_INTERVAL_MS = 1000;
 
 export interface RecorderLimits {
   /** Ordinary events stored per run; later ones are dropped and counted. */
@@ -31,6 +36,7 @@ export class RunEventRecorder {
   private reported = 0;
   private buffer: RunEventDoc[] = [];
   private pending: Promise<void> = Promise.resolve();
+  private timer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly collections: Collections,
@@ -100,6 +106,9 @@ export class RunEventRecorder {
     );
     if (this.buffer.length >= FLUSH_SIZE) {
       void this.flush();
+    } else if (!this.timer) {
+      this.timer = setTimeout(() => void this.flush(), FLUSH_INTERVAL_MS);
+      this.timer.unref();
     }
   }
 
@@ -146,6 +155,10 @@ export class RunEventRecorder {
   }
 
   flush(): Promise<void> {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
     const batch = this.buffer;
     this.buffer = [];
     if (batch.length > 0) {

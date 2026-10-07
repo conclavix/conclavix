@@ -7,7 +7,7 @@ import { parseStreamLine, type StreamSummary } from '../src/runner/adapters/clau
 import { RunEventRecorder } from '../src/runner/events.js';
 import { RunWorker } from '../src/runner/run-worker.js';
 import { createTestContext, type TestContext } from './helpers.js';
-import { createFixture } from './scheduler-helpers.js';
+import { createFixture, issueRun } from './scheduler-helpers.js';
 
 const logs = vi.hoisted(() => ({ error: vi.fn() }));
 vi.mock('pino', () => ({ default: () => ({ error: logs.error }) }));
@@ -81,7 +81,7 @@ describe('event persistence failures', () => {
     const agent = await fx.agent();
     const issue = await fx.issue({ title: 'preserve cost', assigneeAgentId: agent.id });
     await fx.scheduler.processPendingWakes();
-    const run = fx.dispatcher.runs.find((run) => run.issueId.toHexString() === issue.id);
+    const run = fx.dispatcher.runs.find((run) => run.issueId?.toHexString() === issue.id);
     if (!run) throw new Error('expected run');
     if (failure === 'insert') {
       vi.spyOn(ctx.database.collections.runEvents, 'insertMany').mockRejectedValueOnce(
@@ -105,7 +105,9 @@ describe('event persistence failures', () => {
       tokenHash: null,
       overBudget: true,
     });
-    expect(await ctx.database.collections.issues.findOne({ _id: run.issueId })).toMatchObject({
+    expect(
+      await ctx.database.collections.issues.findOne({ _id: issueRun(run).issueId }),
+    ).toMatchObject({
       checkoutRunId: null,
     });
   });

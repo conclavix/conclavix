@@ -34,6 +34,9 @@ export const KNOWN_ACTIONS = [
   'skill_source.updated',
   'skill_source.deleted',
   'skill.imported',
+  'chat.plan_approved',
+  'chat.project_created',
+  'chat.issue_created',
 ] as const;
 
 export interface AuditFilters {

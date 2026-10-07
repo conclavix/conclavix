@@ -5,7 +5,8 @@ import type { CodeRunTarget, SandboxStatus } from './sandbox.js';
 export interface AdapterRunInput {
   run: RunDoc;
   agent: AgentDoc;
-  issue: IssueDoc;
+  /** Null for chat runs. */
+  issue: IssueDoc | null;
   prompt: string;
   workspace: string;
   mcpUrl: string;

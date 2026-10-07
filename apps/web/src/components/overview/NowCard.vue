@@ -9,7 +9,7 @@ const live = useLiveStore();
 const running = computed(() => live.activeRuns.filter((run) => run.status === 'running'));
 const queued = computed(() => live.activeRuns.filter((run) => run.status === 'queued'));
 const agentName = (id?: string): string => (id && live.state.agents[id]?.name) || 'unknown agent';
-const issueOf = (id?: string) => (id ? live.state.issues[id] : undefined);
+const issueOf = (id?: string | null) => (id ? live.state.issues[id] : undefined);
 const waiting = computed(() => queued.value.length + props.pendingWakes);
 </script>
 

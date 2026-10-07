@@ -1,11 +1,19 @@
 import { ObjectId } from 'mongodb';
-import type { RunDoc } from '../src/db.js';
+import type { IssueRunDoc, RunDoc } from '../src/db.js';
 import {
   Scheduler,
   type RunDispatcher,
   type SchedulerOptions,
 } from '../src/modules/scheduler/scheduler.js';
 import type { TestContext } from './helpers.js';
+
+/** The run as an issue run; fails the test for a chat run. */
+export function issueRun(run: RunDoc): IssueRunDoc {
+  if (!run.issueId) {
+    throw new Error('expected an issue run');
+  }
+  return { ...run, issueId: run.issueId };
+}
 
 export class RecordingDispatcher implements RunDispatcher {
   readonly runs: RunDoc[] = [];

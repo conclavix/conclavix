@@ -1,9 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import type { Database } from '../../db.js';
+import { isChatRun, type Database } from '../../db.js';
+import { AuditLog } from '../audit/audit.js';
+import { registerChatTools } from './chat-tools.js';
 import { resolveRunToken } from '../runs/tokens.js';
-import { loadScope } from './scope.js';
+import { loadChatScope, loadScope } from './scope.js';
 import { registerAgentTools } from './tools.js';
 import { registerMemoryTools } from './memory-tools.js';
 import { registerCodeTools } from './code-tools.js';
@@ -23,6 +25,7 @@ export function registerAgentApi(
   memories: MemoryService,
   reader: RepoReader | null = null,
 ): void {
+  const audit = new AuditLog(database.collections, app.log);
   app.post('/mcp', async (request, reply) => {
     const header = request.headers.authorization ?? '';
     const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
@@ -30,12 +33,20 @@ export function registerAgentApi(
     if (!run) {
       return reply.status(401).send(unauthorized);
     }
-    const scope = await loadScope(database, run);
     const server = new McpServer({ name: 'conclavix', version });
-    registerAgentTools(server, database, scope);
-    registerMemoryTools(server, memories, scope);
-    if (reader) {
-      registerCodeTools(server, database, scope, reader);
+    if (isChatRun(run)) {
+      const scope = await loadChatScope(database, run);
+      registerChatTools(server, database, scope, memories, audit, reader);
+    } else {
+      const scope = await loadScope(database, run);
+      registerAgentTools(server, database, scope);
+      registerMemoryTools(server, memories, () => ({
+        agentId: scope.agent._id.toHexString(),
+        projectId: scope.issue.projectId.toHexString(),
+      }));
+      if (reader) {
+        registerCodeTools(server, database, scope, reader);
+      }
     }
     const transport = new StreamableHTTPServerTransport({ enableJsonResponse: true });
     let closing: Promise<void> | undefined;

@@ -1,22 +1,23 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { MemoryService } from '../memory/service.js';
-import type { RunScope } from './scope.js';
+import type { AgentContext, MemoryService } from '../memory/service.js';
+import { guarded } from './results.js';
 
 const text = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
 });
 
-/** Memory tools for a run: read global, project and own memory; write project and own. */
+/**
+ * Memory tools for a run: read global, project and own memory; write project and own. A run
+ * without a project (a chat run about no existing project) reads and writes no project memory.
+ */
 export function registerMemoryTools(
   server: McpServer,
   memories: MemoryService,
-  scope: RunScope,
+  context: () => AgentContext,
+  options: { hasProject: boolean } = { hasProject: true },
 ): void {
-  const context = () => ({
-    agentId: scope.agent._id.toHexString(),
-    projectId: scope.issue.projectId.toHexString(),
-  });
+  const projectNote = options.hasProject ? '' : ' This run has no project: use scope "agent".';
 
   server.registerTool(
     'memory_search',
@@ -56,7 +57,8 @@ export function registerMemoryTools(
       description:
         'Record something that will still matter later: a decision, a pitfall, a rule, how to reach something. ' +
         'Not progress reports. scope "project" is shared with everyone on this project, "agent" is only yours. ' +
-        'Saving the same title again updates that entry instead of adding a new one.',
+        'Saving the same title again updates that entry instead of adding a new one.' +
+        projectNote,
       inputSchema: {
         scope: z.enum(['project', 'agent']),
         title: z.string().trim().min(1).max(200),
@@ -64,15 +66,16 @@ export function registerMemoryTools(
         tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
       },
     },
-    async (input) => {
-      const { memory, created } = await memories.agentSave(context(), input);
-      return text({
-        id: memory.id,
-        scope: memory.scope,
-        title: memory.title,
-        revision: memory.revision,
-        created,
-      });
-    },
+    async (input) =>
+      guarded(async () => {
+        const { memory, created } = await memories.agentSave(context(), input);
+        return {
+          id: memory.id,
+          scope: memory.scope,
+          title: memory.title,
+          revision: memory.revision,
+          created,
+        };
+      }),
   );
 }

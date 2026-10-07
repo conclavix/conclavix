@@ -2,13 +2,22 @@ import pino from 'pino';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { ObjectId } from 'mongodb';
-import type { AgentDoc, Database, IssueDoc, RunDoc } from '../db.js';
+import {
+  isChatRun,
+  type AgentDoc,
+  type ChatRunDoc,
+  type Database,
+  type IssueDoc,
+  type RunDoc,
+} from '../db.js';
 import { AppError } from '../errors.js';
 import type { Scheduler } from '../modules/scheduler/scheduler.js';
 import type { Adapter, AdapterResult } from './adapters/types.js';
 import { RunEventRecorder } from './events.js';
 import { loadPosition } from '../modules/org/position.js';
 import { buildPrompt } from './prompt.js';
+import { buildChatPrompt } from './chat-prompt.js';
+import { recordChatReply } from '../modules/chats/turns.js';
 import { Redactor, errorKind, redactOrWithhold, type KnownSecret } from './redact.js';
 import { loadAgentSkills, materializeSkills } from './skills.js';
 import type { CodeRunContext, CodeRuns } from './code-run.js';
@@ -34,6 +43,9 @@ async function withLocks<T>(keys: readonly string[], work: () => Promise<T>): Pr
     if (workspaceLocks.get(key) === promise) workspaceLocks.delete(key);
   }
 }
+
+/** The workspace directory of an agent's chat runs, apart from its project workspaces. */
+export const CHAT_WORKSPACE = '_chat';
 
 export interface RunWorkerOptions {
   /** Coding agents (code access 'write'); without it their runs fail with an explanation. */
@@ -77,7 +89,16 @@ export class RunWorker {
     if (!run) {
       return null;
     }
-    const issue = await collections.issues.findOne({ _id: run.issueId });
+    if (isChatRun(run)) {
+      // Chat runs never touch code; their workspace only holds the materialised skills.
+      const workspace = join(
+        this.options.workspacesRoot,
+        run.agentId.toHexString(),
+        CHAT_WORKSPACE,
+      );
+      return withLocks([resolve(workspace)], () => this.processLocked(runId, workspace, false));
+    }
+    const issue = run.issueId ? await collections.issues.findOne({ _id: run.issueId }) : null;
     const workspace = join(
       this.options.workspacesRoot,
       run.agentId.toHexString(),
@@ -192,11 +213,28 @@ export class RunWorker {
     redact: (text: string) => string,
     writes: boolean,
   ): Promise<AdapterResult> {
+    const run = await this.database.collections.runs.findOne({ _id: runId });
+    if (!run) {
+      return { status: 'failed', costUsd: 0, error: 'run, agent or issue disappeared' };
+    }
+    if (isChatRun(run)) {
+      return this.executeChat(run, token, events, workspace, redact);
+    }
+    return this.executeIssue(run, token, events, workspace, redact, writes);
+  }
+
+  private async executeIssue(
+    run: RunDoc,
+    token: string,
+    events: RunEventRecorder,
+    workspace: string,
+    redact: (text: string) => string,
+    writes: boolean,
+  ): Promise<AdapterResult> {
     const { collections } = this.database;
-    const run = await collections.runs.findOne({ _id: runId });
-    const agent = run ? await collections.agents.findOne({ _id: run.agentId }) : null;
-    const issue = run ? await collections.issues.findOne({ _id: run.issueId }) : null;
-    if (!run || !agent || !issue) {
+    const agent = await collections.agents.findOne({ _id: run.agentId });
+    const issue = run.issueId ? await collections.issues.findOne({ _id: run.issueId }) : null;
+    if (!agent || !issue) {
       return { status: 'failed', costUsd: 0, error: 'run, agent or issue disappeared' };
     }
     const adapter = this.options.adapters[agent.adapter.type];
@@ -241,6 +279,66 @@ export class RunWorker {
     if (context && codeRuns) {
       await this.finishCode(codeRuns, context, agent, issue, run, result, events, redact);
     }
+    return result;
+  }
+
+  /**
+   * A chat run of the lead: the prompt carries the chat-mode rules, the plan and the conversation;
+   * the run's final text becomes the reply in the chat (redacted like the run log).
+   */
+  private async executeChat(
+    run: ChatRunDoc,
+    token: string,
+    events: RunEventRecorder,
+    workspace: string,
+    redact: (text: string) => string,
+  ): Promise<AdapterResult> {
+    const { collections } = this.database;
+    const [agent, chat] = await Promise.all([
+      collections.agents.findOne({ _id: run.agentId }),
+      collections.chats.findOne({ _id: run.chatId }),
+    ]);
+    if (!agent || !chat) {
+      return { status: 'failed', costUsd: 0, error: 'run, agent or chat disappeared' };
+    }
+    const adapter = this.options.adapters[agent.adapter.type];
+    if (!adapter) {
+      return {
+        status: 'failed',
+        costUsd: 0,
+        error: `adapter ${agent.adapter.type} is not available`,
+      };
+    }
+    const [messages, project] = await Promise.all([
+      collections.chatMessages.find({ chatId: chat._id }).sort({ createdAt: 1, _id: 1 }).toArray(),
+      chat.projectId ? collections.projects.findOne({ _id: chat.projectId }) : null,
+    ]);
+    await mkdir(workspace, { recursive: true });
+    const skills = await loadAgentSkills(collections, agent.skillIds);
+    await materializeSkills(workspace, skills);
+    if (skills.length > 0) {
+      events.record('runner', `skills: ${skills.map((skill) => skill.name).join(', ')}`);
+    }
+    events.record(
+      'runner',
+      `starting ${agent.adapter.type} for chat "${chat.title}" (${run.reason})`,
+    );
+    const result = await adapter.run({
+      run,
+      agent,
+      issue: null,
+      prompt: buildChatPrompt({ agent, chat, messages, project, code: project !== null }),
+      workspace,
+      mcpUrl: this.options.mcpUrl,
+      token,
+      timeoutMs: this.options.timeoutMs,
+      onEvent: (type, text, data) => events.record(type, text, data),
+    });
+    const reply = result.summary ? redact(result.summary) : '';
+    const error = result.status === 'succeeded' ? null : redact(result.error ?? result.status);
+    await recordChatReply(collections, run, reply, error).catch((cause: unknown) =>
+      events.record('runner', `storing the chat reply failed: ${redact(String(cause))}`),
+    );
     return result;
   }
 }

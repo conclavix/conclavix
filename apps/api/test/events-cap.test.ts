@@ -1,6 +1,6 @@
 import { ObjectId } from 'mongodb';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { RunEventRecorder } from '../src/runner/events.js';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { FLUSH_INTERVAL_MS, RunEventRecorder } from '../src/runner/events.js';
 import { Redactor } from '../src/runner/redact.js';
 import { createTestContext, type TestContext } from './helpers.js';
 
@@ -89,5 +89,18 @@ describe('run event cap', () => {
       'finished: one',
       '[log truncated: 1 event dropped after the limit of 2]',
     ]);
+  });
+
+  it('writes buffered events after the flush interval, so a run can be followed live', async () => {
+    const runId = new ObjectId();
+    const recorder = new RunEventRecorder(ctx.database.collections, runId);
+    recorder.record('assistant', 'thinking out loud');
+    expect(await stored(runId)).toHaveLength(0);
+    // No flush() call: the recorder's own timer writes the event.
+    await vi.waitFor(
+      async () =>
+        expect((await stored(runId)).map((event) => event.text)).toEqual(['thinking out loud']),
+      { timeout: FLUSH_INTERVAL_MS + 2000, interval: 100 },
+    );
   });
 });

@@ -9,7 +9,7 @@ import {
   mdiRobotOutline,
   mdiViewDashboardOutline,
 } from '@mdi/js';
-import { mdiFolderMultipleOutline } from '@mdi/js';
+import { mdiChatProcessingOutline, mdiFolderMultipleOutline } from '@mdi/js';
 import { computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useVuetiwatch } from 'vuetiwatch';
@@ -84,6 +84,11 @@ watch(
             :prepend-icon="mdiFolderMultipleOutline"
             title="Projects"
             :to="{ name: 'projects' }"
+          />
+          <v-list-item
+            :prepend-icon="mdiChatProcessingOutline"
+            title="CEO Chat"
+            :to="{ name: 'chats' }"
           />
           <v-list-item :prepend-icon="mdiPulse" title="Live" :to="{ name: 'live' }" exact />
           <v-list-item :prepend-icon="mdiHistory" title="Runs" :to="{ name: 'runs' }" />

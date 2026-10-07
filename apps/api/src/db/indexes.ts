@@ -7,6 +7,27 @@ export const PROCESSED_WAKE_RETENTION_SECONDS = 30 * 24 * 60 * 60;
 
 const CASE_INSENSITIVE = { locale: 'en', strength: 2 } as const;
 
+/** Indexes of board chats with the lead, their messages, plan revisions and chat runs. */
+async function ensureChatIndexes(collections: Collections): Promise<void> {
+  await collections.runs.createIndex(
+    { chatId: 1, createdAt: -1 },
+    { partialFilterExpression: { chatId: { $type: 'objectId' } } },
+  );
+  await collections.chats.createIndex({ status: 1, _id: -1 });
+  await collections.chats.createIndex(
+    { 'pendingTurn.requestedAt': 1 },
+    { partialFilterExpression: { pendingTurn: { $type: 'object' } } },
+  );
+  // Messages are written by the API and the runner, so ids from one second do not sort by time.
+  await collections.chatMessages.createIndex({ chatId: 1, createdAt: 1, _id: 1 });
+  // One reply per chat run: the runner writes it, the scheduler only fills in a missing one.
+  await collections.chatMessages.createIndex(
+    { runId: 1 },
+    { unique: true, partialFilterExpression: { runId: { $type: 'objectId' } } },
+  );
+  await collections.chatPlanRevisions.createIndex({ chatId: 1, revision: 1 }, { unique: true });
+}
+
 /** Create the unique and lookup indexes for all collections. */
 export async function ensureIndexes(collections: Collections): Promise<void> {
   await collections.projects.createIndex({ key: 1 }, { unique: true });
@@ -84,5 +105,6 @@ export async function ensureIndexes(collections: Collections): Promise<void> {
   await collections.audit.createIndex({ targetUserId: 1, at: -1 });
   await collections.audit.createIndex({ action: 1, _id: -1 });
   await collections.audit.createIndex({ 'actor.userId': 1, _id: -1 });
+  await ensureChatIndexes(collections);
   await collections.avatars.createIndex({ 'owner.type': 1, 'owner.id': 1 }, { unique: true });
 }

@@ -36,6 +36,8 @@ import { OrgGraphRepository } from './modules/org/graph.js';
 import { migrateReportsToLinks } from './modules/org/migration.js';
 import { migrateIdleRunLimit } from './modules/scheduler/limits-migration.js';
 import { RunRepository } from './modules/runs/repository.js';
+import { ChatService } from './modules/chats/service.js';
+import { registerChatRoutes } from './modules/chats/routes.js';
 import { SkillRepository } from './modules/skills/repository.js';
 import { registerSkillRoutes } from './modules/skills/routes.js';
 import { AuditLog } from './modules/audit/audit.js';
@@ -224,6 +226,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerCommentRoutes(app, new CommentRepository(options.database));
   registerDocumentRoutes(app, new DocumentRepository(options.database));
   registerRunRoutes(app, new RunRepository(collections));
+  registerChatRoutes(app, new ChatService(options.database, audit));
   registerOverviewRoutes(app, new OverviewService(collections));
   registerSkillRoutes(app, new SkillRepository(options.database));
   registerSkillDirectories(app, options);

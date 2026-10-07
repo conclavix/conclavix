@@ -100,7 +100,7 @@ async function resume(agentId: string): Promise<void> {
           :to="issueLink(run.issueKey)"
         >
           <v-list-item-title>
-            {{ run.agentName }} on {{ run.issueKey ?? 'issue' }}
+            {{ run.agentName }} on {{ run.issueKey ?? (run.chatId ? 'CEO chat' : 'issue') }}
             <v-chip color="error" class="ml-1">{{ run.status.replace('_', ' ') }}</v-chip>
           </v-list-item-title>
           <v-list-item-subtitle>

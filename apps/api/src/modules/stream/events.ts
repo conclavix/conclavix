@@ -2,7 +2,16 @@ import type { ChangeStreamDocument, Document } from 'mongodb';
 import { avatarUrl } from '../avatars/url.js';
 
 export type StreamEventType =
-  'run' | 'run_event' | 'issue' | 'comment' | 'agent' | 'agent_link' | 'org_layout' | 'org';
+  | 'run'
+  | 'run_event'
+  | 'issue'
+  | 'comment'
+  | 'agent'
+  | 'agent_link'
+  | 'org_layout'
+  | 'org'
+  | 'chat'
+  | 'chat_message';
 
 export interface StreamEvent {
   type: StreamEventType;
@@ -18,6 +27,8 @@ const WATCHED: Record<string, StreamEventType> = {
   agent_links: 'agent_link',
   org_layout: 'org_layout',
   org: 'org',
+  board_chats: 'chat',
+  chat_messages: 'chat_message',
 };
 
 /** Collections whose deletions the board sees, as `{ id, deleted: true }`. */
@@ -30,20 +41,67 @@ const hex = (value: unknown): unknown =>
     ? (value as { toHexString(): string }).toHexString()
     : value;
 
+const summarizeRun = (doc: Document): Record<string, unknown> => ({
+  id: hex(doc['_id']),
+  agentId: hex(doc['agentId']),
+  kind: doc['chatId'] ? 'chat' : 'issue',
+  issueId: hex(doc['issueId']) ?? null,
+  chatId: hex(doc['chatId']) ?? null,
+  status: doc['status'],
+  reason: doc['reason'],
+  costUsd: doc['costUsd'],
+  error: doc['error'],
+  startedAt: doc['startedAt'],
+  finishedAt: doc['finishedAt'],
+});
+
+const summarizeChatMessage = (doc: Document): Record<string, unknown> => ({
+  id: hex(doc['_id']),
+  chatId: hex(doc['chatId']),
+  role: doc['role'],
+  author: doc['author'],
+  content: doc['content'],
+  runId: hex(doc['runId']) ?? null,
+  error: doc['error'] ?? null,
+  createdAt: doc['createdAt'],
+});
+
+/** The chat as the board reads it (the full plan included; the board may read it anyway). */
+function summarizeChat(doc: Document): Record<string, unknown> {
+  const plan = doc['plan'] as Document | null;
+  const approval = doc['approval'] as Document | null;
+  return {
+    id: hex(doc['_id']),
+    title: doc['title'],
+    status: doc['status'],
+    leadAgentId: hex(doc['leadAgentId']),
+    projectId: hex(doc['projectId']) ?? null,
+    plan: plan
+      ? {
+          revision: plan['revision'],
+          markdown: plan['markdown'],
+          runId: hex(plan['runId']) ?? null,
+          updatedAt: plan['updatedAt'],
+        }
+      : null,
+    approval: approval
+      ? {
+          userId: approval['userId'] ?? null,
+          at: approval['at'],
+          planRevision: approval['planRevision'],
+        }
+      : null,
+    activeRunId: hex(doc['activeRunId']) ?? null,
+    pendingTurn: doc['pendingTurn'] ?? null,
+    lastError: doc['lastError'] ?? null,
+    updatedAt: doc['updatedAt'],
+  };
+}
+
 function summarize(type: StreamEventType, doc: Document): Record<string, unknown> {
   switch (type) {
     case 'run':
-      return {
-        id: hex(doc['_id']),
-        agentId: hex(doc['agentId']),
-        issueId: hex(doc['issueId']),
-        status: doc['status'],
-        reason: doc['reason'],
-        costUsd: doc['costUsd'],
-        error: doc['error'],
-        startedAt: doc['startedAt'],
-        finishedAt: doc['finishedAt'],
-      };
+      return summarizeRun(doc);
     case 'run_event':
       return {
         runId: hex(doc['runId']),
@@ -91,6 +149,10 @@ function summarize(type: StreamEventType, doc: Document): Record<string, unknown
       return { agentId: hex(doc['_id']), x: doc['x'], y: doc['y'] };
     case 'org':
       return { leadAgentId: hex(doc['leadAgentId']) };
+    case 'chat':
+      return summarizeChat(doc);
+    case 'chat_message':
+      return summarizeChatMessage(doc);
   }
 }
 

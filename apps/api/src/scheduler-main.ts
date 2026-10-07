@@ -33,6 +33,10 @@ async function main(): Promise<void> {
     if (counts.run + counts.skip > 0) {
       log.info(counts, 'wakes processed');
     }
+    const chats = await scheduler.processChatTurns();
+    if (chats.run + chats.drop > 0) {
+      log.info(chats, 'chat turns processed');
+    }
   };
 
   const loop = async (): Promise<void> => {

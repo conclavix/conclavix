@@ -23,15 +23,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const startOfUtcDay = (now: Date): Date =>
   new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
-const startOfNextUtcDay = (now: Date): Date =>
+export const startOfNextUtcDay = (now: Date): Date =>
   new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
 
-/** Sum of the agent's run costs since UTC midnight. */
+/** Sum of the agent's run costs since UTC midnight, chat runs included. */
 export async function costToday(
   collections: Collections,
   agent: AgentDoc,
   now: Date,
-  session: ClientSession,
+  session?: ClientSession,
 ): Promise<number> {
   const [row] = await collections.runs
     .aggregate<{ total: number }>(
@@ -39,7 +39,7 @@ export async function costToday(
         { $match: { agentId: agent._id, createdAt: { $gte: startOfUtcDay(now) } } },
         { $group: { _id: null, total: { $sum: '$costUsd' } } },
       ],
-      { session },
+      session ? { session } : {},
     )
     .toArray();
   return row?.total ?? 0;
