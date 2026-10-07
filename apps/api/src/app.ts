@@ -39,7 +39,9 @@ import { RunRepository } from './modules/runs/repository.js';
 import { SkillRepository } from './modules/skills/repository.js';
 import { registerSkillRoutes } from './modules/skills/routes.js';
 import { AuditLog } from './modules/audit/audit.js';
-import { SecretBox } from './modules/settings/secret-box.js';
+import { SecretBox, vaultBox } from './modules/settings/secret-box.js';
+import { SecretRepository } from './modules/secrets/repository.js';
+import { passwordCheck, registerSecretRoutes } from './modules/secrets/routes.js';
 import { MemoryDirectoryCache, type DirectoryCache } from './modules/skill-sources/cache.js';
 import { createGuardedTransport, type HttpTransport } from './modules/skill-sources/http.js';
 import { SkillSourceRepository } from './modules/skill-sources/repository.js';
@@ -149,6 +151,13 @@ async function registerAuth(
     boardUrl,
   });
   registerAuditRoutes(app, system.audit);
+  registerSecretRoutes(
+    app,
+    options.database,
+    new SecretRepository(collections, vaultBox(options.authSecret)),
+    system.audit,
+    passwordCheck(system.auth, options.database),
+  );
   return reauthorize;
 }
 

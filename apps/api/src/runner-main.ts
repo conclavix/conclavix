@@ -11,6 +11,7 @@ import { CodeRuns } from './runner/code-run.js';
 import { AuditLog } from './modules/audit/audit.js';
 import { releaseClone, type SandboxOptions } from './runner/adapters/sandbox.js';
 import { knownSecretsFromEnv, secretsFromEnv } from './runner/secrets.js';
+import { vaultBox } from './modules/settings/secret-box.js';
 import { waitForDependency } from './startup.js';
 
 /** Longest single git call when committing and syncing after a coding run. */
@@ -80,6 +81,9 @@ async function main(): Promise<void> {
   const { sandbox, codeRuns } = await codingAgents(config, runAs !== undefined, database, log);
   const runWorker = new RunWorker(database, scheduler, {
     ...(codeRuns ? { codeRuns } : {}),
+    // Without AUTH_SECRET, runs of agents that have project secrets fail with an explanation.
+    secretBox: config.AUTH_SECRET ? vaultBox(config.AUTH_SECRET) : null,
+    audit: new AuditLog(database.collections, log),
     workspacesRoot: resolve(config.WORKSPACES_ROOT),
     mcpUrl: new URL('/mcp', config.PUBLIC_API_URL).toString(),
     timeoutMs: config.RUN_TIMEOUT_MINUTES * 60_000,

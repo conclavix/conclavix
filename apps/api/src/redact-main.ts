@@ -4,10 +4,33 @@ import { connectDatabase } from './db.js';
 import { StoredRedactionError, redactStoredRunLogs } from './modules/runs/redact-stored.js';
 import { Redactor } from './runner/redact.js';
 import { knownSecretsFromEnv } from './runner/secrets.js';
+import { vaultBox } from './modules/settings/secret-box.js';
+import { secretContext } from './modules/secrets/repository.js';
+import type { KnownSecret } from './runner/redact.js';
+import type { Database } from './db.js';
+
+/** The current values of all project secrets, when AUTH_SECRET is there to open them. */
+async function projectSecrets(database: Database, authSecret: string | undefined) {
+  if (!authSecret) return [];
+  const box = vaultBox(authSecret);
+  const found: KnownSecret[] = [];
+  for await (const doc of database.collections.secrets.find()) {
+    try {
+      found.push({
+        name: doc.envName,
+        value: box.open(doc.valueEncrypted, secretContext(doc._id)),
+      });
+    } catch {
+      // A value that cannot be opened cannot be searched for either; the scan goes on.
+    }
+  }
+  return found;
+}
 
 /**
  * Rescan every stored run log and run error. Run it where the runner's environment is loaded,
- * so the values of its CVX_SECRET_* and gateway keys are redacted too, not only known formats.
+ * so the values of its CVX_SECRET_* and gateway keys are redacted too, not only known formats;
+ * with AUTH_SECRET set, the current values of the project secrets as well.
  */
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -16,7 +39,10 @@ async function main(): Promise<void> {
   try {
     const result = await redactStoredRunLogs(
       database.collections,
-      new Redactor(knownSecretsFromEnv(process.env)),
+      new Redactor([
+        ...knownSecretsFromEnv(process.env),
+        ...(await projectSecrets(database, config.AUTH_SECRET)),
+      ]),
       { force: true, onError: (details) => log.error(details, 'stored run log redaction failed') },
     );
     log.info(result, 'stored run logs redacted');
