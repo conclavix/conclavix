@@ -28,9 +28,14 @@ interface OpenChat {
   refreshQuietly(): Promise<void>;
 }
 
-/** What the board does in the open chat: write to the lead, approve its plan, archive. */
+/** What the board does: start a chat, write to the lead, approve its plan, archive. */
 function chatActions({ current, messages, upsert, refreshQuietly }: OpenChat) {
   return {
+    async create(title: string, projectId: string | null): Promise<Chat> {
+      const chat = await chatApi.create({ title, projectId });
+      upsert(chat);
+      return chat;
+    },
     async post(content: string): Promise<void> {
       const id = current.value?.id;
       if (!id) return;
@@ -82,8 +87,8 @@ export const useChatsStore = defineStore('chats', () => {
     loaded.value = true;
   }
 
-  async function open(id: string): Promise<void> {
-    wanted = id;
+  /** Load a chat; the answer is applied only while the view still wants that chat. */
+  async function fetchChat(id: string): Promise<void> {
     const result = await chatApi.get(id);
     if (wanted !== id) return;
     current.value = result.chat;
@@ -92,9 +97,14 @@ export const useChatsStore = defineStore('chats', () => {
     upsert(result.chat);
   }
 
-  /** Reload the open chat, e.g. after the stream reported a change of it. */
+  async function open(id: string): Promise<void> {
+    wanted = id;
+    await fetchChat(id);
+  }
+
+  /** Reload the open chat, e.g. after the stream reported a change of it; never switches chats. */
   async function refresh(): Promise<void> {
-    if (current.value) await open(current.value.id);
+    if (current.value) await fetchChat(current.value.id);
   }
 
   /** A reload triggered by the stream: a failure is kept for the view instead of thrown. */
@@ -105,12 +115,6 @@ export const useChatsStore = defineStore('chats', () => {
     } catch (cause) {
       if (wanted === id) loadError.value = `Could not reload the chat: ${messageOf(cause)}`;
     }
-  }
-
-  async function create(title: string, projectId: string | null): Promise<Chat> {
-    const chat = await chatApi.create({ title, projectId });
-    upsert(chat);
-    return chat;
   }
 
   /**
@@ -149,7 +153,6 @@ export const useChatsStore = defineStore('chats', () => {
     open,
     refresh,
     refreshQuietly,
-    create,
     ...chatActions({ current, messages, upsert, refreshQuietly }),
     applyStream,
     close,

@@ -114,4 +114,22 @@ describe('chats store', () => {
     await first;
     expect(store.items.map((item) => item.id)).toEqual(['archived-too']);
   });
+
+  it('does not let a reload of the old chat cancel opening a new one', async () => {
+    let answerB: (value: unknown) => void = () => undefined;
+    get.mockImplementation((id: string) =>
+      id === 'b'
+        ? new Promise((resolve) => (answerB = resolve))
+        : Promise.resolve({ chat: chat(id), messages: [] }),
+    );
+    const store = useChatsStore();
+    await store.open('a');
+    const opening = store.open('b');
+    // A stream event for the old chat arrives while b is loading.
+    store.applyStream('chat', { ...chat('a') });
+    await flush();
+    answerB({ chat: chat('b'), messages: [] });
+    await opening;
+    expect(store.current?.id).toBe('b');
+  });
 });
