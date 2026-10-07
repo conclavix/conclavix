@@ -225,6 +225,7 @@ const opened = (issue: IssueDetail): void =>
       />
       <ProjectMediaTab
         v-else-if="tab === 'media'"
+        :key="project.id"
         :project-id="project.id"
         :project-key="project.key"
       />

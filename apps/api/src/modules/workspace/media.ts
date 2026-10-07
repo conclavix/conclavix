@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   DEFAULT_BRANCH,
   ISSUE_BRANCH_PREFIX,
@@ -25,6 +26,8 @@ interface ScanRef {
 
 /** The result of one scan of a repository, before filters and pages. */
 export interface MediaScan {
+  /** Changes whenever a scanned branch tip moves; pages of different versions do not fit together. */
+  version: string;
   items: MediaItem[];
   facets: MediaFacets;
   truncated: boolean;
@@ -139,6 +142,7 @@ export function pageMedia(scan: MediaScan, query: MediaQuery): MediaListing {
     facets: scan.facets,
     truncated: scan.truncated,
     scannedBranches: scan.scannedBranches,
+    version: scan.version,
   };
 }
 
@@ -189,7 +193,8 @@ export class MediaReader extends RepoReader {
       this.mediaCache.set(projectId, cached);
       return cached.scan;
     }
-    const scan = this.scanMedia(projectId, refs, truncated);
+    const version = createHash('sha256').update(key).digest('hex').slice(0, 16);
+    const scan = this.scanMedia(projectId, refs, truncated, version);
     this.mediaCache.delete(projectId);
     this.mediaCache.set(projectId, { key, scan });
     while (this.mediaCache.size > MEDIA_CACHE_SIZE) {
@@ -240,6 +245,7 @@ export class MediaReader extends RepoReader {
     projectId: string,
     refs: ScanRef[],
     refsTruncated: boolean,
+    version: string,
   ): Promise<MediaScan> {
     const deadline = Date.now() + this.limits.mediaScanBudgetMs;
     let truncated = refsTruncated;
@@ -311,6 +317,7 @@ export class MediaReader extends RepoReader {
       facets: facetsOf(items, scanned),
       truncated,
       scannedBranches: scanned.length,
+      version,
     };
   }
 

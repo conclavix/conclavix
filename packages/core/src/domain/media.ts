@@ -101,4 +101,9 @@ export interface MediaListing {
   truncated: boolean;
   /** Branches the scan covered. */
   scannedBranches: number;
+  /**
+   * Identifies the scan behind this page; it changes when a branch tip moves. A page with
+   * another version than the previous one does not continue it: start again at offset 0.
+   */
+  version: string;
 }

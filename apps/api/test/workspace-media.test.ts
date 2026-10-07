@@ -196,6 +196,8 @@ describe('project media API', () => {
     expect(first.items).toHaveLength(2);
     expect(first.items[0]?.name).toBe('dark.png');
     expect(first.nextOffset).toBe(2);
+    const second = await media('limit=2&offset=2');
+    expect(second.version).toBe(first.version);
     const last = await media('limit=2&offset=4');
     expect(last.items).toHaveLength(1);
     expect(last.nextOffset).toBeNull();
@@ -216,6 +218,8 @@ describe('project media API', () => {
     await sync(keyB);
     const after = await workspace.mediaScan(projectId);
     expect(after).not.toBe(a);
+    expect(after.version).toMatch(/^[0-9a-f]{16}$/);
+    expect(after.version).not.toBe(a.version);
     expect(after.items.map((item) => item.name)).toContain('new.webp');
     expect((await media()).items[0]?.name).toBe('new.webp');
   });

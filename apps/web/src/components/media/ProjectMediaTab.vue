@@ -66,24 +66,49 @@ const sortOptions = [
 ];
 
 let seq = 0;
+/** True while the first page for the current filters is loading; "Load more" waits for it. */
+const reloading = ref(false);
 
-/** Load the first page for the current filters, or append the next page with `more`. */
+/** `next` appended to `current` without items already shown (pages may overlap after a rescan). */
+function appendNew(current: MediaItem[], next: MediaItem[]): MediaItem[] {
+  const seen = new Set(current.map((item) => item.oid));
+  return [...current, ...next.filter((item) => !seen.has(item.oid))];
+}
+
+/**
+ * Load the first page for the current filters, or append the next page with `more`. A next page
+ * from a newer scan (a branch moved meanwhile) does not continue the list, so it starts over.
+ */
 async function load(more = false): Promise<void> {
+  if (more && (reloading.value || listing.value?.nextOffset == null)) return;
   const id = ++seq;
-  const offset = more ? (listing.value?.nextOffset ?? items.value.length) : 0;
+  const offset = more ? (listing.value?.nextOffset ?? 0) : 0;
+  const version = listing.value?.version;
   loading.value = true;
+  reloading.value = !more;
   error.value = '';
   try {
     const page = await mediaApi.list(props.projectId, filters.value, offset, PAGE_SIZE);
-    if (id !== seq) return;
-    listing.value = page;
-    items.value = more ? [...items.value, ...page.items] : page.items;
-    if (!more) openIndex.value = null;
+    if (id === seq) apply(page, more, version);
   } catch (cause) {
     if (id === seq) error.value = describeError(cause);
   } finally {
-    if (id === seq) loading.value = false;
+    if (id === seq) {
+      loading.value = false;
+      reloading.value = false;
+    }
   }
+}
+
+/** Show a loaded page; a next page of another scan version restarts the list instead. */
+function apply(page: MediaListing, more: boolean, version: string | undefined): void {
+  if (more && page.version !== version) {
+    void load();
+    return;
+  }
+  listing.value = page;
+  items.value = more ? appendNew(items.value, page.items) : page.items;
+  if (!more) openIndex.value = null;
 }
 
 let debounce: ReturnType<typeof setTimeout> | undefined;
@@ -118,7 +143,9 @@ async function step(delta: 1 | -1): Promise<void> {
   let next = stepIndex(openIndex.value, delta, items.value.length);
   if (next === null && delta > 0 && listing.value?.nextOffset != null) {
     await load(true);
-    next = stepIndex(openIndex.value ?? 0, delta, items.value.length);
+    // A rescan restarted the list and closed the lightbox.
+    if (openIndex.value === null) return;
+    next = stepIndex(openIndex.value, delta, items.value.length);
   }
   if (next !== null) openIndex.value = next;
 }
@@ -296,7 +323,13 @@ const subtitle = (item: MediaItem): string => {
     </div>
 
     <div v-if="listing?.nextOffset != null" class="d-flex justify-center mt-4">
-      <v-btn variant="tonal" :loading="loading" data-test="media-more" @click="load(true)">
+      <v-btn
+        variant="tonal"
+        :loading="loading"
+        :disabled="reloading"
+        data-test="media-more"
+        @click="load(true)"
+      >
         Load more
       </v-btn>
     </div>

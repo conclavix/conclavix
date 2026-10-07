@@ -93,6 +93,7 @@ describe('ProjectMediaTab', () => {
     nextOffset: null,
     truncated: false,
     scannedBranches: 2,
+    version: 'v1',
     facets: {
       kinds: { image: 2, video: 1, pdf: 0 },
       branches: [
@@ -198,6 +199,34 @@ describe('ProjectMediaTab', () => {
     const empty = host.querySelector('[data-test="media-empty"]')?.textContent ?? '';
     expect(empty).toContain('No media in this project yet');
     expect(empty).toContain('docs/screenshots/<module>/');
+  });
+
+  it('starts over when the next page comes from a newer scan', async () => {
+    pages['second'] = listing([item('two.png'), item('new.png')], { total: 4, version: 'v2' });
+    await mount();
+    pages['first'] = listing([item('new.png'), item('one.png'), item('two.png')], {
+      total: 3,
+      version: 'v2',
+    });
+    host.querySelector<HTMLElement>('[data-test="media-more"]')?.click();
+    await flush();
+    expect(requests.slice(-2)).toEqual([
+      '/api/projects/p1/media?sort=newest&offset=2&limit=60',
+      '/api/projects/p1/media?sort=newest&offset=0&limit=60',
+    ]);
+    const names = [...host.querySelectorAll('[data-test^="media-item-"]')].map(
+      (el) => el.textContent?.trim().split(' ')[0],
+    );
+    expect(names).toHaveLength(3);
+    expect(host.querySelector('[data-test="media-more"]')).toBeNull();
+  });
+
+  it('skips items a next page repeats', async () => {
+    pages['second'] = listing([item('two.png'), item('clip.mp4')], { total: 3 });
+    await mount();
+    host.querySelector<HTMLElement>('[data-test="media-more"]')?.click();
+    await flush();
+    expect(host.querySelectorAll('[data-test^="media-item-"]')).toHaveLength(3);
   });
 
   it('warns when the scan was truncated', async () => {

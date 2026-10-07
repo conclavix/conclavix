@@ -177,7 +177,9 @@ is synced, before anything is merged. `GET /api/projects/:id/media` does the wor
   (case-insensitive substring of any of its paths), `sort` (`newest`, default, or `oldest`; files
   without a known commit last), `limit` (1-200, default 60) and `offset`. The answer has `items`,
   `total`, `nextOffset` (null on the last page), `facets` (counts per kind and per branch over
-  the whole scan, for the filters), `scannedBranches` and `truncated`.
+  the whole scan, for the filters), `scannedBranches`, `truncated` and `version`. `version`
+  changes whenever a scanned branch tip moves; a next page with another `version` does not
+  continue the previous one, so the tab starts over at offset 0 (and skips items it already shows).
 - **Limits and cache.** See [Limits](#limits): past the branch, file or time limit the scan stops
   and sets `truncated`, which the tab shows as a notice. A git call that fails during the history
   walk leaves the files listed without author and date. The scan is cached in memory per project
