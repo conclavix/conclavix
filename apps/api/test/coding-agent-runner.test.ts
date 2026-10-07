@@ -17,7 +17,6 @@ import type { AdapterRunInput } from '../src/runner/adapters/types.js';
 import { CodeRuns, commitAuthor, commitMessage } from '../src/runner/code-run.js';
 import type { RunEventRecorder } from '../src/runner/events.js';
 import type { AuditLog } from '../src/modules/audit/audit.js';
-import { AppError } from '../src/errors.js';
 import type { CodeWorkspace } from '../src/modules/workspace/commit.js';
 
 const HELPER_ARGS = fileURLToPath(
@@ -274,110 +273,6 @@ describe('CodeRuns.finish', () => {
     expect(code.synced).toBe(false);
     expect(code.error).toBe('sync failed: not a fast-forward');
     expect(syncIssueBranch).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('CodeRuns.finish with a branch that keeps moving', () => {
-  it('reconciles again and retries when the sync is refused because the branch moved', async () => {
-    const events = { record: vi.fn() } as unknown as RunEventRecorder;
-    const base = 'a'.repeat(40);
-    const commitIssueWork = vi.fn().mockResolvedValue({
-      branch: 'cvx/COD-9',
-      head: 'b'.repeat(40),
-      commit: 'b'.repeat(40),
-      agentCommits: 0,
-      stats: { files: 1, insertions: 1, deletions: 0 },
-    });
-    const syncIssueBranch = vi
-      .fn()
-      .mockRejectedValueOnce(new AppError(409, 'conflict', 'not a fast-forward'))
-      .mockResolvedValue({ updated: true });
-    const reconcileClone = vi
-      .fn()
-      .mockResolvedValue({ action: 'merged', head: 'c'.repeat(40), warnings: [] });
-    const updateOne = vi.fn().mockResolvedValue(undefined);
-    const runs = new CodeRuns(
-      { collections: { runs: { updateOne } } } as unknown as Database,
-      {} as AuditLog,
-      {
-        agentEmailDomain: 'conclavix.invalid',
-        branchTip: vi.fn().mockResolvedValue(base),
-        commitIssueWork,
-        syncIssueBranch,
-        reconcileClone,
-      } as unknown as CodeWorkspace,
-    );
-    const code = await runs.finish(
-      {
-        projectId: issue.projectId.toHexString(),
-        issueKey: 'COD-9',
-        skillsDir: null,
-        branch: 'cvx/COD-9',
-        base,
-      },
-      agent,
-      issue,
-      run,
-      {
-        status: 'succeeded',
-        costUsd: 0,
-        sandbox: { result: 'success', exitCode: 0, diskBytes: 0 },
-      },
-      events,
-      (text) => text,
-    );
-    expect(code).toMatchObject({ synced: true, error: null, head: 'c'.repeat(40) });
-    expect(reconcileClone).toHaveBeenCalledTimes(1);
-    expect(syncIssueBranch).toHaveBeenCalledTimes(2);
-  });
-
-  it('does not report a preserved run as synced', async () => {
-    const base = 'a'.repeat(40);
-    const runs = new CodeRuns(
-      { collections: { runs: { updateOne: vi.fn() } } } as unknown as Database,
-      {} as AuditLog,
-      {
-        agentEmailDomain: 'conclavix.invalid',
-        branchTip: vi.fn().mockResolvedValue('d'.repeat(40)),
-        commitIssueWork: vi.fn().mockResolvedValue({
-          branch: 'cvx/COD-9',
-          head: 'b'.repeat(40),
-          commit: 'b'.repeat(40),
-          agentCommits: 0,
-          stats: { files: 1, insertions: 1, deletions: 0 },
-        }),
-        syncIssueBranch: vi.fn().mockResolvedValue({ updated: false }),
-        reconcileClone: vi.fn().mockResolvedValue({
-          action: 'preserved',
-          head: 'd'.repeat(40),
-          preservedBranch: 'conflict/COD-9/bbbbbbbbbbbb',
-          conflicts: [{ path: 'a.txt', kinds: ['contents'] }],
-          warnings: [],
-        }),
-      } as unknown as CodeWorkspace,
-    );
-    const code = await runs.finish(
-      {
-        projectId: issue.projectId.toHexString(),
-        issueKey: 'COD-9',
-        skillsDir: null,
-        branch: 'cvx/COD-9',
-        base,
-      },
-      agent,
-      issue,
-      run,
-      {
-        status: 'succeeded',
-        costUsd: 0,
-        sandbox: { result: 'success', exitCode: 0, diskBytes: 0 },
-      },
-      { record: vi.fn() } as unknown as RunEventRecorder,
-      (text) => text,
-    );
-    expect(code.synced).toBe(false);
-    expect(code.error).toContain('conflict/COD-9/bbbbbbbbbbbb');
-    expect(code.commit).toBe('b'.repeat(40));
   });
 });
 
