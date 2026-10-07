@@ -34,6 +34,8 @@ export interface ConflictFile {
 
 export interface TreeMerge {
   tree: string;
+  /** git's verdict (exit code 0); an unclean merge may list no conflicted path. */
+  clean: boolean;
   /** Empty when the merge is clean. */
   conflicts: ConflictFile[];
   /** Conflicting files past MAX_CONFLICT_FILES. */
@@ -74,7 +76,9 @@ export interface SourceStatus {
   sha: string;
   /** The target (or, without a target, its base) already contains the source. */
   contained: boolean;
-  /** Conflicts a merge onto the target would hit right now; empty when it would be clean. */
+  /** A merge onto the target would be clean right now (or is not needed). */
+  clean: boolean;
+  /** Conflicts a merge onto the target would hit right now. */
   conflicts: ConflictFile[];
   moreConflicts: number;
 }
@@ -91,35 +95,42 @@ export interface MergeStatus {
   sources: SourceStatus[];
 }
 
+/** Add the kinds of `CONFLICT (<kind>)` messages from `start` on to their paths. */
+function addConflictKinds(fields: string[], start: number, kinds: Map<string, Set<string>>): void {
+  let index = start;
+  while (index < fields.length) {
+    const count = Number(fields[index]);
+    if (!Number.isInteger(count) || count < 0) return;
+    const paths = fields.slice(index + 1, index + 1 + count);
+    const kind = /^CONFLICT \(([^)]+)\)/.exec(fields[index + 1 + count] ?? '')?.[1];
+    index += count + 3;
+    for (const path of kind ? paths : []) {
+      const set = kinds.get(path) ?? new Set<string>();
+      set.add(kind as string);
+      kinds.set(path, set);
+    }
+  }
+}
+
 /**
  * Parse `git merge-tree --write-tree -z --name-only`: the tree id, the conflicted paths up to an
  * empty field, then messages as `<count> <path>... <type> <text>`. Types `CONFLICT (<kind>)` give
- * each conflicted path its kinds.
+ * their paths their kinds. `clean` is git's exit code; a merge with any conflict is not clean.
  */
-export function parseMergeTree(output: string): TreeMerge {
+export function parseMergeTree(output: string, clean = true): TreeMerge {
   const fields = output.split('\0');
   const tree = fields[0] ?? '';
   if (!OBJECT_ID.test(tree)) throw new Error('git merge-tree returned no tree id');
   const kinds = new Map<string, Set<string>>();
   let index = 1;
   for (; index < fields.length && fields[index] !== ''; index += 1) {
-    const path = fields[index] as string;
-    if (!kinds.has(path)) kinds.set(path, new Set());
+    kinds.set(fields[index] as string, new Set());
   }
-  index += 1;
-  while (index < fields.length) {
-    const count = Number(fields[index]);
-    if (!Number.isInteger(count) || count < 0) break;
-    const paths = fields.slice(index + 1, index + 1 + count);
-    const type = fields[index + 1 + count] ?? '';
-    index += count + 3;
-    const kind = /^CONFLICT \(([^)]+)\)/.exec(type)?.[1];
-    if (!kind) continue;
-    for (const path of paths) kinds.get(path)?.add(kind);
-  }
+  addConflictKinds(fields, index + 1, kinds);
   const all = [...kinds].map(([path, set]) => ({ path, kinds: [...set] }));
   return {
     tree,
+    clean: clean && all.length === 0,
     conflicts: all.slice(0, MAX_CONFLICT_FILES),
     moreConflicts: Math.max(0, all.length - MAX_CONFLICT_FILES),
   };
@@ -152,11 +163,11 @@ export class RepoMerger extends RepoReader {
 
   /** The tree a merge of `theirs` into `ours` produces, with its conflicts; writes no ref. */
   protected async mergeTrees(projectId: string, ours: string, theirs: string): Promise<TreeMerge> {
-    const { stdout } = await this.git.run(
+    const { stdout, exitCode } = await this.git.run(
       this.repoArgs(projectId, ['merge-tree', '--write-tree', '-z', '--name-only', ours, theirs]),
       { timeoutMs: this.limits.archiveTimeoutMs, allowExitCodes: [1] },
     );
-    return parseMergeTree(stdout.toString('utf8'));
+    return parseMergeTree(stdout.toString('utf8'), exitCode === 0);
   }
 
   /** Write a commit of `tree` with `parents` and a fixed author and committer. */
@@ -278,7 +289,7 @@ export class RepoMerger extends RepoReader {
           continue;
         }
         const merged = await this.mergeTrees(projectId, current, sha);
-        if (merged.conflicts.length > 0) {
+        if (!merged.clean) {
           throw new AppError(409, 'merge_conflict', `${source} conflicts with ${target}`, {
             target,
             source,
@@ -384,6 +395,7 @@ export class RepoMerger extends RepoReader {
         source,
         sha,
         contained,
+        clean: merged?.clean ?? true,
         conflicts: merged?.conflicts ?? [],
         moreConflicts: merged?.moreConflicts ?? 0,
       });

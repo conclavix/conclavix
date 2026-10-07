@@ -181,7 +181,8 @@ The probe mode of the acceptance script checks that such a reference reaches the
   run's agent), moves the server branch with compare-and-swap and fast-forwards the clone to the
   merge. If that merge conflicts, the run's tip is kept as the branch `conflict/<KEY>/<sha>`, the
   clone is reset to the server tip and the run records the conflicting files; nothing is lost and
-  the issue continues from the server branch. A merge can also land between this check and the sync; a
+  the issue continues from the server branch; such a run is recorded as not synced, with the
+  conflict branch in its error. A merge can also land between this check and the sync; a
   refused fast-forward or compare-and-swap is then retried after another reconciliation, up to
   three rounds.
 - Then `syncIssueBranch` fetches `cvx/<KEY>` into the project repository (fast-forward only; a
@@ -195,7 +196,11 @@ The probe mode of the acceptance script checks that such a reference reaches the
   example at the disk limit, or its commit failed), or whose checkout would overwrite other
   files, is neither committed nor overwritten: it is moved aside to
   `workspaces/<projectId>/.stale-<KEY>-<time>-<random>` and the run starts in a fresh clone of the
-  server branch. The server never deletes such directories; look at them and remove them by hand.
+  server branch; commits of it that the server branch lacks are kept as `conflict/<KEY>/<sha>`
+  first. The server never deletes such directories or `conflict/` branches: look at them (the
+  branches are in the Code tab and `list_branches`), take over what is needed with
+  `merge_branches` or by hand, and remove them by hand (`rm -r` on the runner host, `git branch -D`
+  in the project repository).
   Inside the clone git runs only after its configuration was replaced, with hooks off, and the
   project repository is marked as a safe directory for the fetch from it. Failures to remove the
   temporary refs (`refs/conclavix/...`) are recorded as run events; the next reconciliation

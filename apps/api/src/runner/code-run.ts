@@ -117,11 +117,7 @@ export class CodeRuns {
     await recordIssueWorkspace(this.database, this.audit, issue, info, { type: 'system' });
     if (!info.created) {
       // The server branch may have moved since the last run (an integration merge into it).
-      const reconciled = await this.workspace.reconcileClone(
-        projectId,
-        issue.key,
-        this.author(agent),
-      );
+      const reconciled = await this.reconcileBeforeRun(projectId, issue.key, agent, events);
       describeReconcile(reconciled, info.branch, events);
       if (reconciled.action === 'set_aside') {
         info = await this.workspace.createIssueWorkspace(projectId, issue.key);
@@ -215,6 +211,26 @@ export class CodeRuns {
   }
 
   /**
+   * Reconcile an existing clone before a run. A merge that lands while the reconciling merge is
+   * written makes its compare-and-swap fail with 409; that is retried like after a run.
+   */
+  private async reconcileBeforeRun(
+    projectId: string,
+    issueKey: string,
+    agent: Pick<AgentDoc, '_id' | 'name'> | null,
+    events: RunEventRecorder,
+  ): Promise<CloneReconcile> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.workspace.reconcileClone(projectId, issueKey, this.author(agent));
+      } catch (error) {
+        if (!isRefusal(error) || attempt >= SYNC_ATTEMPTS) throw error;
+        events.record('runner', `cvx/${issueKey} moved while reconciling; trying again`);
+      }
+    }
+  }
+
+  /**
    * Bring the run's commit onto the server branch. An integration merge may move the branch from
    * the API process at any time, also between the check and the sync, so a refused fast-forward
    * or compare-and-swap (409) is retried after reconciling again, up to SYNC_ATTEMPTS times.
@@ -226,6 +242,7 @@ export class CodeRuns {
     events: RunEventRecorder,
     redact: (text: string) => string,
   ): Promise<void> {
+    let kept: string | null = null;
     for (let attempt = 1; ; attempt += 1) {
       try {
         const server = await this.workspace.branchTip(context.projectId, context.issueKey);
@@ -238,22 +255,26 @@ export class CodeRuns {
           describeReconcile(reconciled, context.branch, events);
           if (reconciled.head) code.head = reconciled.head;
           if (reconciled.action === 'preserved') {
-            code.error = `the run's work conflicts with changes merged into ${context.branch} during the run; it was kept on branch ${reconciled.preservedBranch ?? ''} and ${context.branch} continues from the server tip`;
+            kept = `the run's work conflicts with changes merged into ${context.branch} during the run; it was kept on branch ${reconciled.preservedBranch ?? ''} and ${context.branch} continues from the server tip`;
           } else if (reconciled.action === 'set_aside') {
-            code.error = `the workspace could not be brought up to date with ${context.branch}, which was merged into during the run; it was moved to ${reconciled.setAside ?? ''} and the next run clones the server branch`;
+            const branch = reconciled.preservedBranch
+              ? `its commits were kept on branch ${reconciled.preservedBranch}, `
+              : '';
+            code.error = `the workspace could not be brought up to date with ${context.branch}, which was merged into during the run; ${branch}it was moved to ${reconciled.setAside ?? ''} and the next run clones the server branch`;
             return;
           }
         }
         await this.workspace.syncIssueBranch(context.projectId, context.issueKey, false);
-        code.synced = true;
+        // A preserved run's commit is on its conflict branch, not on the issue branch.
+        code.synced = kept === null;
+        code.error = kept;
         return;
       } catch (error) {
-        const moved = error instanceof AppError && error.statusCode === 409;
-        if (moved && attempt < SYNC_ATTEMPTS) {
+        if (isRefusal(error) && attempt < SYNC_ATTEMPTS) {
           events.record('runner', `${context.branch} moved while syncing; reconciling again`);
           continue;
         }
-        code.error = redact(`sync failed: ${errorText(error)}`);
+        code.error = redact([kept, `sync failed: ${errorText(error)}`].filter(Boolean).join('; '));
         return;
       }
     }
@@ -285,6 +306,10 @@ function describeReconcile(result: CloneReconcile, branch: string, events: RunEv
     );
   }
 }
+
+/** A 409: the issue branch moved under a fast-forward or compare-and-swap. */
+const isRefusal = (error: unknown): boolean =>
+  error instanceof AppError && error.statusCode === 409;
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

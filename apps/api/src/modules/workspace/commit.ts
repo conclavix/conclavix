@@ -238,8 +238,9 @@ export class CodeWorkspace extends Workspace {
    * conflicts, the clone's tip is kept as the branch `conflict/<KEY>/<sha>` in the project
    * repository and the clone is reset to the server tip. A clone that still holds uncommitted
    * work of an earlier run (its sandbox stopped it, or its commit failed), or whose checkout would
-   * overwrite files, is set aside (see setAside) instead of being committed or overwritten; the
-   * caller then creates a fresh clone. The server branch only moves forward, with
+   * overwrite files, is set aside (see setAside) instead of being committed or overwritten, after
+   * its commits the server lacks were kept as `conflict/<KEY>/<sha>`; the caller then creates a
+   * fresh clone. The server branch only moves forward, with
    * compare-and-swap. Runs only while no sandbox works in the clone.
    */
   async reconcileClone(
@@ -260,9 +261,20 @@ export class CodeWorkspace extends Workspace {
       const none: CloneReconcile = { action: 'none', server, clone, head: clone, warnings };
       if (!server || !clone || server === clone) return none;
       const state: { aside: string | null } = { aside: null };
-      const aside = async (): Promise<CloneReconcile> => {
+      const aside = async (keepTip: boolean): Promise<CloneReconcile> => {
+        const preservedBranch = keepTip
+          ? await this.preserveTip(projectId, issueKey, gitDir, ref, clone)
+          : undefined;
         state.aside = await this.setAside(projectId, issueKey);
-        return { action: 'set_aside', server, clone, head: null, setAside: state.aside, warnings };
+        return {
+          action: 'set_aside',
+          server,
+          clone,
+          head: null,
+          setAside: state.aside,
+          ...(preservedBranch ? { preservedBranch } : {}),
+          warnings,
+        };
       };
       const dropServerTip = async () => {
         if (state.aside) return;
@@ -276,11 +288,11 @@ export class CodeWorkspace extends Workspace {
         if (await git.isAncestor(server, clone)) {
           result = none;
         } else if (await this.hasLeftovers(git, gitDir, clone, warnings)) {
-          result = await aside();
+          result = await aside(!(await git.isAncestor(clone, server)));
         } else if (await git.isAncestor(clone, server)) {
           result = (await checkedOut(git, gitDir, ref, clone, server))
             ? { action: 'fast_forward', server, clone, head: server, warnings }
-            : await aside();
+            : await aside(false);
         } else {
           result = await this.mergeDiverged(projectId, issueKey, gitDir, git, {
             ref,
@@ -301,6 +313,30 @@ export class CodeWorkspace extends Workspace {
     });
   }
 
+  /**
+   * Keep the clone's tip as the branch `conflict/<KEY>/<sha>` in the project repository (fetched
+   * with object checks), for commits the server branch does not contain. Returns the branch.
+   */
+  private async preserveTip(
+    projectId: string,
+    issueKey: string,
+    gitDir: string,
+    ref: string,
+    clone: string,
+  ): Promise<string> {
+    const preserved = `conflict/${issueKey}/${clone.slice(0, 12)}`;
+    await this.fromClone(projectId, gitDir, [
+      'fetch',
+      '--no-tags',
+      '--no-write-fetch-head',
+      '--no-recurse-submodules',
+      '--no-auto-gc',
+      gitDir,
+      `+${ref}:refs/heads/${preserved}`,
+    ]);
+    return preserved;
+  }
+
   /** Merge a diverged clone with the server branch on the server side; see reconcileClone. */
   private async mergeDiverged(
     projectId: string,
@@ -314,7 +350,7 @@ export class CodeWorkspace extends Workspace {
       clone: string;
       author: CommitIdentity;
       warnings: string[];
-      aside: () => Promise<CloneReconcile>;
+      aside: (keepTip: boolean) => Promise<CloneReconcile>;
     },
   ): Promise<CloneReconcile> {
     const { ref, branch, server, clone, author, warnings, aside } = tips;
@@ -332,10 +368,8 @@ export class CodeWorkspace extends Workspace {
       dropRef(warnings, incoming, () => this.run(projectId, ['update-ref', '-d', incoming]));
     try {
       const merged = await this.mergeTrees(projectId, clone, server);
-      if (merged.conflicts.length > 0) {
-        const preserved = `conflict/${issueKey}/${clone.slice(0, 12)}`;
-        const existing = await this.commitOf(projectId, `refs/heads/${preserved}`);
-        if (existing !== clone) await this.moveBranch(projectId, preserved, clone, existing);
+      if (!merged.clean) {
+        const preserved = await this.preserveTip(projectId, issueKey, gitDir, ref, clone);
         await checkoutClone(git, gitDir, ref, { from: clone, to: server, force: true });
         return {
           action: 'preserved',
@@ -364,7 +398,7 @@ export class CodeWorkspace extends Workspace {
       await this.moveBranch(projectId, branch, commit, server);
       await this.fetchIntoClone(projectId, git, ref);
       if (!(await checkedOut(git, gitDir, ref, clone, commit))) {
-        return { ...(await aside()), merge: commit };
+        return { ...(await aside(false)), merge: commit };
       }
       return { action: 'merged', server, clone, head: commit, merge: commit, warnings };
     } finally {

@@ -139,6 +139,24 @@ describe('CodeWorkspace.reconcileClone', () => {
     expect(read('shared.txt')).toBe('eleven\n');
   });
 
+  it('keeps unsynced commits on a conflict branch before setting a clone aside', async () => {
+    writeFileSync(join(clone, 'work.txt'), 'work\n');
+    await runCommit('unsynced work');
+    const work = head();
+    writeFileSync(join(clone, 'work.txt'), 'more, uncommitted\n');
+    await merge(['cvx/APP-10']);
+    const result = await ws.reconcileClone(PROJECT, ISSUE, AGENT);
+    expect(result).toMatchObject({
+      action: 'set_aside',
+      preservedBranch: `conflict/${ISSUE}/${work.slice(0, 12)}`,
+    });
+    const bare = (...args: string[]) => git(root.dir, `--git-dir=${ws.repoDir(PROJECT)}`, ...args);
+    expect(bare('rev-parse', `conflict/${ISSUE}/${work.slice(0, 12)}`)).toBe(work);
+    expect(readFileSync(join(result.setAside ?? '', 'work.txt'), 'utf8')).toBe(
+      'more, uncommitted\n',
+    );
+  });
+
   it('overwrites ignored files when fast-forwarding, but sets other untracked files aside', async () => {
     pushTo('main', 'cvx/APP-20', { 'notes.txt': 'notes\n' });
     const helper = join(root.dir, 'helper-ignored');

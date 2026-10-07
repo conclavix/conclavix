@@ -286,15 +286,26 @@ describe('parseMergeTree', () => {
       'CONFLICT (modify/delete): g deleted\n',
       '',
     ].join('\0');
-    expect(parseMergeTree(output)).toEqual({
+    expect(parseMergeTree(output, false)).toEqual({
       tree,
+      clean: false,
       conflicts: [
         { path: 'f', kinds: ['contents'] },
         { path: 'g', kinds: ['modify/delete'] },
       ],
       moreConflicts: 0,
     });
-    expect(parseMergeTree(`${tree}\0`)).toEqual({ tree, conflicts: [], moreConflicts: 0 });
+    expect(parseMergeTree(`${tree}\0`)).toEqual({
+      tree,
+      clean: true,
+      conflicts: [],
+      moreConflicts: 0,
+    });
+    expect(parseMergeTree(`${tree}\0\0`, false).clean).toBe(false);
+    const unlisted = [tree, '', '1', 'dir', 'CONFLICT (directory rename split)', 'text', ''];
+    expect(parseMergeTree(unlisted.join('\0'), false).conflicts).toEqual([
+      { path: 'dir', kinds: ['directory rename split'] },
+    ]);
     expect(() => parseMergeTree('nonsense')).toThrow();
   });
 });

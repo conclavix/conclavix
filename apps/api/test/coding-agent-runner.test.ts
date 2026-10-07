@@ -330,6 +330,55 @@ describe('CodeRuns.finish with a branch that keeps moving', () => {
     expect(reconcileClone).toHaveBeenCalledTimes(1);
     expect(syncIssueBranch).toHaveBeenCalledTimes(2);
   });
+
+  it('does not report a preserved run as synced', async () => {
+    const base = 'a'.repeat(40);
+    const runs = new CodeRuns(
+      { collections: { runs: { updateOne: vi.fn() } } } as unknown as Database,
+      {} as AuditLog,
+      {
+        agentEmailDomain: 'conclavix.invalid',
+        branchTip: vi.fn().mockResolvedValue('d'.repeat(40)),
+        commitIssueWork: vi.fn().mockResolvedValue({
+          branch: 'cvx/COD-9',
+          head: 'b'.repeat(40),
+          commit: 'b'.repeat(40),
+          agentCommits: 0,
+          stats: { files: 1, insertions: 1, deletions: 0 },
+        }),
+        syncIssueBranch: vi.fn().mockResolvedValue({ updated: false }),
+        reconcileClone: vi.fn().mockResolvedValue({
+          action: 'preserved',
+          head: 'd'.repeat(40),
+          preservedBranch: 'conflict/COD-9/bbbbbbbbbbbb',
+          conflicts: [{ path: 'a.txt', kinds: ['contents'] }],
+          warnings: [],
+        }),
+      } as unknown as CodeWorkspace,
+    );
+    const code = await runs.finish(
+      {
+        projectId: issue.projectId.toHexString(),
+        issueKey: 'COD-9',
+        skillsDir: null,
+        branch: 'cvx/COD-9',
+        base,
+      },
+      agent,
+      issue,
+      run,
+      {
+        status: 'succeeded',
+        costUsd: 0,
+        sandbox: { result: 'success', exitCode: 0, diskBytes: 0 },
+      },
+      { record: vi.fn() } as unknown as RunEventRecorder,
+      (text) => text,
+    );
+    expect(code.synced).toBe(false);
+    expect(code.error).toContain('conflict/COD-9/bbbbbbbbbbbb');
+    expect(code.commit).toBe('b'.repeat(40));
+  });
 });
 
 describe('CodeRuns.prepare', () => {
