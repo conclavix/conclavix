@@ -41,7 +41,11 @@ export interface ChatPromptInput {
   messages: readonly ChatMessageDoc[];
   /** The existing project the chat is about, if any. */
   project: ProjectDoc | null;
-  /** Whether the read-only code tools are served for that project. */
+  /**
+   * Whether the chat refers to a project whose code may be readable. The API serves the code
+   * tools only when it has a project workspace, which the runner cannot see, so the prompt says
+   * to use them only if they are listed.
+   */
   code: boolean;
 }
 
@@ -83,7 +87,7 @@ export function buildChatPrompt(input: ChatPromptInput): string {
   const approved = chat.status === 'approved' && chat.approval !== null;
   const history = chatHistory(messages);
   const tools = ['memory_search', 'memory_save', 'list_projects', 'get_project_board'];
-  if (code) tools.push('the read-only code tools (list_branches, read_file, ...)');
+
   tools.push('write_chat_plan', 'create_project', 'create_planning_issue');
   return [
     `You are ${agent.name}${agent.title ? `, ${agent.title}` : ''} (role: ${agent.role}), the lead of a Conclavix organisation.`,
@@ -97,7 +101,10 @@ export function buildChatPrompt(input: ChatPromptInput): string {
           '',
           `The chat is about the existing project ${project.key} "${project.name}" (projectId ${project._id.toHexString()}).`,
           ...(code
-            ? ['Read its code (read-only) with the code tools; issue branches are cvx/<ISSUE-KEY>.']
+            ? [
+                'If your tools include the read-only code tools (list_branches, read_file, ...),',
+                'read its code with them; issue branches are cvx/<ISSUE-KEY>.',
+              ]
             : []),
         ]
       : []),

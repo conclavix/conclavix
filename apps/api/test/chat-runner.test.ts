@@ -1,7 +1,7 @@
 import { ObjectId } from 'mongodb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CHAT_LIMITS } from '@conclavix/core';
-import type { AgentDoc, ChatDoc, ChatMessageDoc } from '../src/db.js';
+import type { AgentDoc, ChatDoc, ChatMessageDoc, ProjectDoc } from '../src/db.js';
 import { writeChatPlan } from '../src/modules/chats/agent-actions.js';
 import type { Adapter, AdapterRunInput } from '../src/runner/adapters/types.js';
 import { buildChatPrompt, chatHistory } from '../src/runner/chat-prompt.js';
@@ -83,6 +83,15 @@ describe('chat run history and prompt', () => {
     expect(prompt).toContain('# Goal\nA shop');
     expect(prompt.indexOf('We need a shop')).toBeLessThan(prompt.indexOf('Which products?'));
     expect(prompt).not.toContain('read-only code tools');
+    const about = buildChatPrompt({
+      agent,
+      chat: chat(),
+      messages: [message('board', 'Extend it')],
+      project: { _id: new ObjectId(), key: 'SHOP', name: 'Shop' } as ProjectDoc,
+      code: true,
+    });
+    expect(about).toContain('existing project SHOP "Shop"');
+    expect(about).toContain('If your tools include the read-only code tools');
   });
 
   it('tells the lead to carry out an approved plan once', () => {

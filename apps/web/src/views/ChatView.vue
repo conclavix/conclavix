@@ -135,6 +135,9 @@ async function archive(): Promise<void> {
     <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mb-2">
       {{ error }}
     </v-alert>
+    <v-alert v-if="chats.loadError" type="warning" variant="tonal" density="compact" class="mb-2">
+      {{ chats.loadError }}
+    </v-alert>
     <v-alert
       v-if="chat?.lastError"
       type="warning"

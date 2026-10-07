@@ -163,19 +163,23 @@ export class ChatService {
     if (input.status === 'archived' && chat.activeRunId) {
       throw conflict('the lead is still answering; archive the chat once the reply is in');
     }
+    // Archiving must not race the scheduler: a run that started meanwhile makes it fail.
+    const archiving = input.status === 'archived';
     const updated = await this.collections.chats.findOneAndUpdate(
-      { _id: id },
+      archiving ? { _id: id, activeRunId: null } : { _id: id },
       {
         $set: {
           ...(input.title === undefined ? {} : { title: input.title }),
-          ...(input.status === undefined ? {} : { status: input.status, pendingTurn: null }),
+          ...(archiving ? { status: 'archived' as const, pendingTurn: null } : {}),
           updatedAt: new Date(),
         },
       },
       { returnDocument: 'after' },
     );
     if (!updated) {
-      throw notFound('Chat');
+      throw archiving
+        ? conflict('the lead started answering; archive the chat once the reply is in')
+        : notFound('Chat');
     }
     return this.view(updated);
   }

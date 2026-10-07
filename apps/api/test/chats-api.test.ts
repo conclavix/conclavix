@@ -192,6 +192,15 @@ describe('board chats with the lead', () => {
 
   it('archives a chat and then refuses messages', async () => {
     const { chatId } = await createLeadChat(ctx, fx);
+    const run = await chatTurn(ctx, fx, chatId);
+    const busy = await ctx.request({
+      method: 'PATCH',
+      url: `/api/chats/${chatId}`,
+      payload: { status: 'archived' },
+    });
+    expect(busy.statusCode).toBe(409);
+    await fx.scheduler.startRun(run._id, 60_000);
+    await fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd: 0 });
     const archived = await ctx.request({
       method: 'PATCH',
       url: `/api/chats/${chatId}`,
