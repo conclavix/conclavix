@@ -233,6 +233,7 @@ export class CodeRuns {
 
 /** One run event for what reconciling a clone with its server branch did. */
 function describeReconcile(result: CloneReconcile, branch: string, events: RunEventRecorder): void {
+  for (const warning of result.warnings) events.record('runner', `workspace ${branch}: ${warning}`);
   if (result.action === 'none') return;
   const from = `${short(result.clone)} -> ${short(result.head)}`;
   if (result.action === 'fast_forward') {

@@ -185,10 +185,13 @@ The probe mode of the acceptance script checks that such a reference reaches the
 - Then `syncIssueBranch` fetches `cvx/<KEY>` into the project repository (fast-forward only; a
   rewritten branch is not forced and the run records the refusal). A clone that is removed and
   created again starts from the server's `cvx/<KEY>`, not from `main`.
-- Before a run in an existing clone, the runner does the same reconciliation: a clone behind the
-  server branch is fast-forwarded (git's two-tree checkout with a fresh index; it refuses to
-  overwrite uncommitted changes, which fails the run with an explanation), a diverged one is
-  merged as above. The run then starts from the server tip. Inside the clone git runs only after
+- Before a run in an existing clone, the runner does the same reconciliation when the server
+  branch differs from the clone. Work an earlier run left uncommitted (its sandbox stopped it, or
+  its commit failed) is first committed on the clone's branch by `Conclavix`, so it is merged or
+  kept on the conflict branch like any other work and never overwritten. Then a clone behind the
+  server branch is fast-forwarded (git's two-tree checkout with a fresh index), a diverged one is
+  merged as above. The run then starts from the server tip. Failures to remove the temporary refs
+  (`refs/conclavix/...`) are recorded as run events; the next reconciliation overwrites them. Inside the clone git runs only after
   its configuration was replaced, with hooks off, and the project repository is marked as a safe
   directory for the fetch from it.
 - The run stores `code` (branch, base, head, commit, agent commits, files, insertions,

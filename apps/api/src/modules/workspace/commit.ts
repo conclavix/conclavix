@@ -1,18 +1,26 @@
 import { randomBytes } from 'node:crypto';
-import { lstat, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { lstat, rename, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { issueBranchName } from '@conclavix/core';
-import { conflict, notFound } from '../../errors.js';
-import type { GitCallOptions } from './git.js';
-import { GitError } from './git.js';
+import { notFound } from '../../errors.js';
+import {
+  checkoutClone,
+  cloneGit,
+  commitTree,
+  dropRef,
+  resetCloneConfig,
+  snapshotWorkTree,
+  withWarnings,
+  type CloneGit,
+} from './clone-git.js';
 import { safeIdent, type CommitIdentity } from './identity.js';
 import type { ConflictFile } from './merge.js';
 import { removeSandboxPlaceholders } from './placeholders.js';
-import { EMPTY_TREE, NO_REF, OBJECT_ID, isMissing } from './repo-base.js';
+import { EMPTY_TREE, NO_REF, isMissing } from './repo-base.js';
 import { Workspace } from './service.js';
 
 export { safeIdent };
+export { CLONE_CONFIG, DEFAULT_EXCLUDES } from './clone-git.js';
 
 /** Where the runner fetches the server's issue branch into a clone while reconciling the two. */
 const SERVER_TIP_REF = 'refs/conclavix/server';
@@ -31,34 +39,9 @@ export interface CloneReconcile {
   merge?: string;
   preservedBranch?: string;
   conflicts?: ConflictFile[];
+  /** Problems that did not stop the reconciliation, such as a temporary ref left behind. */
+  warnings: string[];
 }
-
-/**
- * The only configuration an issue clone keeps when the runner commits in it; whatever an agent
- * wrote to `.git/config` (filters, includes, fsmonitor, hooks path, worktree) is replaced.
- */
-export const CLONE_CONFIG = [
-  '[core]',
-  '\trepositoryformatversion = 0',
-  '\tfilemode = true',
-  '\tbare = false',
-  '\tlogallrefupdates = true',
-  '\tsymlinks = true',
-  '\tautocrlf = false',
-  '\tsharedRepository = 0660',
-  '',
-].join('\n');
-
-/** Paths a run's commit never picks up, on top of the clone's own .gitignore. */
-export const DEFAULT_EXCLUDES = [
-  'node_modules/',
-  '.venv/',
-  '__pycache__/',
-  '.pytest_cache/',
-  '.mypy_cache/',
-  '.cache/',
-  '.npm/',
-];
 
 export interface CommitAuthor {
   name: string;
@@ -113,8 +96,8 @@ export function sumNumstat(output: string): DiffStats {
 
 /**
  * Workspace operations of the runner: committing what an agent left in its clone. Git runs inside
- * the clone here, unlike in Workspace, so the clone's `.git` is checked first, its configuration
- * is replaced by CLONE_CONFIG and the index is a fresh one built from the branch tip.
+ * the clone here (clone-git.ts), unlike in Workspace, so the clone's `.git` is checked first, its
+ * configuration is replaced by CLONE_CONFIG and the index is a fresh one built from the branch tip.
  */
 export class CodeWorkspace extends Workspace {
   /**
@@ -158,7 +141,7 @@ export class CodeWorkspace extends Workspace {
     await this.ensureRepo(projectId);
     return this.queue.run(`workspace:${projectId}:${issueKey}`, async () => {
       const gitDir = await this.cloneGitDir(projectId, issueKey);
-      await this.resetCloneConfig(gitDir);
+      await resetCloneConfig(gitDir);
       const git = this.cloneGit(gitDir);
       const tip = await git.commit(ref);
       const base = await git.commit(input.base ?? '');
@@ -166,19 +149,13 @@ export class CodeWorkspace extends Workspace {
       const parent = rewritten ? base : (tip ?? base);
       if (!parent) throw notFound(`Branch ${branch} in the workspace of ${issueKey}`);
       const index = join(gitDir, `cvx-index-${randomBytes(6).toString('hex')}`);
-      const excludes = await mkdtemp(join(tmpdir(), 'cvx-commit-'));
       try {
-        const excludeFile = join(excludes, 'exclude');
-        await writeFile(excludeFile, `${DEFAULT_EXCLUDES.join('\n')}\n`, { mode: 0o600 });
-        const env = { GIT_INDEX_FILE: index };
-        await git.run(['read-tree', parent], { env });
-        await git.run(['-c', `core.excludesFile=${excludeFile}`, 'add', '-A', '--', '.'], { env });
-        const tree = (await git.text(['write-tree'], { env })).trim();
+        const tree = await snapshotWorkTree(git, index, parent);
         const parentTree = (await git.text(['rev-parse', `${parent}^{tree}`])).trim();
         let head = parent;
         let commit: string | null = null;
         if (tree !== parentTree) {
-          commit = await this.commitTree(git, tree, parent, input);
+          commit = await commitTree(git, tree, parent, input.author, input.message);
           head = commit;
         }
         await git.run(['update-ref', ref, head, tip ?? NO_REF]);
@@ -194,15 +171,51 @@ export class CodeWorkspace extends Workspace {
         };
       } finally {
         await rm(index, { force: true });
-        await rm(excludes, { recursive: true, force: true });
       }
     });
   }
 
   /**
+   * Commit what an earlier run left uncommitted in the clone (its sandbox stopped it, or the
+   * commit after it failed) on top of the clone's tip, by the system identity, so that bringing
+   * the clone up to date can neither overwrite it nor refuse because of it. Returns the new tip,
+   * or `tip` when the work tree is clean.
+   */
+  private async commitLeftovers(
+    git: CloneGit,
+    gitDir: string,
+    ref: string,
+    tip: string,
+  ): Promise<string> {
+    const index = join(gitDir, `cvx-index-${randomBytes(6).toString('hex')}`);
+    try {
+      const tree = await snapshotWorkTree(git, index, tip);
+      if (tree === (await git.text(['rev-parse', `${tip}^{tree}`])).trim()) return tip;
+      const commit = await commitTree(
+        git,
+        tree,
+        tip,
+        { name: 'Conclavix', email: `conclavix@${this.agentEmailDomain}` },
+        [
+          'Commit work an earlier run left uncommitted',
+          '',
+          'The runner committed it before bringing the workspace up to date with the server branch.',
+          '',
+        ].join('\n'),
+      );
+      await git.run(['update-ref', ref, commit, tip]);
+      await rename(index, join(gitDir, 'index'));
+      return commit;
+    } finally {
+      await rm(index, { force: true });
+    }
+  }
+
+  /**
    * Bring an issue clone and the server's `cvx/<KEY>` together after the server branch moved
-   * without the clone (an integration merge into it): a clone behind the server is
-   * fast-forwarded (a checkout that refuses to overwrite uncommitted changes); a clone that has
+   * without the clone (an integration merge into it). Work an earlier run left uncommitted is
+   * committed first (see commitLeftovers). Then a clone behind the server is
+   * fast-forwarded; a clone that has
    * commits the server lacks and lacks the server's is merged with it on the server side (no-ff,
    * first parent: the clone's line, by `author`) and then fast-forwarded. When that merge
    * conflicts, the clone's tip is kept as the branch `conflict/<KEY>/<sha>` in the project
@@ -221,27 +234,37 @@ export class CodeWorkspace extends Workspace {
     return this.queue.run(`workspace:${projectId}:${issueKey}`, async () => {
       const gitDir = await this.cloneGitDir(projectId, issueKey);
       const server = await this.commitOf(projectId, ref);
-      await this.resetCloneConfig(gitDir);
+      await resetCloneConfig(gitDir);
       const git = this.cloneGit(gitDir);
-      const clone = await git.commit(ref);
-      const unchanged = { action: 'none', server, clone, head: clone } as const;
-      if (!server || !clone || server === clone) return unchanged;
-      await this.fetchIntoClone(projectId, git, ref);
+      const before = await git.commit(ref);
+      if (!server || !before || server === before) {
+        return { action: 'none', server, clone: before, head: before, warnings: [] };
+      }
+      const clone = await this.commitLeftovers(git, gitDir, ref, before);
+      const warnings: string[] = [];
+      const dropServerTip = () =>
+        dropRef(warnings, SERVER_TIP_REF, () => git.run(['update-ref', '-d', SERVER_TIP_REF]));
       try {
-        if (await git.isAncestor(server, clone)) return unchanged;
+        await this.fetchIntoClone(projectId, git, ref);
+        let result: CloneReconcile = { action: 'none', server, clone, head: clone, warnings };
         if (await git.isAncestor(clone, server)) {
-          await this.checkoutClone(git, gitDir, ref, clone, server, false);
-          return { action: 'fast_forward', server, clone, head: server };
+          await checkoutClone(git, gitDir, ref, { from: clone, to: server, force: false });
+          result = { action: 'fast_forward', server, clone, head: server, warnings };
+        } else if (!(await git.isAncestor(server, clone))) {
+          result = await this.mergeDiverged(projectId, issueKey, gitDir, git, {
+            ref,
+            branch,
+            server,
+            clone,
+            author,
+            warnings,
+          });
         }
-        return await this.mergeDiverged(projectId, issueKey, gitDir, git, {
-          ref,
-          branch,
-          server,
-          clone,
-          author,
-        });
-      } finally {
-        await git.run(['update-ref', '-d', SERVER_TIP_REF]).catch(() => undefined);
+        await dropServerTip();
+        return result;
+      } catch (error) {
+        await dropServerTip();
+        throw withWarnings(error, warnings);
       }
     });
   }
@@ -251,10 +274,17 @@ export class CodeWorkspace extends Workspace {
     projectId: string,
     issueKey: string,
     gitDir: string,
-    git: ReturnType<CodeWorkspace['cloneGit']>,
-    tips: { ref: string; branch: string; server: string; clone: string; author: CommitIdentity },
+    git: CloneGit,
+    tips: {
+      ref: string;
+      branch: string;
+      server: string;
+      clone: string;
+      author: CommitIdentity;
+      warnings: string[];
+    },
   ): Promise<CloneReconcile> {
-    const { ref, branch, server, clone, author } = tips;
+    const { ref, branch, server, clone, author, warnings } = tips;
     const incoming = `refs/conclavix/incoming/${issueKey}`;
     await this.fromClone(projectId, gitDir, [
       'fetch',
@@ -265,13 +295,15 @@ export class CodeWorkspace extends Workspace {
       gitDir,
       `+${ref}:${incoming}`,
     ]);
+    const dropIncoming = () =>
+      dropRef(warnings, incoming, () => this.run(projectId, ['update-ref', '-d', incoming]));
     try {
       const merged = await this.mergeTrees(projectId, clone, server);
       if (merged.conflicts.length > 0) {
         const preserved = `conflict/${issueKey}/${clone.slice(0, 12)}`;
         const existing = await this.commitOf(projectId, `refs/heads/${preserved}`);
         if (existing !== clone) await this.moveBranch(projectId, preserved, clone, existing);
-        await this.checkoutClone(git, gitDir, ref, clone, server, true);
+        await checkoutClone(git, gitDir, ref, { from: clone, to: server, force: true });
         return {
           action: 'preserved',
           server,
@@ -279,6 +311,7 @@ export class CodeWorkspace extends Workspace {
           head: server,
           preservedBranch: preserved,
           conflicts: merged.conflicts,
+          warnings,
         };
       }
       const message = [
@@ -297,10 +330,10 @@ export class CodeWorkspace extends Workspace {
       );
       await this.moveBranch(projectId, branch, commit, server);
       await this.fetchIntoClone(projectId, git, ref);
-      await this.checkoutClone(git, gitDir, ref, clone, commit, false);
-      return { action: 'merged', server, clone, head: commit, merge: commit };
+      await checkoutClone(git, gitDir, ref, { from: clone, to: commit, force: false });
+      return { action: 'merged', server, clone, head: commit, merge: commit, warnings };
     } finally {
-      await this.run(projectId, ['update-ref', '-d', incoming]).catch(() => undefined);
+      await dropIncoming();
     }
   }
 
@@ -309,11 +342,7 @@ export class CodeWorkspace extends Workspace {
    * configuration was just replaced); the other side is the bare repository, which belongs to
    * the API user, so it is marked as a safe directory for this call.
    */
-  private async fetchIntoClone(
-    projectId: string,
-    git: ReturnType<CodeWorkspace['cloneGit']>,
-    ref: string,
-  ): Promise<void> {
+  private async fetchIntoClone(projectId: string, git: CloneGit, ref: string): Promise<void> {
     const repo = this.repoDir(projectId);
     await this.withSafeDirectory(repo, (env) =>
       git.run(
@@ -333,125 +362,16 @@ export class CodeWorkspace extends Workspace {
     );
   }
 
-  /**
-   * Move the clone's branch from `from` to `to` and update the work tree. Without `force` this is
-   * git's two-tree checkout, which refuses to overwrite uncommitted changes; with `force` the
-   * work tree's tracked files become `to` exactly. A fresh index is built and moved into place.
-   */
-  private async checkoutClone(
-    git: ReturnType<CodeWorkspace['cloneGit']>,
-    gitDir: string,
-    ref: string,
-    from: string,
-    to: string,
-    force: boolean,
-  ): Promise<void> {
-    const index = join(gitDir, `cvx-index-${randomBytes(6).toString('hex')}`);
-    const env = { GIT_INDEX_FILE: index };
-    try {
-      await git.run(['read-tree', from], { env });
-      if (force) {
-        await git.run(['read-tree', '--reset', '-u', to], { env });
-      } else {
-        await git.run(['update-index', '-q', '--refresh'], { env, allowExitCodes: [1] });
-        try {
-          await git.run(['read-tree', '-m', '-u', from, to], { env });
-        } catch (error) {
-          if (error instanceof GitError && error.reason === 'exit') {
-            throw conflict(
-              `the workspace of ${ref.slice('refs/heads/'.length)} has uncommitted changes that the server branch would overwrite`,
-              { hint: 'an admin can remove the workspace; the next run clones the server branch' },
-            );
-          }
-          throw error;
-        }
-      }
-      await git.run(['update-ref', ref, to, from]);
-      await git.run(['symbolic-ref', 'HEAD', ref]);
-      await rename(index, join(gitDir, 'index'));
-    } finally {
-      await rm(index, { force: true });
-    }
+  private cloneGit(gitDir: string): CloneGit {
+    return cloneGit(this.git, gitDir, this.limits.archiveTimeoutMs);
   }
 
-  private async resetCloneConfig(gitDir: string): Promise<void> {
-    const temp = join(gitDir, `config.cvx-${randomBytes(6).toString('hex')}`);
-    await writeFile(temp, CLONE_CONFIG, { mode: 0o660, flag: 'wx' });
-    await rename(temp, join(gitDir, 'config'));
-  }
-
-  /** git with the clone as git directory and work tree, and the clone's commit lookup. */
-  private cloneGit(gitDir: string) {
-    const base = [`--git-dir=${gitDir}`, `--work-tree=${dirname(gitDir)}`];
-    const options = (extra: GitCallOptions = {}): GitCallOptions => ({
-      timeoutMs: this.limits.archiveTimeoutMs,
-      cwd: dirname(gitDir),
-      ...extra,
-    });
-    const run = (args: readonly string[], extra?: GitCallOptions) =>
-      this.git.run([...base, ...args], options(extra));
-    const text = (args: readonly string[], extra?: GitCallOptions) =>
-      this.git.text([...base, ...args], options(extra));
-    const commit = async (revision: string): Promise<string | null> => {
-      if (revision === '') return null;
-      try {
-        const sha = await text(['rev-parse', '--verify', '--quiet', `${revision}^{commit}`]);
-        return OBJECT_ID.test(sha) ? sha : null;
-      } catch (error) {
-        if (error instanceof GitError && error.reason === 'exit') return null;
-        throw error;
-      }
-    };
-    /** Whether `ancestor` is reachable from `descendant` (a commit counts as its own ancestor). */
-    const isAncestor = async (ancestor: string, descendant: string): Promise<boolean> => {
-      try {
-        await run(['merge-base', '--is-ancestor', ancestor, descendant]);
-        return true;
-      } catch (error) {
-        if (error instanceof GitError && error.reason === 'exit' && error.exitCode === 1) {
-          return false;
-        }
-        throw error;
-      }
-    };
-    return { run, text, commit, isAncestor };
-  }
-
-  private async commitTree(
-    git: ReturnType<CodeWorkspace['cloneGit']>,
-    tree: string,
-    parent: string,
-    input: CloneCommitInput,
-  ): Promise<string> {
-    const name = safeIdent(input.author.name, 'Conclavix');
-    const email = safeIdent(input.author.email, 'conclavix@localhost');
-    const sha = await git.text(['commit-tree', tree, '-p', parent, '-F', '-'], {
-      input: input.message,
-      env: {
-        GIT_AUTHOR_NAME: name,
-        GIT_AUTHOR_EMAIL: email,
-        GIT_COMMITTER_NAME: name,
-        GIT_COMMITTER_EMAIL: email,
-      },
-    });
-    if (!OBJECT_ID.test(sha)) throw new Error('git commit-tree returned no commit id');
-    return sha;
-  }
-
-  private async countCommits(
-    git: ReturnType<CodeWorkspace['cloneGit']>,
-    base: string | null,
-    tip: string,
-  ): Promise<number> {
+  private async countCommits(git: CloneGit, base: string | null, tip: string): Promise<number> {
     const range = base ? [`${base}..${tip}`] : [tip];
     return Number((await git.text(['rev-list', '--count', ...range])).trim()) || 0;
   }
 
-  private async diffStats(
-    git: ReturnType<CodeWorkspace['cloneGit']>,
-    base: string | null,
-    head: string,
-  ): Promise<DiffStats> {
+  private async diffStats(git: CloneGit, base: string | null, head: string): Promise<DiffStats> {
     if (base === head) return { files: 0, insertions: 0, deletions: 0 };
     const output = await git.text([
       'diff',

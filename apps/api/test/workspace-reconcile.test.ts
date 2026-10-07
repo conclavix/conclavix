@@ -119,16 +119,29 @@ describe('CodeWorkspace.reconcileClone', () => {
     expect(git(clone, 'status', '--porcelain')).toBe('');
   });
 
-  it('refuses to overwrite uncommitted changes and changes nothing', async () => {
+  it('commits uncommitted leftovers first, so they are merged or kept', async () => {
     const before = head();
-    const merged = await merge(['cvx/APP-11']);
+    await merge(['cvx/APP-10']);
+    writeFileSync(join(clone, 'left.txt'), 'left behind\n');
+    const merged = await ws.reconcileClone(PROJECT, ISSUE, AGENT);
+    expect(merged.action).toBe('merged');
+    const leftover = git(clone, 'rev-parse', 'HEAD^1');
+    expect(git(clone, 'rev-parse', `${leftover}^`)).toBe(before);
+    expect(git(clone, 'log', '-1', '--format=%an|%s', leftover)).toBe(
+      'Conclavix|Commit work an earlier run left uncommitted',
+    );
+    expect(read('left.txt')).toBe('left behind\n');
+    expect(read('ten.txt')).toBe('ten\n');
+    expect(git(clone, 'status', '--porcelain')).toBe('');
+
+    const conflicting = await merge(['cvx/APP-11']);
     writeFileSync(join(clone, 'shared.txt'), 'uncommitted\n');
-    await expect(ws.reconcileClone(PROJECT, ISSUE, AGENT)).rejects.toMatchObject({
-      statusCode: 409,
-    });
-    expect(head()).toBe(before);
-    expect(server()).toBe(merged.after);
-    expect(read('shared.txt')).toBe('uncommitted\n');
+    const kept = await ws.reconcileClone(PROJECT, ISSUE, AGENT);
+    expect(kept.action).toBe('preserved');
+    const bare = (...args: string[]) => git(root.dir, `--git-dir=${ws.repoDir(PROJECT)}`, ...args);
+    expect(bare('show', `${kept.preservedBranch ?? ''}:shared.txt`)).toBe('uncommitted');
+    expect(head()).toBe(conflicting.after);
+    expect(read('shared.txt')).toBe('eleven\n');
   });
 
   it('lets the runner integrate a merge made during the run', async () => {

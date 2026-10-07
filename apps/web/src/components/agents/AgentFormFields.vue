@@ -165,7 +165,7 @@ const modelRules = computed(() =>
         v-model="form.gitIntegration"
         color="warning"
         label="May merge branches and update main"
-        hint="Off by default. On: the agent can merge branches of its project into an issue branch and fast-forward main to a reviewed branch, on the server (merge_branches, promote_branch). Pushing to external remotes is not part of this."
+        hint="Off by default. On: the agent can merge branches of its project into an issue branch and fast-forward main to a reviewed branch, on the server (merge_branches, fast_forward_main). Pushing to external remotes is not part of this."
         persistent-hint
         inset
         data-test="git-integration-switch"

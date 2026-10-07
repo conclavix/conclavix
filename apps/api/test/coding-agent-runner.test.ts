@@ -293,7 +293,7 @@ describe('CodeRuns.prepare', () => {
       {
         createIssueWorkspace,
         branchTip: vi.fn().mockResolvedValue(null),
-        reconcileClone: vi.fn().mockResolvedValue({ action: 'none' }),
+        reconcileClone: vi.fn().mockResolvedValue({ action: 'none', warnings: [] }),
       } as unknown as CodeWorkspace,
       reclaim,
     );

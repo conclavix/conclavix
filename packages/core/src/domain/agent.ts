@@ -89,7 +89,7 @@ export const codeAccessSchema = z.enum(['none', 'write']);
 /**
  * Whether the agent may integrate branches of its project's repository through the agent API:
  * merge branches into an issue branch (`merge_branches`) and fast-forward main
- * (`promote_branch`). Off by default; agents stored before this field count as false.
+ * (`fast_forward_main`). Off by default; agents stored before this field count as false.
  */
 export const gitIntegrationSchema = z.boolean();
 
