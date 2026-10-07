@@ -72,8 +72,7 @@ export function registerConnectionRoutes(
       // An admin may not keep editing what an owner opened up to private networks.
       requireOwnerForPrivate(
         request,
-        current.allowPrivateNetwork &&
-          (input.config !== undefined || input.credentials !== undefined),
+        current.allowPrivateNetwork && Object.keys(input).some((field) => field !== 'agentIds'),
       );
       const { connection, changes } = await connections.update(id, input, session);
       await audit.write(

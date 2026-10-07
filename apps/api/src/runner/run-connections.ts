@@ -66,13 +66,20 @@ interface Loaded {
  * The connection and its credentials are read one after the other; an edit committed in between
  * (it always moves updatedAt) could pair a new credential with the old URL.
  */
+export class ConnectionChangedError extends Error {
+  constructor() {
+    super('it was changed while it was loaded');
+    this.name = 'ConnectionChangedError';
+  }
+}
+
 export async function assertUnchanged(collections: Collections, doc: ConnectionDoc) {
   const fresh = await collections.connections.findOne(
     { _id: doc._id },
     { projection: { updatedAt: 1 } },
   );
   if (fresh?.updatedAt.getTime() !== doc.updatedAt.getTime()) {
-    throw new Error('it was changed while it was loaded');
+    throw new ConnectionChangedError();
   }
 }
 
@@ -136,6 +143,13 @@ export async function loadRunConnections(
       result.skipped.push({ name: doc.name, cause: 'the runner has no AUTH_SECRET' });
       continue;
     }
+    if (result.servers.length >= MAX_MCP_SERVERS) {
+      result.skipped.push({
+        name: doc.name,
+        cause: `more than ${MAX_MCP_SERVERS} servers in one run`,
+      });
+      continue;
+    }
     let loaded: Loaded;
     try {
       loaded = await loadOne(collections, box, doc);
@@ -143,13 +157,6 @@ export async function loadRunConnections(
       result.skipped.push({
         name: doc.name,
         cause: error instanceof Error ? error.message : String(error),
-      });
-      continue;
-    }
-    if (result.servers.length >= MAX_MCP_SERVERS) {
-      result.skipped.push({
-        name: doc.name,
-        cause: `more than ${MAX_MCP_SERVERS} servers in one run`,
       });
       continue;
     }

@@ -158,8 +158,7 @@ function messageFor(result: PostResult, id: number): Record<string, unknown> {
     .find((entry) => entry.id === id);
   if (!message) throw new McpProbeError('the server did not answer the request');
   if (message.error) {
-    const text =
-      typeof message.error.message === 'string' ? message.error.message.slice(0, 2000) : 'error';
+    const text = typeof message.error.message === 'string' ? message.error.message : 'error';
     throw new McpProbeError(`the server answered with an error: ${text}`);
   }
   return message.result ?? {};

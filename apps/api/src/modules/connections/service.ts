@@ -8,7 +8,11 @@ import { Redactor } from '../../runner/redact.js';
 import type { SecretBox } from '../settings/secret-box.js';
 import { checkAgentIds } from '../secrets/agent-ids.js';
 import { secretContext } from '../secrets/repository.js';
-import { assertUnchanged, knownValues } from '../../runner/run-connections.js';
+import {
+  assertUnchanged,
+  ConnectionChangedError,
+  knownValues,
+} from '../../runner/run-connections.js';
 import { assertSafeConnectionUrl } from './net.js';
 import { connectionType } from './types/index.js';
 import type { ConnectionContext, ConnectionType } from './types/types.js';
@@ -303,8 +307,11 @@ export class ConnectionService {
     const doc = await this.getDoc(id);
     const type = typeOf(doc.type);
     const credentials = await this.credentials(doc);
-    await assertUnchanged(this.collections, doc).catch(() => {
-      throw conflict('The connection was changed meanwhile; test it again');
+    await assertUnchanged(this.collections, doc).catch((error: unknown) => {
+      if (error instanceof ConnectionChangedError) {
+        throw conflict('The connection was changed meanwhile; test it again');
+      }
+      throw error;
     });
     const context: ConnectionContext<Record<string, unknown>> = {
       name: doc.name,
