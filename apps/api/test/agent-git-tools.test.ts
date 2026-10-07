@@ -1,10 +1,14 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ObjectId } from 'mongodb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AgentDoc, IssueDoc } from '../src/db.js';
-import { GIT_TOOL_NAMES } from '../src/modules/agent-api/git-tools.js';
+import type { AgentDoc, IssueDoc, RunDoc } from '../src/db.js';
+import type { AuditLog } from '../src/modules/audit/audit.js';
+import { loadScope } from '../src/modules/agent-api/scope.js';
+import { GIT_TOOL_NAMES, registerGitTools } from '../src/modules/agent-api/git-tools.js';
 import type { OrgPosition } from '../src/modules/org/position.js';
 import { Workspace } from '../src/modules/workspace/service.js';
 import { GIT_INTEGRATION_HINT, buildPrompt } from '../src/runner/prompt.js';
@@ -38,6 +42,7 @@ describe('agent git integration tools', () => {
   let foreign: { id: string; key: string };
   let otherProject: { id: string; key: string };
   let client: Client;
+  let ownRun: RunDoc;
   let plain: Client;
   let counter = 0;
 
@@ -91,7 +96,9 @@ describe('agent git integration tools', () => {
     pushTo(fx.projectId, 'main', 'cvx/APP-12', { 'shared.txt': 'twelve\n' });
     pushTo(other.projectId, 'main', 'secret', { 'secret.txt': 'other project\n' });
 
-    client = await connectAgent(baseUrl, (await startRunFor(ctx, fx, own.id)).token);
+    const started = await startRunFor(ctx, fx, own.id);
+    ownRun = started.run;
+    client = await connectAgent(baseUrl, started.token);
     plain = await connectAgent(baseUrl, (await startRunFor(ctx, fx, foreign.id)).token);
   });
 
@@ -238,7 +245,27 @@ describe('agent git integration tools', () => {
       sources: ['cvx/APP-12'],
     });
     expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.data)).toMatch(/not found|may not integrate branches/);
+    expect(JSON.stringify(result.data)).toMatch(/not found/);
+
+    // Tools registered while the flag was still set check it again on every call.
+    const scope = { ...(await loadScope(ctx.database, ownRun)) };
+    scope.agent = { ...scope.agent, gitIntegration: true };
+    const server = new McpServer({ name: 'conclavix', version: 'test' });
+    registerGitTools(server, ctx.database, scope, workspace, {
+      record: async () => undefined,
+    } as unknown as AuditLog);
+    const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const stale = new Client({ name: 'stale-scope', version: '1.0.0' });
+    await stale.connect(clientSide);
+    const refused = await callTool(stale, 'merge_branches', {
+      target: `cvx/${assigned.key}`,
+      sources: ['cvx/APP-12'],
+    });
+    await stale.close();
+    await server.close();
+    expect(refused.isError).toBe(true);
+    expect(refused.data['error']).toMatch(/may not integrate branches/);
     expect(refs(fx.projectId)).toBe(before);
     await ctx.request({
       method: 'PATCH',

@@ -115,16 +115,19 @@ export class CodeRuns {
       info = await this.workspace.createIssueWorkspace(projectId, issue.key);
     }
     await recordIssueWorkspace(this.database, this.audit, issue, info, { type: 'system' });
+    // The base is the server tip the clone holds, never one read later: a merge may land meanwhile.
+    let base: string | null = info.head || null;
     if (!info.created) {
       // The server branch may have moved since the last run (an integration merge into it).
       const reconciled = await this.reconcileBeforeRun(projectId, issue.key, agent, events);
       describeReconcile(reconciled, info.branch, events);
+      base = (reconciled.action === 'none' ? reconciled.server : reconciled.head) ?? null;
       if (reconciled.action === 'set_aside') {
         info = await this.workspace.createIssueWorkspace(projectId, issue.key);
         await recordIssueWorkspace(this.database, this.audit, issue, info, { type: 'system' });
+        base = info.head || null;
       }
     }
-    const base = await this.workspace.branchTip(projectId, issue.key);
     events.record(
       'runner',
       `workspace ${info.branch} ${info.created ? 'created' : 'reused'}, server tip ${short(base)}`,
