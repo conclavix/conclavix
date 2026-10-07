@@ -246,7 +246,7 @@ STUB
   /usr/bin/node "$work/mcp-stub.cjs" "$work/bearer" "$work/mcp-port" "$work/mcp-log" &
   stub=$!
   for _ in $(seq 1 50); do [[ -s $work/mcp-port ]] && break; sleep 0.1; done
-  mcp_config="{\"mcpServers\":{\"conclavix\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:$(cat "$work/mcp-port")/mcp\",\"headers\":{\"Authorization\":\"Bearer \${CONCLAVIX_RUN_BEARER}\"}}}}"
+  mcp_config="{\"mcpServers\":{\"conclavix\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:$(cat "$work/mcp-port")/mcp\",\"headers\":{\"Authorization\":\"Bearer \${CONCLAVIX_RUN_BEARER}\"}},\"acceptance-extra\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:$(cat "$work/mcp-port")/mcp\",\"headers\":{\"Authorization\":\"\${CONCLAVIX_MCP_HEADER_1}\"}}}}"
   {
     while IFS= read -r line; do
       name=${line%%=*}
@@ -257,6 +257,8 @@ STUB
       printf '%s=%s\n' "$name" "$(printf '%s' "$value" | base64 -w0)"
     done <"$RUNNER_ENV"
     printf 'CONCLAVIX_RUN_BEARER=%s\n' "$(base64 -w0 <"$work/bearer")"
+    # A connection's MCP server (docs/connections.md): the same stub, its header from the block.
+    printf 'CONCLAVIX_MCP_HEADER_1=%s\n' "$(printf 'Bearer %s' "$(cat "$work/bearer")" | base64 -w0)"
     printf 'ACCEPTANCE_PROJECT_VALUE=%s\n' "$(printf '%s' "$project_value" | base64 -w0)"
     printf 'ACCEPTANCE_API_KEY=%s\n' "$(printf '%s' "$api_key_value" | base64 -w0)"
     printf '\n'
@@ -292,8 +294,10 @@ for (const line of lines) {
   let event;
   try { event = JSON.parse(line); } catch { continue; }
   if (event?.type === 'system' && event.subtype === 'init') {
-    const server = (event.mcp_servers ?? []).find((s) => s.name === 'conclavix');
-    console.log(`ACCIN mcp-conclavix=${String(server?.status ?? 'absent').replace(/[^a-z-]/g, '')}`);
+    for (const name of ['conclavix', 'acceptance-extra']) {
+      const server = (event.mcp_servers ?? []).find((s) => s.name === name);
+      console.log(`ACCIN mcp-${name}=${String(server?.status ?? 'absent').replace(/[^a-z-]/g, '')}`);
+    }
   }
   for (const block of event?.message?.content ?? []) {
     if (block.type === 'tool_use') uses.set(block.id, block);
@@ -314,6 +318,7 @@ PARSE
   # Claude Code's subprocess scrub removes the credential variables (OAuth token, API key, auth
   # token, ANTHROPIC_CUSTOM_HEADERS with the gateway key); ANTHROPIC_BASE_URL may stay visible.
   check 'conclavix MCP server connected (run bearer expanded into the header)' "$(inner mcp-conclavix)" connected
+  check 'connection MCP server connected (header value expanded from the block)' "$(inner mcp-acceptance-extra)" connected
   check 'MCP stub accepted the bearer and refused nothing' \
     "$(grep -c '^accepted$' "$work/mcp-log" | awk '{print ($1 > 0) ? "yes" : "no"}')/$(grep -c '^refused$' "$work/mcp-log" || true)" yes/0
   check 'no credential variables in Bash' "$(inner credential-env)" none

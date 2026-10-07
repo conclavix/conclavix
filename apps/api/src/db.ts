@@ -34,6 +34,7 @@ import type {
   WakeSkipReason,
 } from '@conclavix/core';
 import type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
+import { vaultCollections, type VaultCollections } from './db/vault.js';
 
 export type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
 
@@ -336,7 +337,7 @@ export interface AuditDoc {
   details: Record<string, unknown>;
 }
 
-export interface Collections {
+export interface Collections extends VaultCollections {
   projects: Collection<ProjectDoc>;
   agents: Collection<AgentDoc>;
   issues: Collection<IssueDoc>;
@@ -361,7 +362,6 @@ export interface Collections {
   orgLayout: Collection<LayoutDoc>;
   notifications: Collection<NotificationDoc>;
   skillSources: Collection<SkillSourceDoc>;
-  secrets: Collection<import('./db/secrets.js').SecretDoc>;
 }
 
 export interface Database {
@@ -438,7 +438,7 @@ export async function connectDatabase(uri: string): Promise<Database> {
       orgLayout: db.collection<LayoutDoc>('org_layout'),
       notifications: db.collection<NotificationDoc>('notifications'),
       skillSources: db.collection<SkillSourceDoc>('skill_sources'),
-      secrets: db.collection('secrets'),
+      ...vaultCollections(db),
     };
     await ensureIndexes(collections);
     return {

@@ -91,6 +91,12 @@ export const router = createRouter({
       meta: { admin: true },
     },
     {
+      path: '/admin/connections',
+      name: 'admin-connections',
+      component: () => import('./views/admin/AdminConnectionsView.vue'),
+      meta: { admin: true },
+    },
+    {
       path: '/admin/audit',
       name: 'admin-audit',
       component: () => import('./views/admin/AdminAuditView.vue'),

@@ -16,6 +16,8 @@ export const SECRET_ENV = [
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_CUSTOM_HEADERS',
   'CONCLAVIX_RUN_BEARER',
+  // Header values of the run's connection MCP servers (docs/connections.md).
+  ...Array.from({ length: 32 }, (_, index) => `CONCLAVIX_MCP_HEADER_${index + 1}`),
 ];
 
 /** The clone of an issue below the code root. */
@@ -51,7 +53,15 @@ export function managedSettings(config, options) {
       defaultMode: 'dontAsk',
       disableBypassPermissionsMode: 'disable',
       blockReadsOutsideWorkingDirectories: true,
-      allow: ['Bash', `Edit(/${clone}/**)`, 'Skill', 'mcp__conclavix'],
+      allow: [
+        'Bash',
+        `Edit(/${clone}/**)`,
+        'Skill',
+        'mcp__conclavix',
+        ...(options.mcpServers ?? [])
+          .filter((name) => name !== 'conclavix')
+          .map((name) => `mcp__${name}`),
+      ],
       deny: [
         'Read(//proc/**)',
         'Read(//sys/**)',
@@ -133,6 +143,10 @@ export function unitProperties(config, options, ids, { skillsDir } = {}) {
       ? [`BindReadOnlyPaths=${skillsDir}:${config.managedSettingsDir}/.claude/skills`]
       : []),
     `IPAddressDeny=${config.deniedAddresses.join(' ')}`,
+    // Allow entries win over deny entries: only the addresses the helper accepted for the run.
+    ...(options.allowAddresses?.length
+      ? [`IPAddressAllow=${options.allowAddresses.join(' ')}`]
+      : []),
     `MemoryMax=${memory(options.memoryMaxBytes)}`,
     'MemorySwapMax=0',
     `CPUQuota=${options.cpuQuotaPercent}%`,

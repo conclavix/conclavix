@@ -91,19 +91,22 @@ export function assertSafeDirectoryUrl(raw: string | URL, allowPrivate: boolean)
   if (url.protocol !== 'https:') {
     throw new AppError(422, 'directory_url_invalid', 'The directory URL must use https');
   }
-  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (isIP(host) !== 0) {
-    if (isBlockedAddress(host)) throw addressBlocked();
-    return url;
-  }
-  if (
+  if (isBlockedHost(url.hostname)) throw addressBlocked();
+  return url;
+}
+
+/**
+ * True for a URL host (as `URL.hostname` gives it) that is a blocked address literal or a name
+ * that can only mean the local network: localhost, single labels, .local, .internal, ...
+ */
+export function isBlockedHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (isIP(host) !== 0) return isBlockedAddress(host);
+  return (
     host === 'localhost' ||
     !host.includes('.') ||
     BLOCKED_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))
-  ) {
-    throw addressBlocked();
-  }
-  return url;
+  );
 }
 
 type LookupCallback = (

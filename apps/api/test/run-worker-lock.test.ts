@@ -57,6 +57,7 @@ function fixture(adapter: Adapter) {
         }),
       },
       runEvents: { insertMany: vi.fn().mockResolvedValue(undefined) },
+      connections: { find: () => ({ sort: () => ({ toArray: async () => [] }) }) },
     },
   } as unknown as Database;
   const scheduler = {

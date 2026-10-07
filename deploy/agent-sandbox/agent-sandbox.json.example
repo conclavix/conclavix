@@ -6,6 +6,7 @@
   "codeGroup": "cvx-code",
   "claudeBin": "/usr/bin/claude",
   "allowedDomains": ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org"],
+  "mcpAllowedAddresses": [],
   "maxLimits": {
     "memoryMaxBytes": 17179869184,
     "cpuQuotaPercent": 800,

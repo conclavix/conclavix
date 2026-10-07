@@ -2,6 +2,7 @@ import type { ObjectId } from 'mongodb';
 import pino from 'pino';
 import { secretEnvNameProblem } from '@conclavix/core';
 import type { Collections } from '../db.js';
+import { PROJECT_SECRET } from '../db/secrets.js';
 import type { AuditLog } from '../modules/audit/audit.js';
 import type { SecretBox } from '../modules/settings/secret-box.js';
 import { secretContext } from '../modules/secrets/repository.js';
@@ -36,7 +37,7 @@ export async function loadRunSecrets(
   agentId: ObjectId,
 ): Promise<RunSecret[]> {
   const docs = await collections.secrets
-    .find({ projectId, agentIds: agentId })
+    .find({ projectId, agentIds: agentId, envName: { $type: 'string' }, ...PROJECT_SECRET })
     .sort({ envName: 1 })
     .toArray();
   if (docs.length === 0) return [];
@@ -46,11 +47,12 @@ export async function loadRunSecrets(
     );
   }
   return docs.map((doc) => {
-    const problem = secretEnvNameProblem(doc.envName);
+    const envName = doc.envName ?? '';
+    const problem = secretEnvNameProblem(envName);
     if (problem) throw new RunSecretsError(`secret variable ${doc.envName}: ${problem}`);
     try {
       const value = box.open(doc.valueEncrypted, secretContext(doc._id));
-      return { id: doc._id, name: doc.name, envName: doc.envName, value };
+      return { id: doc._id, name: doc.name, envName, value };
     } catch {
       throw new RunSecretsError(
         `secret ${doc.envName} cannot be decrypted (AUTH_SECRET differs from the API's?)`,

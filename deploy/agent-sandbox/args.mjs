@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { isAbsolute, normalize } from 'node:path';
 import { DOMAIN } from './config.mjs';
 
@@ -53,11 +54,18 @@ const RUN_OPTIONS = {
     parse: (v) => (DOMAIN.test(v) ? v : null),
     repeat: true,
   },
+  // A private address of an MCP server the run's connections use; the helper keeps only those
+  // inside the configured mcpAllowedAddresses (see agent-run.mjs).
+  '--allow-address': {
+    key: 'allowAddresses',
+    parse: (v) => (isIP(v) !== 0 ? v : null),
+    repeat: true,
+  },
 };
 
 /** Parse the helper's own `--name value` options and apply required and default values. */
 function parseOptions(own) {
-  const options = { extraDomains: [] };
+  const options = { extraDomains: [], allowAddresses: [] };
   const seen = new Set();
   for (let i = 0; i < own.length; i += 2) {
     const name = own[i];
@@ -90,8 +98,10 @@ export function parseRunArgs(argv, { probe = false } = {}) {
   if (separator === -1) throw new UsageError('missing -- before the claude flags');
   const options = parseOptions(argv.slice(1, separator));
   if (options.extraDomains.length > 50) throw new UsageError('too many --allow-domain values');
+  if (options.allowAddresses.length > 16) throw new UsageError('too many --allow-address values');
   const rest = argv.slice(separator + 1);
   options.claudeArgs = probe ? rest : validateClaudeArgs(rest);
+  options.mcpServers = probe ? [] : mcpServerNames(options.claudeArgs);
   return options;
 }
 
@@ -125,28 +135,80 @@ export function assertWithinLimits(options, maxLimits) {
 const BUILTIN_TOOLS = new Set(['Read', 'Grep', 'Glob', 'Skill', 'Edit', 'Write', 'Bash']);
 const MODEL = /^[A-Za-z0-9][\w.:/@[\]-]{0,119}$/;
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
+const SERVER_NAME = /^[a-z][a-z0-9-]{0,39}$/;
+const HEADER_NAME = /^[A-Za-z0-9-]{1,64}$/;
+/** Header values of connection servers: only a reference claude expands from the environment. */
+const HEADER_REFERENCE = /^\$\{CONCLAVIX_MCP_HEADER_([1-9]|[12][0-9]|3[0-2])\}$/;
+const MAX_SERVERS = 9;
+const MAX_HEADERS = 8;
 
-/** The MCP config must hold only HTTP servers on loopback; a stdio server would start a program. */
-function mcpConfigValid(value) {
+function urlOf(value) {
+  try {
+    return typeof value === 'string' ? new URL(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The board's own server: plain HTTP on loopback. */
+function boardServerValid(server) {
+  const url = urlOf(server.url);
+  return url !== null && url.protocol === 'http:' && LOOPBACK.has(url.hostname);
+}
+
+/**
+ * A connection's server: http(s) without credentials in the URL, header values only as
+ * references, so no secret ever stands in argv.
+ */
+function connectionServerValid(server) {
+  const url = urlOf(server.url);
+  if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    return false;
+  }
+  const headers = server.headers ?? {};
+  if (typeof headers !== 'object' || headers === null || Array.isArray(headers)) return false;
+  const entries = Object.entries(headers);
+  return (
+    entries.length <= MAX_HEADERS &&
+    entries.every(
+      ([name, value]) =>
+        HEADER_NAME.test(name) && typeof value === 'string' && HEADER_REFERENCE.test(value),
+    )
+  );
+}
+
+/**
+ * The MCP config may hold only HTTP servers (a stdio server would start a program): `conclavix`
+ * on loopback, and up to eight connection servers (docs/connections.md). Returns the server
+ * names, or null when the config is refused.
+ */
+export function mcpConfigServers(value) {
   let parsed;
   try {
     parsed = JSON.parse(value);
   } catch {
-    return false;
+    return null;
   }
   const servers = parsed?.mcpServers;
   if (typeof servers !== 'object' || servers === null || Object.keys(parsed).length !== 1) {
-    return false;
+    return null;
   }
-  return Object.values(servers).every((server) => {
-    if (server?.type !== 'http' || typeof server.url !== 'string') return false;
-    try {
-      const url = new URL(server.url);
-      return url.protocol === 'http:' && LOOPBACK.has(url.hostname);
-    } catch {
-      return false;
-    }
+  const names = Object.keys(servers);
+  if (names.length > MAX_SERVERS) return null;
+  const valid = names.every((name) => {
+    const server = servers[name];
+    if (!SERVER_NAME.test(name) || server?.type !== 'http') return false;
+    return name === 'conclavix' ? boardServerValid(server) : connectionServerValid(server);
   });
+  return valid ? names : null;
+}
+
+const mcpConfigValid = (value) => mcpConfigServers(value) !== null;
+
+/** The server names of the validated claude flags' --mcp-config. */
+function mcpServerNames(claudeArgs) {
+  const index = claudeArgs.indexOf('--mcp-config');
+  return index === -1 ? [] : (mcpConfigServers(claudeArgs[index + 1]) ?? []);
 }
 
 /**
