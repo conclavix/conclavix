@@ -142,6 +142,9 @@ export function unitProperties(config, options, ids, { skillsDir } = {}) {
     ...(skillsDir
       ? [`BindReadOnlyPaths=${skillsDir}:${config.managedSettingsDir}/.claude/skills`]
       : []),
+    // Paths of host programs the run may execute (assertToolProgram); the wrapper keeps the
+    // unit's environment, and Claude Code passes these names on to Bash.
+    ...(options.tools ?? []).map((tool) => `Environment=${tool.name}=${tool.path}`),
     `IPAddressDeny=${config.deniedAddresses.join(' ')}`,
     // Allow entries win over deny entries: only the addresses the helper accepted for the run.
     ...(options.allowAddresses?.length

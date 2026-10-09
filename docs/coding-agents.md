@@ -51,6 +51,11 @@ only and builds every path itself:
   path below the code root); the skills directory must be a real directory below the runner's
   workspaces; extra domains must be host names; limits must stay below the maxima in
   `/etc/conclavix/agent-sandbox.json` (optional, root-owned, not writable by others).
+- sandbox tools (`--tool NAME_BIN=/path`, from `CODE_SANDBOX_TOOLS`, see
+  [Host test tools](#host-test-tools)): the name must end in `_BIN` and must not start with a
+  prefix reserved for project secrets, the path must be absolute and normalised; before the run
+  the program must pass the same root-ownership check as the wrapper and lie on a path the unit
+  shows unchanged.
 - claude flags: an allowlist (`-p`, stream-json, `--permission-mode dontAsk`,
   `--setting-sources user`, `--strict-mcp-config`, an MCP config with HTTP servers on loopback
   only, `--tools` from Read/Grep/Glob/Skill/Edit/Write/Bash, `--disallowedTools`, `--model`,
@@ -84,6 +89,7 @@ Properties (see `unitProperties` in `deploy/agent-sandbox/policy.mjs`):
 | `NoExecPaths=<policy>`, `BindReadOnlyPaths=<execWrapper>`                                                                                                                                                                                                                                                                                                                | the unit starts the installed wrapper (bound read-only, so hidden or private paths cannot shadow it); the policy directory is mounted `noexec` at its own path (its second view at `/etc/claude-code` is `noexec` where `/run` is); the probe of the acceptance test is read by `/bin/bash`, never executed |
 | `NoNewPrivileges=yes`, `CapabilityBoundingSet=`, `PrivatePIDs=yes`, `ProtectProc=invisible`, `PrivateIPC`, `PrivateDevices`, `ProtectClock`, `ProtectKernelModules`, `ProtectControlGroups`, `LockPersonality`, `RestrictRealtime`, `SystemCallArchitectures=native`, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`, `KeyringMode=private`, `UMask=0077` | no privilege gain; own PID namespace, so neither other runs' claude processes (same uid) nor processes of other users are visible in `/proc`                                                                                                                                                                |
 | `IPAddressDeny=` RFC 1918, link-local, CGNAT, ULA                                                                                                                                                                                                                                                                                                                        | the claude process reaches loopback (LiteLLM, MCP) and the internet, not the LAN                                                                                                                                                                                                                            |
+| `Environment=<NAME>_BIN=<path>` (one per sandbox tool, nothing else)                                                                                                                                                                                                                                                                                                     | the paths of the host test tools; not secret, visible through `systemctl show`                                                                                                                                                                                                                              |
 | `MemoryMax`, `MemorySwapMax=0`, `CPUQuota`, `TasksMax`, `RuntimeMaxSec`, `KillMode=control-group`                                                                                                                                                                                                                                                                        | limits; nothing survives the unit                                                                                                                                                                                                                                                                           |
 
 Not set, because bubblewrap cannot start under them (tested on Debian 13, systemd 257, bubblewrap
@@ -285,8 +291,9 @@ Not protected (known limits):
   is the outer boundary.
 - **Disk usage between checks**: a run can write up to 30 seconds' worth past the limit; `/tmp`
   is a tmpfs bounded by `MemoryMax`.
-- **Toolchains are the host's** (Node 24, npm, Python without pip). Docker, databases or
-  non-HTTP network access in tests do not work in this sandbox.
+- **Toolchains are the host's** (Node 24, npm, Python without pip). Docker and non-HTTP network
+  access in tests do not work in this sandbox; databases and browsers only as host test tools
+  that run inside the sandbox (see below).
 - **Model use**: coding runs cost more tokens; `RUNNER_CONCURRENCY` and the per-run budget still
   apply.
 
@@ -303,9 +310,46 @@ Runner (`/etc/conclavix/runner.env`):
 | `CODE_RUN_TASKS_MAX`     | `512`              | `TasksMax`                                                                  |
 | `CODE_RUN_DISK_LIMIT_MB` | `4096`             | size of the clone before, during and after a run                            |
 | `CODE_SANDBOX_DOMAINS`   | empty              | extra hosts for sandboxed commands, comma-separated                         |
+| `CODE_SANDBOX_TOOLS`     | empty              | host test tools, `NAME_BIN=/absolute/path` pairs, comma-separated           |
 
 The extra domains are host configuration, not a board setting: they widen the egress of every
 coding run, so changing them needs root on the runner host, like the rest of the sandbox.
+
+### Host test tools
+
+Integration tests often need a program that npm cannot install into the clone, such as a `mongod`
+for `mongodb-memory-server` or a headless Chrome. Install it on the runner host (root-owned, not
+writable by others) and list it in `CODE_SANDBOX_TOOLS`:
+
+```sh
+CODE_SANDBOX_TOOLS=MONGOD_BIN=/usr/local/lib/test-tools/mongodb-7.0/bin/mongod,CHROME_BIN=/usr/local/lib/test-tools/chrome-headless-shell/chrome-headless-shell
+```
+
+Every coding run then has each name set to its path (an `Environment=` property of the unit,
+which the wrapper and Claude Code pass on to Bash; the subprocess env scrub leaves `*_BIN` names
+alone), and the run prompt lists them. The agent runs a tool by path, for example
+`MONGOMS_SYSTEM_BINARY="$MONGOD_BIN" npm test`; it cannot list or `stat` the tool's directory,
+because the managed settings block reads outside the clone, and the tools are not on `PATH`.
+
+Rules:
+
+- Names: upper case, ending in `_BIN`, at most 16 tools; names with a prefix reserved for project
+  secrets (`CLAUDE`, `NODE_`, `LD_`, ...) are refused. A project secret with the same name would
+  replace the path, so do not give secrets such names.
+- Paths: absolute, normalised, letters, digits and `. _ + -` only. The program and every
+  directory above it must be root-owned and not writable by others (like the wrapper).
+- The path must be visible in the unit as it is: not below a hidden path (`/srv`, `/opt`,
+  `/mnt`, ... in `hiddenPaths`), an inaccessible one, `/home`, `/root`, `/tmp`, `/var/tmp`, the
+  code root, the runner's workspaces or the policy mounts. The helper adds no mount for a tool;
+  `/usr/local/lib/<something>` is a good place. Programs read their own files (shared libraries,
+  `.pak` files next to Chrome) from there, which works because the whole directory stays visible.
+- The runner checks at startup that each tool is executable and leaves out (with a warning) those
+  that are not; the helper refuses a run whose tool fails its checks, so a broken tool shows up as
+  failing coding runs with the reason in the run error.
+
+The acceptance test reads `CODE_SANDBOX_TOOLS` from the environment or `runner.env` and checks
+that the variables are set in the unit and in Bash and that `"$MONGOD_BIN" --version` runs in
+both; without the setting it prints a notice and skips these checks.
 
 Time: claude gets `RUN_TIMEOUT_MINUTES` minus 3 minutes (at most half the timeout), the unit 30
 seconds more (`RuntimeMaxSec`), and the helper 90 seconds after SIGTERM to stop the unit and hand
@@ -375,8 +419,9 @@ real units and prints one PASS/FAIL line per check:
   `/tmp` are writable, that the LAN is blocked (a TCP probe to port 53 of `LAN_PROBE_HOST`,
   default: the host's default gateway) and the registry reachable, that bubblewrap starts
   under `NoNewPrivileges`, and that a network-namespaced command (as Claude's Bash gets) reaches
-  neither MongoDB, Redis, LiteLLM, the API nor the internet. Then the memory, process, disk and
-  time limits are triggered, and no unit may be left over.
+  neither MongoDB, Redis, LiteLLM, the API nor the internet. With `CODE_SANDBOX_TOOLS` set, each
+  tool variable must be set and executable and `"$MONGOD_BIN" --version` must run. Then the
+  memory, process, disk and time limits are triggered, and no unit may be left over.
 - `--with-claude`: one real, minimal Claude run through the runner's path (a transient unit as
   `cvx-runner` with the runner's capabilities, sudo, helper) with the credentials from
   `runner.env`. Claude runs a probe script with Bash and two Read calls; the script checks that
@@ -386,7 +431,8 @@ real units and prints one PASS/FAIL line per check:
   a non-allowlisted domain is refused with and without the proxy, the registry works,
   `127.0.0.1` ports are closed, `.git/hooks` and `.claude/settings.json` are not writable, HOME
   is the per-run `/tmp/cvx-home` without a `.credentials.json`, and the Read tool is denied on
-  `/proc/self/environ` and on a symlink to it. The visible `ANTHROPIC_*` names are printed for
+  `/proc/self/environ` and on a symlink to it. With `CODE_SANDBOX_TOOLS` set, Bash must see
+  exactly the tool variables and run `"$MONGOD_BIN" --version` inside bubblewrap. The visible `ANTHROPIC_*` names are printed for
   information; `ANTHROPIC_BASE_URL` (the LiteLLM URL) is expected there and is not a secret.
   `CLOUDSDK_PROXY_*` are left out of the credential check and printed for information: Claude
   Code sets them for every sandboxed command as the credentials of its own local sandbox proxy;

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { mfaPolicySchema } from './domain/user.js';
+import { sandboxToolsSchema } from './domain/sandbox-tools.js';
 import { hasControlCharacter } from './domain/workspace.js';
 
 /**
@@ -104,6 +105,11 @@ const baseConfigSchema = z.object({
         )
         .max(50),
     ),
+  /**
+   * Host programs sandboxed coding runs may execute by path (a mongod, a headless browser):
+   * comma-separated NAME_BIN=/absolute/path pairs. Each name is set to its path inside the sandbox.
+   */
+  CODE_SANDBOX_TOOLS: sandboxToolsSchema,
   WEB_ROOT: z.string().min(1).optional(),
   MEMORY_BACKEND: z.enum(['builtin', 'hindsight']).default('builtin'),
   HINDSIGHT_URL: z.url().optional(),

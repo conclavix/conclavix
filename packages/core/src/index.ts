@@ -25,3 +25,4 @@ export * from './domain/workspace.js';
 export * from './domain/media.js';
 export * from './domain/secret.js';
 export * from './domain/connection.js';
+export * from './domain/sandbox-tools.js';

@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { constants } from 'node:fs';
+import { access } from 'node:fs/promises';
+import type { SandboxTool } from '@conclavix/core';
 import type { AdapterRunInput } from './types.js';
 
 /**
@@ -42,6 +45,30 @@ export interface SandboxOptions {
   limits: SandboxLimits;
   /** Hosts sandboxed commands may reach on top of the helper's package registries. */
   extraDomains: readonly string[];
+  /** Host programs the run may execute by path (CODE_SANDBOX_TOOLS); the helper checks them. */
+  tools?: readonly SandboxTool[];
+}
+
+/**
+ * The configured sandbox tools that exist and are executable here; the others are returned as
+ * missing, so the runner can warn at startup instead of every coding run failing in the helper.
+ * The helper still checks ownership and visibility in the unit on every run.
+ */
+export async function usableSandboxTools(
+  tools: readonly SandboxTool[],
+  check: (path: string) => Promise<void> = (path) => access(path, constants.X_OK),
+): Promise<{ usable: SandboxTool[]; missing: SandboxTool[] }> {
+  const usable: SandboxTool[] = [];
+  const missing: SandboxTool[] = [];
+  for (const tool of tools) {
+    try {
+      await check(tool.path);
+      usable.push(tool);
+    } catch {
+      missing.push(tool);
+    }
+  }
+  return { usable, missing };
 }
 
 /** Where a coding agent works: the issue clone and the directory its skills were written to. */
@@ -112,6 +139,7 @@ export function sandboxCommand(
     ...(target.skillsDir ? ['--skills', target.skillsDir] : []),
     ...options.extraDomains.flatMap((domain) => ['--allow-domain', domain]),
     ...(input.allowAddresses ?? []).flatMap((address) => ['--allow-address', address]),
+    ...(options.tools ?? []).flatMap((tool) => ['--tool', `${tool.name}=${tool.path}`]),
     '--',
     ...claudeArgs,
   ];

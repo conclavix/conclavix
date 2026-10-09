@@ -1,7 +1,7 @@
 import { ObjectId } from 'mongodb';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestContext, type TestContext } from './helpers.js';
-import { createFixture, type Fixture } from './scheduler-helpers.js';
+import { commentDuring, createFixture, type Fixture } from './scheduler-helpers.js';
 
 describe('scheduler limits: idle backoff, run cap per issue, daily cost', () => {
   let ctx: TestContext;
@@ -19,6 +19,8 @@ describe('scheduler limits: idle backoff, run cap per issue, daily cost', () => 
   const finishLast = async (now: Date, costUsd = 0.1) => {
     const run = fx.dispatcher.runs.at(-1);
     if (!run) throw new Error('expected a run');
+    // Idle but not silent (silent-run escalation would hand the issue to the board).
+    await commentDuring(ctx, run);
     await fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd }, now);
   };
 

@@ -12,7 +12,13 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { assertRootProgram, loadConfig, mergeConfig, resolveIds } from '../config.mjs';
+import {
+  assertRootProgram,
+  assertToolProgram,
+  loadConfig,
+  mergeConfig,
+  resolveIds,
+} from '../config.mjs';
 import {
   assertRealDirectoryBelow,
   chownTree,
@@ -238,5 +244,32 @@ describe('diskUsage while the tree changes', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('assertToolProgram', () => {
+  const config = mergeConfig({ hiddenPaths: ['/srv', '/opt'] });
+
+  it('refuses tools the unit does not show', async () => {
+    for (const path of [
+      '/opt/tools/mongod',
+      '/srv/conclavix/code/x',
+      '/home/someone/mongod',
+      '/root/mongod',
+      '/tmp/mongod',
+      '/etc/conclavix/tool',
+      '/run/conclavix-agent/x',
+      '/etc/claude-code/x',
+    ]) {
+      await assert.rejects(assertToolProgram(config, path), /does not show/, path);
+    }
+  });
+
+  it('accepts a root program on a visible path', { skip: !isRoot && 'needs root' }, async () => {
+    await assertToolProgram(config, '/usr/bin/true');
+  });
+
+  it('refuses a missing program on a visible path', async () => {
+    await assert.rejects(assertToolProgram(config, '/usr/bin/cvx-no-such-tool'));
   });
 });

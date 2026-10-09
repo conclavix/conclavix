@@ -219,3 +219,38 @@ export async function assertRootProgram(path) {
     throw new Error(`${path} must be executable and on a filesystem mounted without noexec`);
   }
 }
+
+/** Directories the unit replaces or hides regardless of the configuration (see unitProperties). */
+const UNIT_PRIVATE_PATHS = [
+  '/home',
+  '/root',
+  '/run/user',
+  '/tmp',
+  '/var/tmp',
+  '/dev',
+  '/proc',
+  '/sys',
+];
+
+const below = (path, dir) => path === dir || path.startsWith(`${dir}/`);
+
+/**
+ * Refuse a sandbox tool (`--tool NAME=PATH`) the unit could not run or should not see: it must
+ * be a root program (assertRootProgram) on a path the unit shows unchanged, so not below a hidden,
+ * inaccessible or private directory, the code root, the runner's workspaces or the policy and
+ * settings mounts. The unit gets no extra mount for it: only the variable holding the path.
+ */
+export async function assertToolProgram(config, path) {
+  const blocked = [
+    ...UNIT_PRIVATE_PATHS,
+    ...config.hiddenPaths,
+    ...config.inaccessiblePaths,
+    config.codeRoot,
+    config.runnerWorkspacesRoot,
+    config.policyRoot,
+    config.managedSettingsDir,
+  ];
+  const hit = blocked.find((dir) => below(path, dir));
+  if (hit) throw new Error(`sandbox tool ${path} lies below ${hit}, which the unit does not show`);
+  await assertRootProgram(path);
+}
