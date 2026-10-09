@@ -259,6 +259,71 @@ dontAsk` and pre-approve the whole `conclavix` MCP server (`mcp__conclavix`, the
 sandbox uses as well). The server decides per run which tools exist, so new tools need no change
 in the runner.
 
+## Git integration (merge tools)
+
+Agents with the **git integration** permission (`gitIntegration: true`, agent settings "May merge
+branches and update main") get three more MCP tools. They run in the API process on the project's
+bare repository, never inside a sandbox or an issue clone, so an agent does not need code access
+or a working copy for them. The permission is off by default and for every existing agent; only
+admins and owners can change it, and every change is audited as `agent.git_integration_changed`.
+It is checked again on every call, so revoking it takes effect within a running run.
+
+| Tool                | What                                                                                    |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| `merge_branches`    | Merge `sources` (existing branches, in order) into the issue branch `target`            |
+| `fast_forward_main` | Move `main` to an issue branch that passed review, fast-forward only                    |
+| `get_merge_status`  | Read-only preview: target against main, which sources it contains, which files conflict |
+
+**Which branches.**
+
+- `merge_branches` `target` must be `cvx/<KEY>` of the run's own issue or of an issue in the same
+  project that is assigned to the calling agent. Anything else (another agent's issue, another
+  project, `main`, a free branch name) is refused with `forbidden` or a validation error.
+- `sources` are 1 to 10 distinct existing branches of the project's repository (branch names, not
+  commit ids), not the target itself. `base` (default `main`) is only used when the target does not
+  exist yet; an existing target is always the starting point.
+- `fast_forward_main` `source` must be `cvx/<KEY>` of an issue in the run's project. Pushing to
+  external remotes is not part of this.
+- The agent must be enabled in the project, as for the read-only tools.
+
+**How a merge works.** For each source the target does not contain yet, `git merge-tree
+--write-tree` computes the merge without a work tree, and `git commit-tree` writes a no-ff merge
+commit with two parents (first: the target line) whose author and committer are the agent:
+`Conclavix <agent name>` with `agent-<id>@<AGENT_EMAIL_DOMAIN>`. Its message is `Merge branch
+'<source>' into <target>`, the optional `message` (control characters removed, at most 4,000
+characters) and `Conclavix-Issue/Run/Agent` trailers. Sources the target already contains are
+skipped. The branch moves once, at the end, with a compare-and-swap `update-ref`; if the branch
+changed meanwhile the call answers 409 and nothing moves.
+
+**Conflicts.** The first source that conflicts ends the call with 409 `merge_conflict` and a
+report: `source`, `conflicts` (path and git's conflict kinds such as `contents` or
+`modify/delete`, at most 100, `moreConflicts` counts the rest) and `mergedCleanlyBefore`. No ref
+is changed, the target is not created; the merge trees written so far are unreferenced objects.
+Conflicts are resolved on one of the branches (by the agent working on it), then merged again.
+
+**Fast-forward of main.** `main` moves only when the source contains every commit of `main`;
+otherwise the answer is 409 `not_fast_forward` with the number of missing commits, and the fix is
+to merge `main` into the source, review it again and promote again. Whether a branch was reviewed
+is up to the agent's instructions; the server only enforces the fast-forward.
+
+**Issue clones after a merge.** A merge moves `cvx/<KEY>` on the server while the issue may have
+a clone. The runner reconciles the two when it next touches the clone (see
+[Coding agents](coding-agents.md#5-git-and-the-clone)): before a run, a clone behind the server is
+fast-forwarded, so the run starts from the merged branch; after a run during which the branch was
+merged, the run's work is merged with the server tip. A merge into the run's own issue therefore
+does not change the running agent's working copy; its next run starts from the result.
+
+**Audit and safety.** Successful merges are audited as `branch.merged`, promotions as
+`branch.main_fast_forwarded`, both with the agent as actor (`{type: 'agent', agentId, name}`) and
+the project, run, issue, branch and before/after commits; refusals change nothing and appear in
+the run log. All git calls use the options below (no hooks, no fsmonitor, no system or user
+configuration, no transports); merge drivers named in `.gitattributes` of the content need a
+command in the repository configuration, which only the server writes.
+
+| Variable             | Meaning                                                       | Default             |
+| -------------------- | ------------------------------------------------------------- | ------------------- |
+| `AGENT_EMAIL_DOMAIN` | Domain of agent commit addresses, API and runner (same value) | `conclavix.invalid` |
+
 ## Security notes
 
 - **No shell, no options from requests.** git runs through `execFile`/`spawn` with fixed argument

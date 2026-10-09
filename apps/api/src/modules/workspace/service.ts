@@ -199,6 +199,40 @@ export class Workspace extends MediaReader {
   }
 
   /**
+   * Clone `branch` of the bare repository into `temp` without hardlinks, tags or a remote, and
+   * return the tip the clone holds (the server branch may move right after the clone).
+   */
+  private async cloneBranch(projectId: string, branch: string, temp: string): Promise<string> {
+    // The bare repository belongs to the API user; the runner clones it as another user.
+    await this.withSafeDirectory(this.repoDir(projectId), (env) =>
+      this.git.run(
+        [
+          '-c',
+          'protocol.file.allow=always',
+          'clone',
+          '--quiet',
+          '--no-hardlinks',
+          '--single-branch',
+          '--no-tags',
+          `--branch=${branch}`,
+          this.repoDir(projectId),
+          temp,
+        ],
+        { timeoutMs: this.limits.archiveTimeoutMs, env },
+      ),
+    );
+    const gitDir = `--git-dir=${join(temp, '.git')}`;
+    const options = { timeoutMs: this.limits.timeoutMs };
+    await this.git.run([gitDir, 'remote', 'remove', 'origin'], options);
+    const tip = await this.git.text(
+      [gitDir, 'rev-parse', '--verify', `refs/heads/${branch}^{commit}`],
+      options,
+    );
+    if (!OBJECT_ID.test(tip)) throw new Error('the new clone has no branch tip');
+    return tip;
+  }
+
+  /**
    * Create the workspace of an issue: the branch `cvx/<issueKey>` in the bare repository (cut
    * from main unless it exists) and a separate clone of it with `--no-hardlinks` and without a
    * remote. An existing clone is returned as it is.
@@ -232,28 +266,9 @@ export class Workspace extends MediaReader {
       await mkdirShared(parent);
       await removeLeftovers(parent, `.clone-${issueKey}-`);
       const temp = join(parent, `.clone-${issueKey}-${randomBytes(6).toString('hex')}`);
+      let cloned: string;
       try {
-        // The bare repository belongs to the API user; the runner clones it as another user.
-        await this.withSafeDirectory(this.repoDir(projectId), (env) =>
-          this.git.run(
-            [
-              '-c',
-              'protocol.file.allow=always',
-              'clone',
-              '--quiet',
-              '--no-hardlinks',
-              '--single-branch',
-              '--no-tags',
-              `--branch=${branch}`,
-              this.repoDir(projectId),
-              temp,
-            ],
-            { timeoutMs: this.limits.archiveTimeoutMs, env },
-          ),
-        );
-        await this.git.run([`--git-dir=${join(temp, '.git')}`, 'remote', 'remove', 'origin'], {
-          timeoutMs: this.limits.timeoutMs,
-        });
+        cloned = await this.cloneBranch(projectId, branch, temp);
         await shareTree(temp);
         await rename(temp, dir);
       } catch (error) {
@@ -273,11 +288,10 @@ export class Workspace extends MediaReader {
         }
         throw error;
       }
-      const head = await this.commitOf(projectId, branchRef);
       return {
         issueKey,
         branch,
-        head: head ?? '',
+        head: cloned,
         created: true,
         cloneId: await this.cloneId(dir),
       };
@@ -311,7 +325,7 @@ export class Workspace extends MediaReader {
       } catch (error) {
         if (!force && error instanceof GitError && /non-fast-forward|rejected/.test(error.stderr)) {
           throw conflict(`${branch} in the workspace is not a fast-forward of the server branch`, {
-            hint: 'an admin can force the update',
+            hint: 'the server branch has commits the workspace lacks (for example an integration merge); the next coding run merges them, while forcing the update drops them',
           });
         }
         throw error;

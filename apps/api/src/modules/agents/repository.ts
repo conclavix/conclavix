@@ -24,6 +24,7 @@ const toAgent = (doc: AgentDoc): Agent => ({
   skillIds: (doc.skillIds ?? []).map((id) => id.toHexString()),
   projectDefault: doc.projectDefault ?? 'enabled',
   codeAccess: doc.codeAccess ?? 'none',
+  gitIntegration: doc.gitIntegration ?? false,
   avatarUrl: avatarUrl('agent', doc._id.toHexString(), doc.avatarEtag),
   createdAt: doc.createdAt,
   updatedAt: doc.updatedAt,

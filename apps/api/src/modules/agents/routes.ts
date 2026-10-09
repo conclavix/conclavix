@@ -11,8 +11,9 @@ interface IdParams {
 
 /**
  * Register agent CRUD and org-chart routes, validating request bodies and resource IDs. Changes of
- * the project default (where the agent may work) and of the code access (whether it may write and
- * run code in the coding-agent sandbox) get audit entries, written in the same transaction.
+ * the project default (where the agent may work), of the code access (whether it may write and
+ * run code in the coding-agent sandbox) and of git integration (whether it may merge branches and
+ * fast-forward main) get audit entries, written in the same transaction.
  */
 export function registerAgentRoutes(
   app: FastifyInstance,
@@ -31,21 +32,22 @@ export function registerAgentRoutes(
     const principal = requirePrincipal(request);
     const input = parse(createAgentSchema, request.body);
     const agent = await agents.create(input, async (created, session) => {
-      if (input.codeAccess === 'none') return;
-      await audit.write(
-        {
-          action: 'agent.code_access_changed',
-          actor: actorOf(principal),
-          ip: request.ip,
-          details: {
-            agentId: created._id.toHexString(),
-            agent: created.name,
-            from: 'none',
-            to: input.codeAccess,
+      const entry = (action: string, from: string, to: string) =>
+        audit.write(
+          {
+            action,
+            actor: actorOf(principal),
+            ip: request.ip,
+            details: { agentId: created._id.toHexString(), agent: created.name, from, to },
           },
-        },
-        session,
-      );
+          session,
+        );
+      if (input.codeAccess !== 'none') {
+        await entry('agent.code_access_changed', 'none', input.codeAccess);
+      }
+      if (input.gitIntegration) {
+        await entry('agent.git_integration_changed', 'false', 'true');
+      }
     });
     return reply.status(201).send(agent);
   });
@@ -53,7 +55,7 @@ export function registerAgentRoutes(
   app.patch<{ Params: IdParams }>('/api/agents/:id', async (request) => {
     const principal = requirePrincipal(request);
     const input = parse(updateAgentSchema, request.body);
-    const { projectDefault, codeAccess } = input;
+    const { projectDefault, codeAccess, gitIntegration } = input;
     return agents.update(toObjectId(request.params.id, 'Agent'), input, async (before, session) => {
       const entry = (action: string, from: string, to: string) =>
         audit.write(
@@ -72,6 +74,14 @@ export function registerAgentRoutes(
       const previousAccess = before.codeAccess ?? 'none';
       if (codeAccess !== undefined && codeAccess !== previousAccess) {
         await entry('agent.code_access_changed', previousAccess, codeAccess);
+      }
+      const previousIntegration = before.gitIntegration ?? false;
+      if (gitIntegration !== undefined && gitIntegration !== previousIntegration) {
+        await entry(
+          'agent.git_integration_changed',
+          String(previousIntegration),
+          String(gitIntegration),
+        );
       }
     });
   });
