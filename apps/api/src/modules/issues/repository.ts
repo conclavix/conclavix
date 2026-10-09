@@ -10,6 +10,7 @@ import { reportClosure } from '../org/reporting.js';
 import { lockBoard, placeChangedIssue, placeNewIssue } from './columns.js';
 import { toIssue } from './mapping.js';
 import { findIssueByRef, listIssues, type IssuePage } from './queries.js';
+import { resumeWaitingIssues } from './resume.js';
 import { applyStatusChange } from './status-change.js';
 import { assertAgentEnabledInProject } from '../projects/agent-access.js';
 
@@ -168,7 +169,9 @@ export class IssueRepository {
       graph: input.parentId !== undefined || input.blockedBy !== undefined || moves,
       orgChart: input.assigneeAgentId !== undefined || moves,
     };
+    let resumed: ObjectId[] = [];
     const { before, after } = await this.transact(needs, async (session) => {
+      resumed = [];
       const current = await this.collections.issues.findOne({ _id: id }, { session });
       if (!current) {
         throw notFound('Issue');
@@ -192,6 +195,8 @@ export class IssueRepository {
         await within(session, current, updated);
       }
       if (updated && isClosed(updated.status) && !isClosed(current.status)) {
+        // First, so a delegator waiting in_review gets this wake instead of a notification.
+        resumed = await resumeWaitingIssues(this.collections, updated, session);
         await reportClosure(this.collections, updated, session);
       }
       return { before: current, after: updated };
@@ -200,7 +205,7 @@ export class IssueRepository {
       throw notFound('Issue');
     }
     if (wakes) {
-      await wakeOnIssueChange(this.collections, before, after);
+      await wakeOnIssueChange(this.collections, before, after, resumed);
     }
     return toIssue(after);
   }

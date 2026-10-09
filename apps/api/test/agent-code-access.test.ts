@@ -95,4 +95,38 @@ describe('agent code access', () => {
       expect(response.statusCode, role).toBe(status);
     }
   });
+
+  it('keeps git integration off by default and lets only admins and owners change it', async () => {
+    const created = await ctx.request({ method: 'POST', url: '/api/agents', payload: AGENT });
+    expect(created.json().gitIntegration).toBe(false);
+    await ctx.database.collections.agents.updateMany({}, { $unset: { gitIntegration: '' } });
+    const read = await ctx.request({ method: 'GET', url: `/api/agents/${created.json().id}` });
+    expect(read.json().gitIntegration).toBe(false);
+    const invalid = await ctx.request({
+      method: 'PATCH',
+      url: `/api/agents/${created.json().id}`,
+      payload: { gitIntegration: 'yes' },
+    });
+    expect(invalid.statusCode).toBe(400);
+    for (const [role, status] of [
+      ['member', 403],
+      ['viewer', 403],
+      ['admin', 200],
+    ] as const) {
+      await createUser(ctx, `git-${role}@example.com`, role);
+      const { cookie } = await signIn(ctx, `git-${role}@example.com`);
+      const response = await asBrowser(ctx, cookie, {
+        method: 'PATCH',
+        url: `/api/agents/${created.json().id}`,
+        payload: { gitIntegration: true },
+      });
+      expect(response.statusCode, role).toBe(status);
+    }
+    const entries = await ctx.database.collections.audit
+      .find({ action: 'agent.git_integration_changed' })
+      .toArray();
+    expect(entries.map((entry) => [entry.details['from'], entry.details['to']])).toEqual([
+      ['false', 'true'],
+    ]);
+  });
 });

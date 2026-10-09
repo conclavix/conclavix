@@ -5,7 +5,8 @@ import {
   commitLogQuerySchema,
   compareQuerySchema,
   fileQuerySchema,
-  imageContentType,
+  mediaContentType,
+  mediaQuerySchema,
   refQuerySchema,
   removeWorkspaceQuerySchema,
   syncBranchSchema,
@@ -18,6 +19,7 @@ import type { AuditLog } from '../audit/audit.js';
 import { actorOf } from '../auth/principal.js';
 import { matchesEtag } from '../avatars/routes.js';
 import { findIssueByRef } from '../issues/queries.js';
+import { pageMedia, type MediaScan } from './media.js';
 import { recordIssueWorkspace } from './record.js';
 import type { Workspace } from './service.js';
 
@@ -51,6 +53,8 @@ interface RouteContext {
 
 /** Branches, history, commits, tree, files and branch comparison. */
 function registerReadRoutes({ app, project }: RouteContext): void {
+  /** Scans whose failed history walk was logged already; a reused scan is not logged again. */
+  const reported = new WeakSet<MediaScan>();
   app.get<{ Params: IdParams }>('/api/projects/:id/branches', async (request) => {
     const { ws, id } = await project(request);
     return { items: await ws.listBranches(id) };
@@ -79,6 +83,20 @@ function registerReadRoutes({ app, project }: RouteContext): void {
     return ws.file(id, query.ref, query.path);
   });
 
+  app.get<{ Params: IdParams }>('/api/projects/:id/media', async (request) => {
+    const { ws, id } = await project(request);
+    const query = parse(mediaQuerySchema, request.query);
+    const scan = await ws.mediaScan(id);
+    if (scan.historyError && !reported.has(scan)) {
+      reported.add(scan);
+      request.log.warn(
+        { projectId: id, reason: scan.historyError },
+        'media history walk failed; files are listed without author and date',
+      );
+    }
+    return pageMedia(scan, query);
+  });
+
   app.get<{ Params: IdParams }>('/api/projects/:id/compare', async (request) => {
     const { ws, id } = await project(request);
     return ws.compare(id, parse(compareQuerySchema, request.query).branch);
@@ -89,16 +107,47 @@ function registerReadRoutes({ app, project }: RouteContext): void {
 const FULL_COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /**
- * Raw images from the repository for the Code tab and for `repo:` images in Markdown. The ETag is
- * the blob id, so an image that did not change answers 304 on every branch and commit.
+ * The single byte range of a `Range` header for a body of `size` bytes: null to send the whole
+ * body (no header, several ranges or another unit), 'unsatisfiable' for a range outside it.
+ */
+export function parseByteRange(
+  header: string | undefined,
+  size: number,
+): { start: number; end: number } | 'unsatisfiable' | null {
+  const match = /^bytes=(\d*)-(\d*)$/.exec((header ?? '').trim());
+  if (!match || (match[1] === '' && match[2] === '')) return null;
+  let start: number;
+  let end: number;
+  if (match[1] === '') {
+    const suffix = Number(match[2]);
+    if (suffix === 0) return 'unsatisfiable';
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] === '' ? size - 1 : Math.min(Number(match[2]), size - 1);
+  }
+  if (start >= size || start > end) return 'unsatisfiable';
+  return { start, end };
+}
+
+/**
+ * Raw media from the repository for the Code tab, the Media tab and `repo:` images in Markdown:
+ * images and videos inline, PDFs as a download only. The ETag is the blob id, so a file that did
+ * not change answers 304 on every branch and commit. A single byte range is honoured, so videos
+ * can seek.
  */
 function registerRawRoute({ app, project }: RouteContext): void {
   app.get<{ Params: IdParams }>('/api/projects/:id/raw', async (request, reply) => {
     const { ws, id } = await project(request);
     const query = parse(fileQuerySchema, request.query);
-    const contentType = imageContentType(query.path);
+    const contentType = mediaContentType(query.path);
     if (!contentType) {
-      throw new AppError(415, 'unsupported_media_type', 'Only images are served raw');
+      throw new AppError(
+        415,
+        'unsupported_media_type',
+        'Only images, videos and PDFs are served raw',
+      );
     }
     const blob = await ws.blob(id, query.ref, query.path);
     reply
@@ -109,12 +158,35 @@ function registerRawRoute({ app, project }: RouteContext): void {
           ? 'private, max-age=31536000, immutable'
           : 'private, no-cache',
       )
+      .header('accept-ranges', 'bytes')
       .header('x-content-type-options', 'nosniff')
       .header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    if (contentType === 'application/pdf') {
+      const name = query.path
+        .slice(query.path.lastIndexOf('/') + 1)
+        .replace(/[^A-Za-z0-9._-]+/g, '_');
+      reply.header('content-disposition', `attachment; filename="${name}"`);
+    }
     if (matchesEtag(request.headers['if-none-match'], blob.oid)) {
       return reply.status(304).send();
     }
-    return reply.type(contentType).send(await ws.readBlob(id, blob.oid));
+    const body = await ws.readBlob(id, blob.oid);
+    const ifRange = request.headers['if-range'];
+    const range =
+      ifRange === undefined || String(ifRange).trim() === `"${blob.oid}"`
+        ? parseByteRange(request.headers.range, body.length)
+        : null;
+    if (range === 'unsatisfiable') {
+      return reply.status(416).header('content-range', `bytes */${body.length}`).send();
+    }
+    if (range) {
+      return reply
+        .status(206)
+        .header('content-range', `bytes ${range.start}-${range.end}/${body.length}`)
+        .type(contentType)
+        .send(body.subarray(range.start, range.end + 1));
+    }
+    return reply.type(contentType).send(body);
   });
 }
 
@@ -208,7 +280,7 @@ function registerIssueWorkspaceRoutes({ app, database, audit, required }: RouteC
 }
 
 /**
- * The project's code: branches, history, commits, tree, files, raw images, branch comparison
+ * The project's code: branches, history, commits, tree, files, media, raw media, branch comparison
  * and the ZIP download for every role that may read; creating, syncing and removing issue workspaces for
  * admins.
  * Without a configured workspace every route answers 503.

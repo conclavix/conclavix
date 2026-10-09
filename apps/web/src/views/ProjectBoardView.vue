@@ -28,6 +28,9 @@ import { useLiveStore } from '../stores/live';
 import { useProjectsStore } from '../stores/projects';
 
 const ProjectCodeTab = defineAsyncComponent(() => import('../components/code/ProjectCodeTab.vue'));
+const ProjectMediaTab = defineAsyncComponent(
+  () => import('../components/media/ProjectMediaTab.vue'),
+);
 const ProjectSecretsTab = defineAsyncComponent(
   () => import('../components/projects/ProjectSecretsTab.vue'),
 );
@@ -50,7 +53,7 @@ const markersError = ref('');
 /** The project's agents as last loaded; null until known (or when loading failed). */
 const projectAgents = ref<ProjectAgent[] | null>(null);
 
-const TABS = ['board', 'agents', 'code', 'secrets'] as const;
+const TABS = ['board', 'agents', 'code', 'media', 'secrets'] as const;
 /** Project secrets are for owners and admins; the API refuses everyone else as well. */
 const canSeeSecrets = computed(() => isAdminRole(auth.me?.role));
 const tab = computed({
@@ -202,6 +205,7 @@ const opened = (issue: IssueDetail): void =>
           <v-tab value="board" data-test="tab-board">Board</v-tab>
           <v-tab value="agents" data-test="tab-agents">Agents</v-tab>
           <v-tab value="code" data-test="tab-code">Code</v-tab>
+          <v-tab value="media" data-test="tab-media">Media</v-tab>
           <v-tab v-if="canSeeSecrets" value="secrets" data-test="tab-secrets">Secrets</v-tab>
         </v-tabs>
         <v-spacer />
@@ -227,6 +231,12 @@ const opened = (issue: IssueDetail): void =>
       />
       <ProjectCodeTab
         v-else-if="tab === 'code'"
+        :project-id="project.id"
+        :project-key="project.key"
+      />
+      <ProjectMediaTab
+        v-else-if="tab === 'media'"
+        :key="project.id"
         :project-id="project.id"
         :project-key="project.key"
       />

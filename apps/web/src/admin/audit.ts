@@ -25,10 +25,14 @@ export const KNOWN_ACTIONS = [
   'user.mfa_reset',
   'user.deleted',
   'settings.changed',
+  'settings.smtp_tested',
   'token.created',
   'token.revoked',
   'agent.project_default_changed',
   'agent.code_access_changed',
+  'agent.git_integration_changed',
+  'branch.merged',
+  'branch.main_fast_forwarded',
   'project.agent_access_changed',
   'skill_source.created',
   'skill_source.updated',
@@ -80,6 +84,7 @@ export function actorLabel(
   if (!actor) return 'anonymous';
   if (actor.type === 'board') return 'board token';
   if (actor.type === 'system') return 'system';
+  if (actor.type === 'agent') return `agent ${actor.name}`;
   return userLabel(actor.userId, names, namesLoaded);
 }
 

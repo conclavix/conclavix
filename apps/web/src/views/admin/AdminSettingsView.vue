@@ -3,6 +3,7 @@ import { mdiLockOutline } from '@mdi/js';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 import AdminConfirmDialog from '../../components/admin/AdminConfirmDialog.vue';
+import SmtpTestPanel from '../../components/admin/SmtpTestPanel.vue';
 import {
   adminApi,
   SETTING_GROUPS,
@@ -305,6 +306,7 @@ const display = (value: unknown): string =>
                 </v-btn>
               </v-col>
             </v-row>
+            <SmtpTestPanel v-if="editable('smtp')" :draft="draft.smtp" :values="data.values.smtp" />
           </template>
 
           <v-combobox

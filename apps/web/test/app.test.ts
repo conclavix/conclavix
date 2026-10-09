@@ -10,6 +10,8 @@ const { auth, live, push } = vi.hoisted(() => ({
 vi.mock('../src/stores/auth', () => ({ useAuthStore: () => auth }));
 vi.mock('../src/stores/live', () => ({ useLiveStore: () => live }));
 vi.mock('vue-router', () => ({ useRouter: () => ({ push }) }));
+vi.mock('../src/stores/sidebar', () => ({ useSidebarStore: () => ({ pinned: false }) }));
+vi.mock('../src/components/SidebarPinToggle.vue', () => ({ default: { render: () => null } }));
 vi.mock('../src/stores/theme', () => ({
   useThemeStore: () => ({ resolved: { name: 'atlas' } }),
 }));

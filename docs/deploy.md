@@ -142,6 +142,12 @@ Edit, Write and Bash, but only inside a per-run sandbox started by a root helper
 extra setup in [Coding agents](coding-agents.md#installation); without it their runs fail with
 an explanation and read-only agents are not affected.
 
+Independently of code access, agents with the git integration permission (off by default) may
+merge branches into issue branches and fast-forward `main` of their project's repository through
+the agent API; see [Workspace](workspace.md#git-integration-merge-tools). Set
+`AGENT_EMAIL_DOMAIN` to the same value in `conclavix.env` and `runner.env` if agent commits should
+carry another no-reply domain than `conclavix.invalid`.
+
 ### Per-agent keys for an LLM gateway
 
 If claude reaches the model through a gateway such as LiteLLM, give each agent its own key so the
@@ -228,6 +234,13 @@ password is write-only: an empty `smtp.pass` keeps the stored one, `smtp.pass: n
 (without falling back to `SMTP_PASS`). Only owners change
 the MFA policy and SMTP: whoever controls SMTP receives every password-reset link, including the
 owners'. Every settings change commits together with its audit entry, or not at all.
+
+Owners can send a test mail (`POST /api/settings/smtp/test { to?, smtp? }`, the "Send test mail"
+button in the SMTP section). `smtp` takes unsaved values with the same rules as the PATCH (an
+empty password uses the stored one) and is not saved; `to` defaults to the owner's own address.
+The answer says whether the server accepted the mail and otherwise why not (`connection`, `tls`,
+`auth`, `sender`, `recipient`, `message`), with the server's reply, never the password. Test
+mails are limited to five per user and minute and audited as `settings.smtp_tested`.
 The TOTP issuer is the startup `INSTANCE_NAME` value and does not follow later settings changes.
 Changing password-reset mail content does not change the issuer in generated TOTP URIs.
 
@@ -245,7 +258,10 @@ their access every minute and immediately after sign-out, session or token revoc
 delete, role change or 2FA reset.
 
 Signed-in users keep their theme (`preferences.theme`, `{ template, mode }`) in their profile;
-the board saves every choice there and applies it on each device they sign in on.
+the board saves every choice there and applies it on each device they sign in on. The same
+goes for the sidebar (`preferences.sidebar`, `rail` or `pinned`): a rail that expands on hover, or
+pinned open via the pin at the bottom of the drawer. Screens narrower than 960px always get the
+rail.
 
 Scripts use personal API tokens (`POST /api/me/tokens`, shown once; creating and revoking one is
 audited in the same transaction). `BOARD_TOKEN` still works as

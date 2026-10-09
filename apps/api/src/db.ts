@@ -17,7 +17,6 @@ import type {
   IssuePriority,
   IssueStatus,
   MemoryAuthor,
-  MfaPolicy,
   NotificationKind,
   Preferences,
   ProjectDefault,
@@ -33,9 +32,11 @@ import type {
   WakeDeferReason,
   WakeSkipReason,
 } from '@conclavix/core';
+import type { ApiTokenDoc, SettingsDoc } from './db/settings.js';
 import type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
 import { vaultCollections, type VaultCollections } from './db/vault.js';
 
+export type { ApiTokenDoc, SettingsDoc, SmtpSettingsDoc } from './db/settings.js';
 export type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
 
 export interface ProjectDoc {
@@ -77,6 +78,8 @@ export interface AgentDoc {
   projectDefault?: ProjectDefault;
   /** Missing on agents stored before coding agents existed; they count as 'none'. */
   codeAccess?: CodeAccess;
+  /** Missing on agents stored before git integration existed; they count as false. */
+  gitIntegration?: boolean;
   createdAt: Date;
   updatedAt: Date;
   avatarEtag?: string | null;
@@ -298,40 +301,14 @@ export interface SessionDoc {
   expiresAt: Date;
 }
 
-export interface ApiTokenDoc {
-  _id: ObjectId;
-  userId: ObjectId;
-  name: string;
-  prefix: string;
-  tokenHash: string;
-  createdAt: Date;
-  expiresAt: Date | null;
-  lastUsedAt: Date | null;
-}
-
-export interface SmtpSettingsDoc {
-  host?: string;
-  port?: number;
-  secure?: boolean;
-  user?: string;
-  passEncrypted?: string;
-  from?: string;
-}
-
-export interface SettingsDoc {
-  _id: string;
-  instanceName?: string;
-  mfaPolicy?: MfaPolicy;
-  models?: string[];
-  smtp?: SmtpSettingsDoc;
-  updatedAt: Date;
-}
+/** Board-side authors of an audit entry; agents acting through the agent API are added below. */
+type BoardActor = { type: 'user'; userId: string } | { type: 'board' } | { type: 'system' };
 
 export interface AuditDoc {
   _id: ObjectId;
   at: Date;
   action: string;
-  actor: { type: 'user'; userId: string } | { type: 'board' } | { type: 'system' } | null;
+  actor: BoardActor | { type: 'agent'; agentId: string; name: string } | null;
   targetUserId: string | null;
   ip: string | null;
   details: Record<string, unknown>;

@@ -16,8 +16,8 @@ const querySchema = z.strictObject({
     .transform((value) => value.split(',').filter(Boolean))
     .pipe(z.array(actionSchema).min(1).max(50))
     .optional(),
-  /** A user id, or `board` / `system` for the non-user actors. */
-  actor: z.union([idSchema, z.enum(['board', 'system'])]).optional(),
+  /** A user id, or `board` / `system` / `agent` for the non-user actors. */
+  actor: z.union([idSchema, z.enum(['board', 'system', 'agent'])]).optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
 });
