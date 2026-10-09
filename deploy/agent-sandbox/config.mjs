@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { access, lstat, readFile, realpath, stat } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { dirname, isAbsolute, normalize } from 'node:path';
+import { registryUrlValid } from './registry.mjs';
 
 /** Root-owned configuration; every field is optional and falls back to DEFAULTS. */
 export const CONFIG_PATH = '/etc/conclavix/agent-sandbox.json';
@@ -58,6 +59,11 @@ export const DEFAULTS = Object.freeze({
    * coding run reaches no MCP server on a private address (docs/connections.md).
    */
   mcpAllowedAddresses: [],
+  /**
+   * Package registries a run may use (`--package-registry`), as exact normalised URLs such as
+   * `http://172.31.250.10:4873/`. Empty: runs that name a registry are refused.
+   */
+  packageRegistries: [],
   /** Upper bounds; a run asking for more is refused. */
   maxLimits: {
     memoryMaxBytes: 16 * 1024 * MIB,
@@ -105,6 +111,8 @@ const CHECKS = {
   deniedAddresses: (value) =>
     Array.isArray(value) && value.every((a) => /^[0-9a-f:.]+\/\d{1,3}$/i.test(a)),
   mcpAllowedAddresses: (value) => Array.isArray(value) && value.every(cidr),
+  packageRegistries: (value) =>
+    Array.isArray(value) && value.length <= 8 && value.every(registryUrlValid),
   maxLimits: (value) =>
     isPlainObject(value) &&
     Object.entries(value).every(

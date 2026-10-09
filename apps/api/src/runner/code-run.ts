@@ -353,7 +353,7 @@ function describeReconcile(result: CloneReconcile, branch: string, events: RunEv
   } else if (result.action === 'set_aside') {
     events.record(
       'runner',
-      `workspace ${branch} held uncommitted work or files the server tip ${short(result.server)} would overwrite; it was moved to ${result.setAside ?? ''} (nothing deleted) and is cloned again from the server branch`,
+      `workspace ${branch} held uncommitted work or files the server tip ${short(result.server)} would overwrite; it was moved to ${result.setAside ?? ''} (kept until the clone retention removes it, CODE_CLONE_RETENTION_DAYS) and is cloned again from the server branch`,
     );
   } else {
     const files = (result.conflicts ?? []).map((file) => file.path).slice(0, 20);

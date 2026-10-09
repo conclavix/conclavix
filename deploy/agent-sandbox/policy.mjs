@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { registryEnvironment, sandboxDomains } from './registry.mjs';
 
 /** Writable inside the unit and, through allowWrite, inside the Bash sandbox: package caches. */
 export const CACHE_DIR = '/tmp/cvx-cache';
@@ -44,7 +45,7 @@ export const PROBE_SHELL = '/bin/bash';
  */
 export function managedSettings(config, options) {
   const clone = clonePath(config, options);
-  const domains = [...new Set([...config.allowedDomains, ...options.extraDomains])].sort();
+  const domains = sandboxDomains(config, options);
   return {
     allowManagedPermissionRulesOnly: true,
     allowManagedHooksOnly: true,
@@ -145,6 +146,8 @@ export function unitProperties(config, options, ids, { skillsDir } = {}) {
     // Paths of host programs the run may execute (assertToolProgram); the wrapper keeps the
     // unit's environment, and Claude Code passes these names on to Bash.
     ...(options.tools ?? []).map((tool) => `Environment=${tool.name}=${tool.path}`),
+    // The run's package registry for npm, pnpm and yarn (docs/package-registry.md).
+    ...registryEnvironment(options.packageRegistry),
     `IPAddressDeny=${config.deniedAddresses.join(' ')}`,
     // Allow entries win over deny entries: only the addresses the helper accepted for the run.
     ...(options.allowAddresses?.length

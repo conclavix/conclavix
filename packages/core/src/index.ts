@@ -26,3 +26,4 @@ export * from './domain/media.js';
 export * from './domain/secret.js';
 export * from './domain/connection.js';
 export * from './domain/sandbox-tools.js';
+export * from './domain/package-registry.js';

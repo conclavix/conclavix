@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
-import type { SandboxTool } from '@conclavix/core';
+import type { Config, SandboxTool } from '@conclavix/core';
 import type { AdapterRunInput } from './types.js';
 
 /**
@@ -38,6 +38,16 @@ export interface SandboxLimits {
   diskLimitMb: number;
 }
 
+/** The package registry coding runs install from (CODE_PACKAGE_REGISTRY, docs/package-registry.md). */
+export interface PackageRegistry {
+  /** Normalised URL; the root helper must list exactly this one in packageRegistries. */
+  url: string;
+  /** Keep the public npm registry reachable as well; false: the registry only. */
+  fallback: boolean;
+  /** npm scopes published there, for the run prompt. */
+  scopes: readonly string[];
+}
+
 export interface SandboxOptions {
   /** The root helper, started through sudo. */
   helper: string;
@@ -47,6 +57,35 @@ export interface SandboxOptions {
   extraDomains: readonly string[];
   /** Host programs the run may execute by path (CODE_SANDBOX_TOOLS); the helper checks them. */
   tools?: readonly SandboxTool[];
+  /** Registry for npm, pnpm and yarn in the sandbox; unset: the public registries as before. */
+  packageRegistry?: PackageRegistry | null;
+}
+
+/** The package registry of coding runs, or null when CODE_PACKAGE_REGISTRY is unset. */
+export function packageRegistryOf(
+  config: Pick<
+    Config,
+    'CODE_PACKAGE_REGISTRY' | 'CODE_PACKAGE_REGISTRY_FALLBACK' | 'CODE_PACKAGE_REGISTRY_SCOPES'
+  >,
+): PackageRegistry | null {
+  const url = config.CODE_PACKAGE_REGISTRY;
+  if (!url) return null;
+  return {
+    url,
+    fallback: config.CODE_PACKAGE_REGISTRY_FALLBACK,
+    scopes: config.CODE_PACKAGE_REGISTRY_SCOPES,
+  };
+}
+
+/** The helper arguments for the run's package registry; none without one. */
+export function registryArgs(registry: PackageRegistry | null | undefined): string[] {
+  if (!registry) return [];
+  return [
+    '--package-registry',
+    registry.url,
+    '--registry-fallback',
+    registry.fallback ? 'yes' : 'no',
+  ];
 }
 
 /**
@@ -140,6 +179,7 @@ export function sandboxCommand(
     ...options.extraDomains.flatMap((domain) => ['--allow-domain', domain]),
     ...(input.allowAddresses ?? []).flatMap((address) => ['--allow-address', address]),
     ...(options.tools ?? []).flatMap((tool) => ['--tool', `${tool.name}=${tool.path}`]),
+    ...registryArgs(options.packageRegistry),
     '--',
     ...claudeArgs,
   ];

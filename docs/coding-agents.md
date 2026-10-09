@@ -88,8 +88,8 @@ Properties (see `unitProperties` in `deploy/agent-sandbox/policy.mjs`):
 | `BindReadOnlyPaths=<policy>:/etc/claude-code`                                                                                                                                                                                                                                                                                                                            | the run's managed settings and skills                                                                                                                                                                                                                                                                       |
 | `NoExecPaths=<policy>`, `BindReadOnlyPaths=<execWrapper>`                                                                                                                                                                                                                                                                                                                | the unit starts the installed wrapper (bound read-only, so hidden or private paths cannot shadow it); the policy directory is mounted `noexec` at its own path (its second view at `/etc/claude-code` is `noexec` where `/run` is); the probe of the acceptance test is read by `/bin/bash`, never executed |
 | `NoNewPrivileges=yes`, `CapabilityBoundingSet=`, `PrivatePIDs=yes`, `ProtectProc=invisible`, `PrivateIPC`, `PrivateDevices`, `ProtectClock`, `ProtectKernelModules`, `ProtectControlGroups`, `LockPersonality`, `RestrictRealtime`, `SystemCallArchitectures=native`, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`, `KeyringMode=private`, `UMask=0077` | no privilege gain; own PID namespace, so neither other runs' claude processes (same uid) nor processes of other users are visible in `/proc`                                                                                                                                                                |
-| `IPAddressDeny=` RFC 1918, link-local, CGNAT, ULA                                                                                                                                                                                                                                                                                                                        | the claude process reaches loopback (LiteLLM, MCP) and the internet, not the LAN                                                                                                                                                                                                                            |
-| `Environment=<NAME>_BIN=<path>` (one per sandbox tool, nothing else)                                                                                                                                                                                                                                                                                                     | the paths of the host test tools; not secret, visible through `systemctl show`                                                                                                                                                                                                                              |
+| `IPAddressDeny=` RFC 1918, link-local, CGNAT, ULA; `IPAddressAllow=` only for accepted MCP addresses and the package registry's address                                                                                                                                                                                                                                  | the claude process reaches loopback (LiteLLM, MCP) and the internet, not the LAN                                                                                                                                                                                                                            |
+| `Environment=<NAME>_BIN=<path>` (one per sandbox tool), `Environment=npm_config_registry=...` and the yarn equivalents (with a [package registry](package-registry.md)), nothing else                                                                                                                                                                                    | the paths of the host test tools; not secret, visible through `systemctl show`                                                                                                                                                                                                                              |
 | `MemoryMax`, `MemorySwapMax=0`, `CPUQuota`, `TasksMax`, `RuntimeMaxSec`, `KillMode=control-group`                                                                                                                                                                                                                                                                        | limits; nothing survives the unit                                                                                                                                                                                                                                                                           |
 
 Not set, because bubblewrap cannot start under them (tested on Debian 13, systemd 257, bubblewrap
@@ -111,17 +111,17 @@ sessions outside the sandbox (read-only agents, people on the host) untouched.
 
 Key settings (names checked against the Claude Code settings reference for 2.1.285):
 
-| Setting                                                                                                                                             | Value                                                                                                                                                        |
-| --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `sandbox.enabled`, `failIfUnavailable`, `allowUnsandboxedCommands`                                                                                  | `true`, `true`, `false`: Bash runs in bubblewrap or Claude Code does not start; no unsandboxed retry                                                         |
-| `sandbox.excludedCommands`, `enableWeakerNestedSandbox`, `enableWeakerNetworkIsolation`, `network.allowLocalBinding`, `network.allowAllUnixSockets` | empty / `false`                                                                                                                                              |
-| `sandbox.network.allowManagedDomainsOnly`, `strictAllowlist`, `allowedDomains`                                                                      | only `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org` plus `CODE_SANDBOX_DOMAINS`                                                                  |
-| `sandbox.filesystem.allowWrite`                                                                                                                     | `/tmp/cvx-cache` (package caches on the unit's private `/tmp`)                                                                                               |
-| `sandbox.credentials.envVars`                                                                                                                       | `deny` for the OAuth token, API key/auth token, gateway headers and run token                                                                                |
-| `permissions.blockReadsOutsideWorkingDirectories`                                                                                                   | `true`: file tools refuse reads outside the clone; Bash loses `/home`, `/root`, `/srv`, `/mnt`, ...                                                          |
-| `permissions.allow`                                                                                                                                 | `Bash`, `Edit(//<clone>/**)`, `Skill`, `mcp__conclavix`, plus `mcp__<name>` for each connection server in the run's MCP config                               |
-| `permissions.deny`                                                                                                                                  | `Read(//proc/**)`, `Read(//sys/**)`, `Read(//run/**)`, `Read(//etc/conclavix/**)`, `Edit(//<clone>/.git/**)`, WebFetch, WebSearch, Agent, Task, NotebookEdit |
-| `allowManagedPermissionRulesOnly`, `allowManagedHooksOnly`, `disableAllHooks`, `permissions.disableBypassPermissionsMode`                           | rules come from this file only, no hooks, no bypass mode                                                                                                     |
+| Setting                                                                                                                                             | Value                                                                                                                                                                                |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sandbox.enabled`, `failIfUnavailable`, `allowUnsandboxedCommands`                                                                                  | `true`, `true`, `false`: Bash runs in bubblewrap or Claude Code does not start; no unsandboxed retry                                                                                 |
+| `sandbox.excludedCommands`, `enableWeakerNestedSandbox`, `enableWeakerNetworkIsolation`, `network.allowLocalBinding`, `network.allowAllUnixSockets` | empty / `false`                                                                                                                                                                      |
+| `sandbox.network.allowManagedDomainsOnly`, `strictAllowlist`, `allowedDomains`                                                                      | only `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org` plus `CODE_SANDBOX_DOMAINS`; with a [package registry](package-registry.md) its host instead of `registry.npmjs.org` |
+| `sandbox.filesystem.allowWrite`                                                                                                                     | `/tmp/cvx-cache` (package caches on the unit's private `/tmp`)                                                                                                                       |
+| `sandbox.credentials.envVars`                                                                                                                       | `deny` for the OAuth token, API key/auth token, gateway headers and run token                                                                                                        |
+| `permissions.blockReadsOutsideWorkingDirectories`                                                                                                   | `true`: file tools refuse reads outside the clone; Bash loses `/home`, `/root`, `/srv`, `/mnt`, ...                                                                                  |
+| `permissions.allow`                                                                                                                                 | `Bash`, `Edit(//<clone>/**)`, `Skill`, `mcp__conclavix`, plus `mcp__<name>` for each connection server in the run's MCP config                                                       |
+| `permissions.deny`                                                                                                                                  | `Read(//proc/**)`, `Read(//sys/**)`, `Read(//run/**)`, `Read(//etc/conclavix/**)`, `Edit(//<clone>/.git/**)`, WebFetch, WebSearch, Agent, Task, NotebookEdit                         |
+| `allowManagedPermissionRulesOnly`, `allowManagedHooksOnly`, `disableAllHooks`, `permissions.disableBypassPermissionsMode`                           | rules come from this file only, no hooks, no bypass mode                                                                                                                             |
 
 `allowManagedReadPathsOnly` is deliberately not set: with it, the read block would no longer
 apply to sandboxed commands. The exec wrapper sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, which on
@@ -254,10 +254,11 @@ or synced`, the run log has it as a `code:` event, and a system comment on the i
   merged nor overwritten: it is moved aside to
   `workspaces/<projectId>/.stale-<KEY>-<time>-<random>` and the run starts in a fresh clone of the
   server branch; commits of it that the server branch lacks are kept as `conflict/<KEY>/<sha>`
-  first. The server never deletes such directories or `conflict/` branches: look at them (the
-  branches are in the Code tab and `list_branches`), take over what is needed with
-  `merge_branches` or by hand, and remove them by hand (`rm -r` on the runner host, `git branch -D`
-  in the project repository).
+  first. The server never deletes `conflict/` branches: look at them (the branches are in the
+  Code tab and `list_branches`), take over what is needed with `merge_branches` or by hand, and
+  remove them with `git branch -D` in the project repository. The set-aside directories are
+  removed by the [clone retention](workspace.md#clone-retention) after
+  `CODE_CLONE_RETENTION_DAYS` (default 3; `0` keeps them).
   Inside the clone git runs only after its configuration was replaced, with hooks off, and the
   project repository is marked as a safe directory for the fetch from it. Failures to remove the
   temporary refs (`refs/conclavix/...`) are recorded as run events; the next reconciliation
@@ -304,16 +305,20 @@ Not protected (known limits):
 
 Runner (`/etc/conclavix/runner.env`):
 
-| Variable                 | Default            | Meaning                                                                     |
-| ------------------------ | ------------------ | --------------------------------------------------------------------------- |
-| `AGENT_SANDBOX_HELPER`   | unset (off)        | `/usr/local/libexec/conclavix/agent-run.mjs`; needs `AGENT_USER`            |
-| `WORKSPACE_ROOT`         | `./data/workspace` | the same directory the API mounts, `/srv/conclavix/code` on the runner host |
-| `CODE_RUN_MEMORY_MAX`    | `4G`               | `MemoryMax` of the unit                                                     |
-| `CODE_RUN_CPU_QUOTA`     | `200`              | `CPUQuota` in percent of one CPU                                            |
-| `CODE_RUN_TASKS_MAX`     | `512`              | `TasksMax`                                                                  |
-| `CODE_RUN_DISK_LIMIT_MB` | `4096`             | size of the clone before, during and after a run                            |
-| `CODE_SANDBOX_DOMAINS`   | empty              | extra hosts for sandboxed commands, comma-separated                         |
-| `CODE_SANDBOX_TOOLS`     | empty              | host test tools, `NAME_BIN=/absolute/path` pairs, comma-separated           |
+| Variable                         | Default            | Meaning                                                                                                                               |
+| -------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENT_SANDBOX_HELPER`           | unset (off)        | `/usr/local/libexec/conclavix/agent-run.mjs`; needs `AGENT_USER`                                                                      |
+| `WORKSPACE_ROOT`                 | `./data/workspace` | the same directory the API mounts, `/srv/conclavix/code` on the runner host                                                           |
+| `CODE_RUN_MEMORY_MAX`            | `4G`               | `MemoryMax` of the unit                                                                                                               |
+| `CODE_RUN_CPU_QUOTA`             | `200`              | `CPUQuota` in percent of one CPU                                                                                                      |
+| `CODE_RUN_TASKS_MAX`             | `512`              | `TasksMax`                                                                                                                            |
+| `CODE_RUN_DISK_LIMIT_MB`         | `4096`             | size of the clone before, during and after a run                                                                                      |
+| `CODE_SANDBOX_DOMAINS`           | empty              | extra hosts for sandboxed commands, comma-separated                                                                                   |
+| `CODE_SANDBOX_TOOLS`             | empty              | host test tools, `NAME_BIN=/absolute/path` pairs, comma-separated                                                                     |
+| `CODE_PACKAGE_REGISTRY`          | unset (off)        | package registry of coding runs, see [Package registry](package-registry.md)                                                          |
+| `CODE_PACKAGE_REGISTRY_FALLBACK` | `false`            | keep the public npm registry reachable next to it                                                                                     |
+| `CODE_PACKAGE_REGISTRY_SCOPES`   | empty              | npm scopes of internal packages, named in the run prompt                                                                              |
+| `CODE_CLONE_RETENTION_DAYS`      | `3`                | remove clones of closed issues and `.stale-*` clones after this many days, `0` = never ([workspace.md](workspace.md#clone-retention)) |
 
 The extra domains are host configuration, not a board setting: they widen the egress of every
 coding run, so changing them needs root on the runner host, like the rest of the sandbox.
@@ -361,8 +366,10 @@ the commit and the sync in the usual case; each git call after a run is capped a
 run's cost is stored before committing, so even a run the scheduler closes in that phase keeps it.
 
 Helper (`/etc/conclavix/agent-sandbox.json`, optional, root:root 0644): paths, user and group
-names, the base domain allowlist, hidden paths, the maximum limits and `mcpAllowedAddresses`
-(private networks a run may open for connection MCP servers, [connections.md](connections.md));
+names, the base domain allowlist, hidden paths, the maximum limits, `mcpAllowedAddresses`
+(private networks a run may open for connection MCP servers, [connections.md](connections.md))
+and `packageRegistries` (the exact registry URLs a run may use,
+[package-registry.md](package-registry.md));
 see `deploy/agent-sandbox/agent-sandbox.json.example` and `DEFAULTS` in `config.mjs`.
 
 ## Installation
@@ -386,6 +393,7 @@ echo "WORKSPACE_GID=$(getent group cvx-code | cut -d: -f3)" >> /opt/conclavix/sr
 install -d -o root -g root -m 0755 /usr/local/libexec/conclavix
 install -o root -g root -m 0755 deploy/agent-sandbox/agent-run.mjs deploy/agent-sandbox/args.mjs \
   deploy/agent-sandbox/config.mjs deploy/agent-sandbox/policy.mjs deploy/agent-sandbox/tree.mjs \
+  deploy/agent-sandbox/registry.mjs \
   deploy/agent-sandbox/agent-exec.sh /usr/local/libexec/conclavix/
 install -o root -g root -m 0644 deploy/tmpfiles.d/conclavix-agent.conf /etc/tmpfiles.d/
 systemd-tmpfiles --create /etc/tmpfiles.d/conclavix-agent.conf
