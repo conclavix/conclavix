@@ -174,7 +174,12 @@ r() { if eval "$2" >/dev/null 2>&1; then echo "ACCIN $1=yes"; else echo "ACCIN $
 # Variable names only (compgen -e), never values: a multi-line value would leak through `env`.
 names() { compgen -e | grep -E "$1" | paste -sd, - | grep . || echo none; }
 # CLOUDSDK_PROXY_* are the credentials of Claude Code's own sandbox proxy, set for every command.
-echo "ACCIN credential-env=$(compgen -e | grep -Ev '^CLOUDSDK_PROXY_' | grep -E 'TOKEN|API_KEY|CUSTOM_HEADERS|SECRET|PASSWORD|^CONCLAVIX_' | paste -sd, - | grep . || echo none)"
+# Project secrets (docs/secrets.md) are meant for Bash; the two ACCEPTANCE_* test values are
+# compared by a hash prefix, the credential check leaves them out.
+sum() { printf '%s' "$1" | sha256sum | cut -c1-16; }
+echo "ACCIN project-secret=$(sum "${ACCEPTANCE_PROJECT_VALUE:-}")"
+echo "ACCIN credential-named-secret=$(sum "${ACCEPTANCE_API_KEY:-}")"
+echo "ACCIN credential-env=$(compgen -e | grep -Ev '^(CLOUDSDK_PROXY_|ACCEPTANCE_)' | grep -E 'TOKEN|API_KEY|CUSTOM_HEADERS|SECRET|PASSWORD|^CONCLAVIX_' | paste -sd, - | grep . || echo none)"
 echo "ACCIN proxy-env=$(names '^CLOUDSDK_PROXY_')"
 echo "ACCIN anthropic-env=$(names '^ANTHROPIC_')"
 echo "ACCIN home=$HOME"
@@ -194,6 +199,9 @@ INNER
   # A minimal MCP server (streamable HTTP, JSON responses) on loopback, where the board API listens.
   # It answers only `Bearer <run bearer>` and counts the requests it accepts and refuses.
   bearer="cvx_run_acceptance-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  # Throwaway values standing in for project secrets: one plain name, one that looks like a credential.
+  project_value="acceptance-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+  api_key_value="acceptance-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
   printf '%s' "$bearer" >"$work/bearer"
   cat >"$work/mcp-stub.cjs" <<'STUB'
 const http = require('node:http');
@@ -249,6 +257,8 @@ STUB
       printf '%s=%s\n' "$name" "$(printf '%s' "$value" | base64 -w0)"
     done <"$RUNNER_ENV"
     printf 'CONCLAVIX_RUN_BEARER=%s\n' "$(base64 -w0 <"$work/bearer")"
+    printf 'ACCEPTANCE_PROJECT_VALUE=%s\n' "$(printf '%s' "$project_value" | base64 -w0)"
+    printf 'ACCEPTANCE_API_KEY=%s\n' "$(printf '%s' "$api_key_value" | base64 -w0)"
     printf '\n'
     printf '%s\n' '{"type":"control_request","request_id":"init","request":{"subtype":"initialize"}}'
     printf '%s\n' '{"type":"user","session_id":"","parent_tool_use_id":null,"message":{"role":"user","content":"This is an automated sandbox acceptance test. Do exactly these three steps and nothing else: 1. Run `bash ./acceptance-probe.sh` once with the Bash tool. 2. Use the Read tool on /proc/self/environ. 3. Use the Read tool on ./environ-link. Then answer DONE."}}'
@@ -307,6 +317,15 @@ PARSE
   check 'MCP stub accepted the bearer and refused nothing' \
     "$(grep -c '^accepted$' "$work/mcp-log" | awk '{print ($1 > 0) ? "yes" : "no"}')/$(grep -c '^refused$' "$work/mcp-log" || true)" yes/0
   check 'no credential variables in Bash' "$(inner credential-env)" none
+  sum() { printf '%s' "$1" | sha256sum | cut -c1-16; }
+  check 'project secret visible to Bash with its value' "$(inner project-secret)" "$(sum "$project_value")"
+  # Informational: whether Claude Code's scrub also strips board-chosen names that look like
+  # credentials (*_API_KEY, *_TOKEN, ...). If it does, such secrets do not reach Bash.
+  if [[ $(inner credential-named-secret) == "$(sum "$api_key_value")" ]]; then
+    echo 'credential-looking project secret name (ACCEPTANCE_API_KEY) visible to Bash: yes'
+  else
+    echo 'credential-looking project secret name (ACCEPTANCE_API_KEY) visible to Bash: NO (scrubbed)'
+  fi
   echo "ANTHROPIC_* names visible to Bash (expected: none or ANTHROPIC_BASE_URL): $(inner anthropic-env)"
   echo "sandbox proxy variables visible to Bash (Claude Code's own, expected): $(inner proxy-env)"
   check 'runner.env unreadable from Bash' "$(inner token-file)" no

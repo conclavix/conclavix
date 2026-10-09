@@ -17,7 +17,6 @@ import type {
   IssuePriority,
   IssueStatus,
   MemoryAuthor,
-  MfaPolicy,
   NotificationKind,
   Preferences,
   ProjectDefault,
@@ -33,8 +32,10 @@ import type {
   WakeDeferReason,
   WakeSkipReason,
 } from '@conclavix/core';
+import type { ApiTokenDoc, SettingsDoc } from './db/settings.js';
 import type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
 
+export type { ApiTokenDoc, SettingsDoc, SmtpSettingsDoc } from './db/settings.js';
 export type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
 
 export interface ProjectDoc {
@@ -299,35 +300,6 @@ export interface SessionDoc {
   expiresAt: Date;
 }
 
-export interface ApiTokenDoc {
-  _id: ObjectId;
-  userId: ObjectId;
-  name: string;
-  prefix: string;
-  tokenHash: string;
-  createdAt: Date;
-  expiresAt: Date | null;
-  lastUsedAt: Date | null;
-}
-
-export interface SmtpSettingsDoc {
-  host?: string;
-  port?: number;
-  secure?: boolean;
-  user?: string;
-  passEncrypted?: string;
-  from?: string;
-}
-
-export interface SettingsDoc {
-  _id: string;
-  instanceName?: string;
-  mfaPolicy?: MfaPolicy;
-  models?: string[];
-  smtp?: SmtpSettingsDoc;
-  updatedAt: Date;
-}
-
 /** Board-side authors of an audit entry; agents acting through the agent API are added below. */
 type BoardActor = { type: 'user'; userId: string } | { type: 'board' } | { type: 'system' };
 
@@ -366,6 +338,7 @@ export interface Collections {
   orgLayout: Collection<LayoutDoc>;
   notifications: Collection<NotificationDoc>;
   skillSources: Collection<SkillSourceDoc>;
+  secrets: Collection<import('./db/secrets.js').SecretDoc>;
 }
 
 export interface Database {
@@ -442,6 +415,7 @@ export async function connectDatabase(uri: string): Promise<Database> {
       orgLayout: db.collection<LayoutDoc>('org_layout'),
       notifications: db.collection<NotificationDoc>('notifications'),
       skillSources: db.collection<SkillSourceDoc>('skill_sources'),
+      secrets: db.collection('secrets'),
     };
     await ensureIndexes(collections);
     return {

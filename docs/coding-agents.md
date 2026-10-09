@@ -141,6 +141,11 @@ lines (bash reads a pipe byte by byte, so nothing of the prompt is consumed), ac
 process's environment, which Bash cannot read (scrub, PID namespace, `credentials` deny) and the
 file tools may not read (`Read(//proc/**)` deny, read block).
 
+Project secrets the board assigned to the agent ([secrets.md](secrets.md)) travel in the same
+block, ahead of these variables, under the names the board chose; the wrapper accepts any
+upper-case name that is not reserved. Unlike the variables above they are meant for Bash and are
+not on the `credentials` deny list.
+
 The run token travels as `CONCLAVIX_RUN_BEARER` here, not as `CONCLAVIX_RUN_TOKEN` like in
 read-only runs: with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` set, Claude Code expands variables whose
 names look like credentials (`TOKEN`, `KEY`, `AUTH`, `SECRET`, ...) to an empty string in MCP

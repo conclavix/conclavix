@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Adapter, AdapterResult, AdapterRunInput } from './types.js';
 import { parseStreamLine, type StreamSummary } from './claude-stream.js';
+import { secretEnvNameProblem } from '@conclavix/core';
 import { MissingSecretError, type SecretResolver } from '../secrets.js';
 import {
   CODE_BUILTIN_TOOLS,
@@ -252,6 +253,19 @@ export async function removeWorkspaceSettings(workspace: string): Promise<void> 
   );
 }
 
+/**
+ * The project secrets of a coding run, checked again before they go into the environment block:
+ * a reserved name must never replace a variable the run itself needs.
+ */
+export function projectSecretEnv(input: AdapterRunInput): Record<string, string> {
+  const env = input.secretEnv ?? {};
+  for (const name of Object.keys(env)) {
+    const problem = secretEnvNameProblem(name);
+    if (problem) throw new Error(`project secret ${name}: ${problem}`);
+  }
+  return env;
+}
+
 /** The command that starts claude: directly, or through sudo as the agent user in its own process group. */
 export function claudeCommand(
   bin: string,
@@ -405,6 +419,7 @@ export class ClaudeCliAdapter implements Adapter {
         env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin' },
         detached: true,
         stdin: `${environmentBlock({
+          ...projectSecretEnv(input),
           ...this.options.extraEnv,
           ...env,
           ENABLE_TOOL_SEARCH: 'false',
