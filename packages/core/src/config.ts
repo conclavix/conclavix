@@ -55,6 +55,17 @@ const baseConfigSchema = z.object({
     .refine((value) => !hasControlCharacter(value), 'must not contain control characters')
     .default('./data/workspace'),
   GIT_BIN: z.string().min(1).default('git'),
+  /** Domain of the no-reply addresses agents commit and merge with: `agent-<id>@<domain>`. */
+  AGENT_EMAIL_DOMAIN: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(253)
+    .regex(
+      /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/,
+      'must be a domain name such as users.noreply.example.com',
+    )
+    .default('conclavix.invalid'),
   /** Root helper that runs coding agents in their sandbox (deploy/agent-sandbox). Unset: off. */
   AGENT_SANDBOX_HELPER: z.preprocess(
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
