@@ -7,6 +7,7 @@ import { Redactor, errorKind, redactOrWithhold } from '../../runner/redact.js';
 import { generateRunToken } from '../runs/tokens.js';
 import { evaluateWake, type GateResult } from './gates.js';
 import { pauseOnLoop, pauseThreshold, runMadeProgress } from './loop-detection.js';
+import { sweepStalls, type StallSweep } from './stall-watchdog.js';
 import { ACTIONABLE_STATUSES, requestWake } from './wakes.js';
 import { disabledAssignments } from '../projects/agent-access.js';
 
@@ -20,6 +21,8 @@ export interface RunDispatcher {
 
 export interface SchedulerOptions {
   heartbeatMinutes: number;
+  /** Stall watchdog interval in minutes (see sweepStalls); 0 turns it off. */
+  stallWatchdogMinutes: number;
   /** Wait before the next run once an agent reached its idle-run limit on an issue. */
   idleBackoffMs: number;
   /**
@@ -34,6 +37,7 @@ export interface SchedulerOptions {
 
 export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   heartbeatMinutes: 60,
+  stallWatchdogMinutes: 5,
   idleBackoffMs: 10 * 60_000,
   idleRunsAfterBackoff: 1,
   maxRunsPerIssuePerDay: 50,
@@ -374,6 +378,16 @@ export class Scheduler {
       }
     }
     return created;
+  }
+
+  /** Wake issues an agent could work on but where nothing happened within the watchdog interval. */
+  async sweepStalls(now = new Date()): Promise<StallSweep> {
+    return sweepStalls(
+      this.collections,
+      this.options.stallWatchdogMinutes,
+      this.options.batchSize * 5,
+      now,
+    );
   }
 
   /** Ids (hex) of the issues blocking any of `issues` that are not closed yet. */
