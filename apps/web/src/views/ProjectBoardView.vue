@@ -27,6 +27,9 @@ import { useLiveStore } from '../stores/live';
 import { useProjectsStore } from '../stores/projects';
 
 const ProjectCodeTab = defineAsyncComponent(() => import('../components/code/ProjectCodeTab.vue'));
+const ProjectMediaTab = defineAsyncComponent(
+  () => import('../components/media/ProjectMediaTab.vue'),
+);
 
 const props = defineProps<{ projectKey: string }>();
 const route = useRoute();
@@ -43,7 +46,7 @@ const markersError = ref('');
 /** The project's agents as last loaded; null until known (or when loading failed). */
 const projectAgents = ref<ProjectAgent[] | null>(null);
 
-const TABS = ['board', 'agents', 'code'] as const;
+const TABS = ['board', 'agents', 'code', 'media'] as const;
 const tab = computed({
   get: () => {
     const value = String(route.query['tab'] ?? 'board');
@@ -192,6 +195,7 @@ const opened = (issue: IssueDetail): void =>
           <v-tab value="board" data-test="tab-board">Board</v-tab>
           <v-tab value="agents" data-test="tab-agents">Agents</v-tab>
           <v-tab value="code" data-test="tab-code">Code</v-tab>
+          <v-tab value="media" data-test="tab-media">Media</v-tab>
         </v-tabs>
         <v-spacer />
         <v-text-field
@@ -216,6 +220,12 @@ const opened = (issue: IssueDetail): void =>
       />
       <ProjectCodeTab
         v-else-if="tab === 'code'"
+        :project-id="project.id"
+        :project-key="project.key"
+      />
+      <ProjectMediaTab
+        v-else-if="tab === 'media'"
+        :key="project.id"
         :project-id="project.id"
         :project-key="project.key"
       />
