@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ObjectId } from 'mongodb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -130,6 +130,39 @@ describe('CloneRetention', () => {
 
     const again = await ws.createIssueWorkspace(PROJECT, 'CVX-1');
     expect(again.created).toBe(true);
+  });
+
+  it('removes a clone half deleted by an interrupted sweep and leaves no move-aside behind', async () => {
+    const done = issue('CVX-1', 'done', 5);
+    await syncedClone('CVX-1');
+    const leftover = join(root.dir, 'workspaces', PROJECT, `.removing-CVX-2-${NOW}-abcdef`);
+    mkdirSync(join(leftover, 'node_modules'), { recursive: true });
+    const result = await retention(fakeDatabase([done])).sweep();
+    expect(result?.removed.map((clone) => clone.kind).sort()).toEqual(['closed', 'interrupted']);
+    expect(existsSync(leftover)).toBe(false);
+    expect(readdirSync(join(root.dir, 'workspaces', PROJECT))).toEqual([]);
+  });
+
+  it('keeps sweeping other projects when one project fails', async () => {
+    const other = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+    const done = issue('CVX-1', 'done', 5);
+    const clone = await syncedClone('CVX-1');
+    await ws.ensureRepo(other);
+    mkdirSync(join(root.dir, 'workspaces', other, 'OTH-1'), { recursive: true });
+    const database = fakeDatabase([done]);
+    const find = database.collections.issues.find.bind(database.collections.issues);
+    (database.collections.issues as unknown as { find: unknown }).find = (
+      filter: Record<string, unknown>,
+    ) => {
+      if ((filter['projectId'] as ObjectId).equals(new ObjectId(other))) {
+        throw new Error('query failed');
+      }
+      return find(filter as never);
+    };
+    const result = await retention(database).sweep();
+    expect(result?.errors).toBe(1);
+    expect(result?.removed.map((item) => item.name)).toEqual(['CVX-1']);
+    expect(existsSync(clone)).toBe(false);
   });
 
   it('does nothing with 0 days', async () => {

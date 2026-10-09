@@ -1,4 +1,5 @@
-import { lstat, readdir, realpath, rm } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { lstat, readdir, realpath, rename, rm } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { issueKeySchema } from '@conclavix/core';
 import { ObjectId } from 'mongodb';
@@ -12,13 +13,18 @@ const DAY_MS = 24 * 60 * 60_000;
 const PROJECT_DIR = /^[a-f0-9]{24}$/;
 /** Name CodeWorkspace.setAside gives a clone it moved out of the way. */
 const STALE_DIR = /^\.stale-([A-Z][A-Z0-9]{1,5}-[1-9][0-9]*)-([0-9]{13})-[0-9a-f]{6}$/;
+/**
+ * A clone the sweep moved out of the way before deleting it, so a removal interrupted by a
+ * restart never leaves a half-deleted clone at the issue's path; removed by the next sweep.
+ */
+const REMOVING_DIR = /^\.removing-([A-Z][A-Z0-9]{1,5}-[1-9][0-9]*)-([0-9]{13})-[0-9a-f]{6}$/;
 const CLOSED = new Set<IssueDoc['status']>(['done', 'cancelled']);
 const ACTIVE_RUNS = ['queued', 'running'] as const;
 
 export interface RemovedClone {
   projectId: string;
   name: string;
-  kind: 'closed' | 'stale';
+  kind: 'closed' | 'stale' | 'interrupted';
   bytes: number;
 }
 
@@ -115,7 +121,12 @@ export class CloneRetention {
     }
     for (const entry of await readdir(base, { withFileTypes: true })) {
       if (!entry.isDirectory() || !PROJECT_DIR.test(entry.name)) continue;
-      await this.sweepProject(base, entry.name, result);
+      try {
+        await this.sweepProject(base, entry.name, result);
+      } catch (error) {
+        // One unreadable project directory or failed query must not stop the others.
+        this.failed(result, entry.name, '*', error);
+      }
     }
     return this.finish(result);
   }
@@ -141,7 +152,11 @@ export class CloneRetention {
       if (!entry.isDirectory()) continue;
       const stale = STALE_DIR.exec(entry.name);
       if (stale) {
-        if (Number(stale[2]) < cutoff) await this.removeStale(base, projectId, entry.name, result);
+        if (Number(stale[2]) < cutoff) {
+          await this.removeAside(base, projectId, entry.name, 'stale', result);
+        }
+      } else if (REMOVING_DIR.test(entry.name)) {
+        await this.removeAside(base, projectId, entry.name, 'interrupted', result);
       } else if (issueKeySchema.safeParse(entry.name).success) {
         keys.push(entry.name);
       }
@@ -156,10 +171,12 @@ export class CloneRetention {
     }
   }
 
-  private async removeStale(
+  /** Remove a directory next to the clones that nothing uses: set aside or half removed. */
+  private async removeAside(
     base: string,
     projectId: string,
     name: string,
+    kind: 'stale' | 'interrupted',
     result: SweepResult,
   ): Promise<void> {
     const path = join(base, projectId, name);
@@ -167,7 +184,7 @@ export class CloneRetention {
       await assertRemovable(base, path);
       const bytes = await treeBytes(path);
       await rm(path, { recursive: true, force: true });
-      this.removed(result, { projectId, name, kind: 'stale', bytes });
+      this.removed(result, { projectId, name, kind, bytes });
     } catch (error) {
       this.failed(result, projectId, name, error);
     }
@@ -182,11 +199,16 @@ export class CloneRetention {
   ): Promise<void> {
     const path = join(base, projectId, issue.key);
     let bytes = 0;
-    // Checked again under the clone's lock, right before the removal.
+    let moved: string | null = null;
+    // Checked again under the clone's lock, right before the removal. The clone is renamed away
+    // atomically there (removeIssueWorkspace's own rm then finds nothing) and deleted afterwards.
     const canRemove = async (): Promise<boolean> => {
       if (!(await this.stillRemovable(issue._id, cutoff))) return false;
       await assertRemovable(base, path);
       bytes = await treeBytes(path);
+      const suffix = `${this.now}-${randomBytes(3).toString('hex')}`;
+      moved = join(base, projectId, `.removing-${issue.key}-${suffix}`);
+      await rename(path, moved);
       return true;
     };
     try {
@@ -200,8 +222,12 @@ export class CloneRetention {
         false,
         canRemove,
       );
-      if (removed) this.removed(result, { projectId, name: issue.key, kind: 'closed', bytes });
-      else result.kept += 1;
+      if (!removed) {
+        result.kept += 1;
+        return;
+      }
+      if (moved) await rm(moved, { recursive: true, force: true });
+      this.removed(result, { projectId, name: issue.key, kind: 'closed', bytes });
     } catch (error) {
       if (error instanceof AppError && error.statusCode === 409) {
         result.kept += 1;
