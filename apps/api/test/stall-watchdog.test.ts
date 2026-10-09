@@ -2,7 +2,7 @@ import { ObjectId } from 'mongodb';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sweepStalls } from '../src/modules/scheduler/stall-watchdog.js';
 import { createTestContext, type TestContext } from './helpers.js';
-import { createFixture, type Fixture } from './scheduler-helpers.js';
+import { createFixture, progressDuring, type Fixture } from './scheduler-helpers.js';
 
 describe('stall watchdog', () => {
   let ctx: TestContext;
@@ -21,12 +21,9 @@ describe('stall watchdog', () => {
     await fx.scheduler.processPendingWakes();
     const run = fx.dispatcher.runs.at(-1);
     if (run?.issueId?.toHexString() === issue.id) {
-      await fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd: 0 });
       // The run did its step; the watchdog only nudges after progress.
-      await ctx.database.collections.runs.updateOne(
-        { _id: run._id },
-        { $set: { madeProgress: true } },
-      );
+      await progressDuring(ctx, run);
+      await fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd: 0 });
     }
     expect(await pendingFor(issue.id)).toHaveLength(0);
     return { agent, issue };

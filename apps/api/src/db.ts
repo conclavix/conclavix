@@ -123,6 +123,16 @@ export interface IssueDoc extends IssueDecisionFields {
   workspaceCloneId?: string | null;
   /** How often agents reopened the issue with reopen_issue; capped, the board is not counted. */
   agentReopens?: number;
+  /** The last silent-run escalation (scheduler/silent-run.ts); one per idle streak. */
+  silentRun?: SilentRunMark | null;
+}
+
+/** Which run of which agent was escalated as silent, at which progress count. */
+export interface SilentRunMark {
+  runId: ObjectId;
+  agentId: ObjectId;
+  progress: number;
+  at: Date;
 }
 
 export interface WakeDoc {

@@ -63,6 +63,20 @@ async function resume(
 }
 
 /**
+ * Move one in_review issue that waits for something other than a board decision back to
+ * in_progress and wake its assignee with `reason`; false when it stays (see resume).
+ */
+export async function resumeWaitingIssue(
+  collections: Collections,
+  issue: IssueDoc,
+  reason: WakeReason,
+  session: ClientSession,
+): Promise<boolean> {
+  if (issue.status !== 'in_review' || issue.awaitingBoard || !issue.assigneeAgentId) return false;
+  return resume(collections, issue as Waiting, reason, session);
+}
+
+/**
  * Hand back the assigned in_review issues that waited on `closed`, inside the transaction that
  * closes it: its parent (`subissue_closed`), and issues whose last open blocker it was
  * (`unblocked`). Each moves to in_progress and its assignee gets one wake; a pending wake for the

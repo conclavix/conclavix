@@ -9,7 +9,11 @@ import { pingRedis, QueueDispatcher, redisConnection, startQueueWorker } from '.
 import { RunWorker } from './runner/run-worker.js';
 import { CodeRuns } from './runner/code-run.js';
 import { AuditLog } from './modules/audit/audit.js';
-import { releaseClone, type SandboxOptions } from './runner/adapters/sandbox.js';
+import {
+  releaseClone,
+  usableSandboxTools,
+  type SandboxOptions,
+} from './runner/adapters/sandbox.js';
 import { knownSecretsFromEnv, secretsFromEnv } from './runner/secrets.js';
 import { vaultBox } from './modules/settings/secret-box.js';
 import { waitForDependency } from './startup.js';
@@ -36,7 +40,14 @@ async function codingAgents(
     agentEmailDomain: config.AGENT_EMAIL_DOMAIN,
     limits: { archiveTimeoutMs: COMMIT_GIT_TIMEOUT_MS },
   });
-  log.info({ helper, workspaceRoot: workspace.root }, 'coding agents enabled');
+  const tools = await usableSandboxTools(config.CODE_SANDBOX_TOOLS);
+  for (const tool of tools.missing) {
+    log.warn({ tool: tool.name, path: tool.path }, 'sandbox tool is not executable; left out');
+  }
+  log.info(
+    { helper, workspaceRoot: workspace.root, tools: tools.usable.map((tool) => tool.name) },
+    'coding agents enabled',
+  );
   return {
     sandbox: {
       helper,
@@ -48,6 +59,7 @@ async function codingAgents(
         diskLimitMb: config.CODE_RUN_DISK_LIMIT_MB,
       },
       extraDomains: config.CODE_SANDBOX_DOMAINS,
+      tools: tools.usable,
     },
     codeRuns: new CodeRuns(
       database,
@@ -89,6 +101,7 @@ async function main(): Promise<void> {
     mcpUrl: new URL('/mcp', config.PUBLIC_API_URL).toString(),
     timeoutMs: config.RUN_TIMEOUT_MINUTES * 60_000,
     knownSecrets: knownSecretsFromEnv(process.env),
+    sandboxTools: sandbox?.tools ?? [],
     adapters: {
       claude_cli: new ClaudeCliAdapter({
         bin: config.CLAUDE_BIN,

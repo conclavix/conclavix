@@ -91,7 +91,7 @@ export type PlanningResult =
   | { status: 'created'; issueId: string; issueKey: string; assigneeAgentId: string }
   | { status: 'skipped'; reason: 'disabled' | 'no_lead' };
 
-export type NotificationKind = 'delegation_closed';
+export type NotificationKind = 'delegation_closed' | 'silent_run';
 
 export interface AgentNotification {
   id: string;

@@ -15,6 +15,27 @@ export function issueRun(run: RunDoc): IssueRunDoc {
   return { ...run, issueId: run.issueId };
 }
 
+/**
+ * Leave an agent comment on the run's issue, as a run that reported on its issue would: the run
+ * stays idle (no progress) but is no silent run, so silent-run escalation leaves it alone.
+ */
+export async function commentDuring(ctx: TestContext, run: RunDoc): Promise<void> {
+  if (!run.issueId) return;
+  await ctx.database.collections.comments.insertOne({
+    _id: new ObjectId(),
+    issueId: run.issueId,
+    author: { type: 'agent', agentId: run.agentId.toHexString() },
+    body: 'Looked at it; nothing to do yet.',
+    createdAt: run.startedAt ?? run.createdAt,
+  });
+}
+
+/** Raise the progress of the run's issue, as a run that did its step would (not silent). */
+export async function progressDuring(ctx: TestContext, run: RunDoc): Promise<void> {
+  if (!run.issueId) return;
+  await ctx.database.collections.issues.updateOne({ _id: run.issueId }, { $inc: { progress: 1 } });
+}
+
 export class RecordingDispatcher implements RunDispatcher {
   readonly runs: RunDoc[] = [];
 

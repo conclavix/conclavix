@@ -13,6 +13,7 @@ export const wakeReasonSchema = z.enum([
   'stall_watchdog',
   'chat',
   'plan_approved',
+  'silent_run',
 ]);
 
 export const runStatusSchema = z.enum([

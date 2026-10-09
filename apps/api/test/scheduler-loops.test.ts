@@ -1,7 +1,7 @@
 import { ObjectId } from 'mongodb';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestContext, type TestContext } from './helpers.js';
-import { createFixture, type Fixture } from './scheduler-helpers.js';
+import { commentDuring, createFixture, type Fixture } from './scheduler-helpers.js';
 import { PROCESSED_WAKE_RETENTION_SECONDS } from '../src/db/indexes.js';
 
 describe('scheduler loops, heartbeats and concurrency', () => {
@@ -14,6 +14,8 @@ describe('scheduler loops, heartbeats and concurrency', () => {
     const run = fx.dispatcher.runs.at(-1);
     if (!run) throw new Error('expected a run');
     await beforeFinish?.();
+    // Idle but not silent: the agent reported, so only loop detection applies.
+    await commentDuring(ctx, run);
     await fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd: 0.01 });
   };
 
@@ -119,6 +121,7 @@ describe('scheduler loops, heartbeats and concurrency', () => {
     await fx.issue({ title: 'unassigned' });
     await fx.scheduler.processPendingWakes();
     for (const run of fx.dispatcher.runs) {
+      await commentDuring(ctx, run);
       await fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd: 0 });
     }
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
