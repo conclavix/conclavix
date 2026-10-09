@@ -9,6 +9,8 @@ import {
 import { LOCKS, lock, type Collections, type Database, type IssueDoc } from '../../db.js';
 import { AppError, conflict, unprocessable } from '../../errors.js';
 import { lockBoard, readBoard } from '../issues/columns.js';
+import { isClosed } from '../issues/graph.js';
+import { resumeWaitingIssues } from '../issues/resume.js';
 import { applyStatusChange } from '../issues/status-change.js';
 import { withdrawDecision } from '../decisions/records.js';
 import { wakeOnIssueChange } from '../scheduler/wakes.js';
@@ -63,7 +65,7 @@ export class BoardRepository {
    * that status, under the same rules and wakes as a status change on the issue itself.
    */
   async replace(projectId: ObjectId, input: UpdateBoardInput): Promise<Board> {
-    const { board, transitions } = await this.database.inTransaction(async (session) => {
+    const { board, transitions, resumed } = await this.database.inTransaction(async (session) => {
       await lock(this.collections, LOCKS.issueGraph, session);
       await lock(this.collections, LOCKS.orgChart, session);
       const stored = await lockBoard(this.collections, projectId, session);
@@ -83,10 +85,17 @@ export class BoardRepository {
       if (written.matchedCount !== 1) {
         throw new Error('project vanished while its board was locked');
       }
-      return { board: toBoard(projectId, revision, columns), transitions };
+      // After every move and the new columns, so a resumed issue is read and placed as it now is.
+      const resumed: ObjectId[] = [];
+      for (const { before, after } of transitions) {
+        if (isClosed(after.status) && !isClosed(before.status)) {
+          resumed.push(...(await resumeWaitingIssues(this.collections, after, session)));
+        }
+      }
+      return { board: toBoard(projectId, revision, columns), transitions, resumed };
     });
     for (const { before, after } of transitions) {
-      await wakeOnIssueChange(this.collections, before, after);
+      await wakeOnIssueChange(this.collections, before, after, resumed);
     }
     return board;
   }

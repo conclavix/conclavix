@@ -55,6 +55,17 @@ const baseConfigSchema = z.object({
     .refine((value) => !hasControlCharacter(value), 'must not contain control characters')
     .default('./data/workspace'),
   GIT_BIN: z.string().min(1).default('git'),
+  /** Domain of the no-reply addresses agents commit and merge with: `agent-<id>@<domain>`. */
+  AGENT_EMAIL_DOMAIN: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(253)
+    .regex(
+      /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/,
+      'must be a domain name such as users.noreply.example.com',
+    )
+    .default('conclavix.invalid'),
   /** Root helper that runs coding agents in their sandbox (deploy/agent-sandbox). Unset: off. */
   AGENT_SANDBOX_HELPER: z.preprocess(
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
@@ -118,6 +129,11 @@ const baseConfigSchema = z.object({
     z.coerce.number().int().min(0).max(3600).default(120),
   ),
   HEARTBEAT_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
+  /**
+   * Stall watchdog interval: issues an agent could work on but where nothing happened for this
+   * long get one `stall_watchdog` wake. 0 turns the watchdog off.
+   */
+  STALL_WATCHDOG_MINUTES: z.coerce.number().int().min(0).max(1440).default(5),
   /** How long an agent waits on an issue after `maxIdleRunsPerIssue` runs without progress. */
   IDLE_BACKOFF_MINUTES: z.coerce.number().int().min(1).max(1440).default(10),
   /**

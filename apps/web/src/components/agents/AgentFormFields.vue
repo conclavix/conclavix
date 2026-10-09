@@ -160,6 +160,29 @@ const modelRules = computed(() =>
         in the audit log.
       </v-alert>
     </v-col>
+    <v-col cols="12">
+      <v-switch
+        v-model="form.gitIntegration"
+        color="warning"
+        label="May merge branches and update main"
+        hint="Off by default. On: the agent can merge branches of its project into an issue branch and fast-forward main to a reviewed branch, on the server (merge_branches, fast_forward_main). Pushing to external remotes is not part of this."
+        persistent-hint
+        inset
+        data-test="git-integration-switch"
+      />
+      <v-alert
+        v-if="form.gitIntegration"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mt-2"
+        data-test="git-integration-warning"
+      >
+        The agent can change main in every project it is enabled in. Merges are refused on conflicts
+        and main only moves by fast-forward, but whether a branch was reviewed is up to the agent's
+        instructions. Merges and promotions are in the audit log.
+      </v-alert>
+    </v-col>
     <v-col v-if="showInstructions" cols="12">
       <v-textarea
         v-model="form.instructions"

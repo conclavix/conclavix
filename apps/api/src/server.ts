@@ -31,7 +31,10 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const authSecret = requireAuthSecret(config);
   const database = await connectDatabase(config.MONGO_URI);
-  const workspace = new Workspace(config.WORKSPACE_ROOT, { gitBin: config.GIT_BIN });
+  const workspace = new Workspace(config.WORKSPACE_ROOT, {
+    gitBin: config.GIT_BIN,
+    agentEmailDomain: config.AGENT_EMAIL_DOMAIN,
+  });
   const app = await buildApp({
     version: process.env['npm_package_version'] ?? '0.0.0',
     database,

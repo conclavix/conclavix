@@ -31,6 +31,8 @@ export interface AgentForm {
   projectDefault: 'enabled' | 'disabled';
   /** 'write': the agent edits and runs code in the issue clone, inside the sandbox. */
   codeAccess: 'none' | 'write';
+  /** The agent may merge branches into issue branches and fast-forward main (server-side). */
+  gitIntegration: boolean;
 }
 
 export const DEFAULT_LIMITS: AgentLimitsForm = {
@@ -52,6 +54,7 @@ export const emptyForm = (): AgentForm => ({
   instructions: '',
   projectDefault: 'enabled',
   codeAccess: 'none',
+  gitIntegration: false,
 });
 
 export function formFromAgent(agent: AgentDetail): AgentForm {
@@ -72,6 +75,7 @@ export function formFromAgent(agent: AgentDetail): AgentForm {
     instructions: agent.instructions,
     projectDefault: agent.projectDefault ?? 'enabled',
     codeAccess: agent.codeAccess ?? 'none',
+    gitIntegration: agent.gitIntegration ?? false,
   };
 }
 
@@ -115,6 +119,7 @@ export function settingsPayload(form: AgentForm) {
     limits: limitsFromForm(form.limits),
     projectDefault: form.projectDefault,
     codeAccess: form.codeAccess,
+    gitIntegration: form.gitIntegration,
   };
 }
 

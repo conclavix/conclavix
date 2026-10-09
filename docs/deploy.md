@@ -142,6 +142,12 @@ Edit, Write and Bash, but only inside a per-run sandbox started by a root helper
 extra setup in [Coding agents](coding-agents.md#installation); without it their runs fail with
 an explanation and read-only agents are not affected.
 
+Independently of code access, agents with the git integration permission (off by default) may
+merge branches into issue branches and fast-forward `main` of their project's repository through
+the agent API; see [Workspace](workspace.md#git-integration-merge-tools). Set
+`AGENT_EMAIL_DOMAIN` to the same value in `conclavix.env` and `runner.env` if agent commits should
+carry another no-reply domain than `conclavix.invalid`.
+
 ### Per-agent keys for an LLM gateway
 
 If claude reaches the model through a gateway such as LiteLLM, give each agent its own key so the
