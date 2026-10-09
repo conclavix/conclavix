@@ -262,7 +262,7 @@ in the runner.
 ## Git integration (merge tools)
 
 Agents with the **git integration** permission (`gitIntegration: true`, agent settings "May merge
-branches and update main") get three more MCP tools. They run in the API process on the project's
+branches and update main") get four more MCP tools. They run in the API process on the project's
 bare repository, never inside a sandbox or an issue clone, so an agent does not need code access
 or a working copy for them. The permission is off by default and for every existing agent; only
 admins and owners can change it, and every change is audited as `agent.git_integration_changed`.
@@ -273,17 +273,37 @@ It is checked again on every call, so revoking it takes effect within a running 
 | `merge_branches`    | Merge `sources` (existing branches, in order) into the issue branch `target`            |
 | `fast_forward_main` | Move `main` to an issue branch that passed review, fast-forward only                    |
 | `get_merge_status`  | Read-only preview: target against main, which sources it contains, which files conflict |
+| `set_branch`        | Point an issue branch at a commit: create, fast-forward, or rewind with a backup ref    |
 
 **Which branches.**
 
-- `merge_branches` `target` must be `cvx/<KEY>` of the run's own issue or of an issue in the same
-  project that is assigned to the calling agent. Anything else (another agent's issue, another
-  project, `main`, a free branch name) is refused with `forbidden` or a validation error.
+- **Branch scope.** `merge_branches` `target` and `set_branch` `branch` must be `cvx/<KEY>` of an
+  issue in the run's project for which, walking up its `parentId` chain (the issue itself first, at
+  most 20 levels), some issue on the chain
+  - is the run's own issue, or
+  - is assigned to the calling agent, or
+  - is a direct sub-issue of the issue the run's own issue was delegated from
+    (`delegatedFromIssueId`, set when another agent created the run's issue with
+    `create_subissue`).
+
+  So an agent writes the branches of its own issue, of issues assigned to it, of their sub-issues
+  at any depth, and of the issues its delegator handed out from the same issue (its siblings in
+  the delegation, for example the builder's issue next to the integration issue) with their
+  sub-issues. The delegator's own branch, other trees, other projects, `main` and free branch names
+  are refused with `forbidden` or a validation error.
+
+- **Commit ids.** Where a tool takes a commit, it accepts a branch name or a commit id (lowercase
+  hex, at least 7 digits, abbreviated ids must be unambiguous). A commit id must be reachable from
+  a ref of the project's repository: from a branch (`refs/heads/`) or a backup ref
+  (`refs/backup/`). Unknown ids, ids of other repositories and unreferenced objects (left over
+  from a refused merge, for example) are refused with 404.
 - `sources` are 1 to 10 distinct existing branches of the project's repository (branch names, not
-  commit ids), not the target itself. `base` (default `main`) is only used when the target does not
-  exist yet; an existing target is always the starting point.
-- `fast_forward_main` `source` must be `cvx/<KEY>` of an issue in the run's project. Pushing to
-  external remotes is not part of this.
+  commit ids), not the target itself. `base` (default `main`, a branch or a commit id) is only
+  used when the target does not exist yet; an existing target is always the starting point.
+- `fast_forward_main` `source` is `cvx/<KEY>` of an issue in the run's project, or a commit id
+  contained in some `cvx/*` branch. A commit id promotes exactly the released commit: commits that
+  land on the branch after the release are not promoted with it, and no helper branch is needed.
+  Pushing to external remotes is not part of this.
 - The agent must be enabled in the project, as for the read-only tools.
 
 **How a merge works.** For each source the target does not contain yet, `git merge-tree
@@ -306,15 +326,38 @@ otherwise the answer is 409 `not_fast_forward` with the number of missing commit
 to merge `main` into the source, review it again and promote again. Whether a branch was reviewed
 is up to the agent's instructions; the server only enforces the fast-forward.
 
+**Setting a branch.** `set_branch({ branch, commit, allowRewind? })` is the server-side
+replacement for `git reset` in an issue clone (which agents must not run, see
+[Coding agents](coding-agents.md#5-git-and-the-clone)). It resolves `commit` as above and
+
+- creates a missing branch at the commit (`created`);
+- moves an existing branch forward when its tip is an ancestor of the commit (`fast_forwarded`);
+- refuses any other move with 409 `not_fast_forward` (`dropped`: commits of the current tip the
+  branch would lose) unless `allowRewind: true`. With it, the old tip is first stored as
+  `refs/backup/cvx/<KEY>/<UTC time>-<sha>` (reported as `backupRef`, created with compare-and-swap
+  on a new name) and then the branch moves (`rewound`).
+
+`main` is never set (it is not an issue branch); it moves only through `fast_forward_main`. The
+branch moves with a compare-and-swap `update-ref` in the same per-issue queue as merges and the
+runner's commits. Backup refs are not branches: the Code tab does not list them, but `set_branch`
+accepts their commits, so a rewind can be undone by setting the branch back to the backed-up
+commit. The server never deletes them; remove them by hand with `git update-ref -d` in the
+project repository when no longer needed. Changes are audited as `branch.set` (agent as actor,
+with `requested`, `status`, `before`, `after`, `dropped` and `backupRef`).
+
 **Issue clones after a merge.** A merge moves `cvx/<KEY>` on the server while the issue may have
 a clone. The runner reconciles the two when it next touches the clone (see
 [Coding agents](coding-agents.md#5-git-and-the-clone)): before a run, a clone behind the server is
 fast-forwarded, so the run starts from the merged branch; after a run during which the branch was
 merged, the run's work is merged with the server tip. A merge into the run's own issue therefore
-does not change the running agent's working copy; its next run starts from the result.
+does not change the running agent's working copy; its next run starts from the result. After a
+rewind with `set_branch` a clone that still contains the old tip (any backup ref of the branch
+that the new tip does not contain) is never merged or synced: the runner moves it aside and the
+next run starts in a fresh clone of the new tip; work a run committed on top of the old tip is
+kept as `conflict/<KEY>/<sha>`.
 
 **Audit and safety.** Successful merges are audited as `branch.merged`, promotions as
-`branch.main_fast_forwarded`, both with the agent as actor (`{type: 'agent', agentId, name}`) and
+`branch.main_fast_forwarded`, branch moves as `branch.set`, all with the agent as actor (`{type: 'agent', agentId, name}`) and
 the project, run, issue, branch and before/after commits; refusals change nothing and appear in
 the run log. All git calls use the options below (no hooks, no fsmonitor, no system or user
 configuration, no transports); merge drivers named in `.gitattributes` of the content need a

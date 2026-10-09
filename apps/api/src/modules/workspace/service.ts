@@ -9,7 +9,6 @@ import {
   type IssueWorkspaceInfo,
 } from '@conclavix/core';
 import { conflict, notFound, unprocessable } from '../../errors.js';
-import { GitError } from './git.js';
 import {
   NO_REF,
   OBJECT_ID,
@@ -299,9 +298,11 @@ export class Workspace extends MediaReader {
   }
 
   /**
-   * Bring the issue branch from its clone into the bare repository: fetch only
-   * `refs/heads/cvx/<issueKey>`, fast-forward only unless `force` is set. Returns the tips
-   * before and after.
+   * Bring the issue branch from its clone into the bare repository: the clone's
+   * `refs/heads/cvx/<issueKey>` is fetched into a temporary ref, then the branch moves with
+   * compare-and-swap against the tip read before. Without `force` the move must be a
+   * fast-forward and the clone must not contain a head the branch was rewound away from
+   * (set_branch with allowRewind); both are refused with 409. Returns the tips before and after.
    */
   async syncIssueBranch(projectId: string, issueKey: string, force: boolean): Promise<BranchSync> {
     const branch = await this.assertBranchName(issueBranchName(issueKey));
@@ -312,23 +313,24 @@ export class Workspace extends MediaReader {
       const before = await this.commitOf(projectId, ref);
       const cloneTip = await this.cloneHead(projectId, issueKey, gitDir);
       if (!cloneTip) throw notFound(`Branch ${branch} in the workspace of ${issueKey}`);
+      const incoming = `refs/conclavix/sync/${issueKey}`;
+      await this.fromClone(projectId, gitDir, [
+        'fetch',
+        '--no-tags',
+        '--no-write-fetch-head',
+        '--no-recurse-submodules',
+        '--no-auto-gc',
+        gitDir,
+        `+${ref}:${incoming}`,
+      ]);
       try {
-        await this.fromClone(projectId, gitDir, [
-          'fetch',
-          '--no-tags',
-          '--no-write-fetch-head',
-          '--no-recurse-submodules',
-          '--no-auto-gc',
-          gitDir,
-          `${force ? '+' : ''}${ref}:${ref}`,
-        ]);
-      } catch (error) {
-        if (!force && error instanceof GitError && /non-fast-forward|rejected/.test(error.stderr)) {
-          throw conflict(`${branch} in the workspace is not a fast-forward of the server branch`, {
-            hint: 'the server branch has commits the workspace lacks (for example an integration merge); the next coding run merges them, while forcing the update drops them',
-          });
-        }
-        throw error;
+        const tip = await this.commitOf(projectId, incoming);
+        if (!tip) throw notFound(`Branch ${branch} in the workspace of ${issueKey}`);
+        if (!force && before) await this.assertSyncable(projectId, branch, before, tip);
+        if (before !== tip) await this.moveBranch(projectId, branch, tip, before);
+      } finally {
+        // A leftover temporary ref holds nothing new (the next sync overwrites it with `+`).
+        await this.run(projectId, ['update-ref', '-d', incoming]).catch(() => undefined);
       }
       const after = await this.commitOf(projectId, ref);
       return {
@@ -340,6 +342,30 @@ export class Workspace extends MediaReader {
         forced: force,
       };
     });
+  }
+
+  /** Refuse (409) a sync that is no fast-forward or that would bring rewound commits back. */
+  private async assertSyncable(
+    projectId: string,
+    branch: string,
+    before: string,
+    tip: string,
+  ): Promise<void> {
+    if (!(await this.isAncestor(projectId, before, tip))) {
+      throw conflict(`${branch} in the workspace is not a fast-forward of the server branch`, {
+        hint: 'the server branch has commits the workspace lacks (for example an integration merge); the next coding run merges them, while forcing the update drops them',
+      });
+    }
+    for (const head of await this.rewoundHeads(projectId, branch, before)) {
+      if (await this.isAncestor(projectId, head, tip)) {
+        throw conflict(
+          `${branch} in the workspace still holds ${head.slice(0, 12)}, which the branch was rewound away from`,
+          {
+            hint: 'the next coding run sets the workspace aside and clones the server branch; forcing the update would undo the rewind',
+          },
+        );
+      }
+    }
   }
 
   /**

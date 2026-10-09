@@ -176,7 +176,41 @@ The probe mode of the acceptance script checks that such a reference reaches the
 
 ### 5. Git and the clone
 
-- The agent may use git in the clone (the inner sandbox protects `.git/hooks` and `.git/config`).
+- The runner commits, not the agent. Claude Code's Bash sandbox keeps some paths in the clone
+  read-only: `.git/config` and `.git/hooks` (the acceptance test checks `.git/hooks`), and further
+  paths Claude Code chooses itself, which change between versions (currently also
+  `.github/workflows/`, for example). The rest of `.git` (refs, index, reflogs, objects) is
+  writable from Bash, so `git reset --mixed`, `checkout` or `commit` work, while `git reset --hard`
+  fails half way when it would have to rewrite a read-only file. The Edit and Write tools are
+  denied on `.git/**`. The run prompt therefore tells coding agents not to run `git reset`,
+  `checkout`, `switch`, `rebase`, `merge`, `pull`, `stash pop` or `commit` in the clone, to ask
+  their delegator when they need another starting commit (an agent with git integration moves the
+  branch with `set_branch`, see [Workspace](workspace.md#git-integration-merge-tools)), and to put
+  scratch copies and test workspaces into `$TMPDIR`: whatever is left in the clone is committed.
+- **HEAD guard.** After `prepare` (clone created or reconciled), the runner notes the clone's
+  branch tip and the sizes of the reflogs of `HEAD` and `cvx/<KEY>`. After the run, before the
+  commit, it refuses to commit or sync when
+  - `HEAD` is no longer the symbolic ref `refs/heads/cvx/<KEY>` (detached, another branch);
+  - `cvx/<KEY>` no longer contains the noted tip (reset or rebase onto something older or else);
+  - the reflog of `HEAD` or of the branch gained an entry that moved it and is not a commit
+    (`reset:`, `checkout:`, `rebase`, `merge`, `pull`, a bare `update-ref`; entries that leave the
+    commit unchanged, such as `git stash`'s internal reset, pass), or a reflog was shortened or
+    removed. This also catches a HEAD moved away and back with `reset --mixed`/`--soft`, which
+    leaves the work tree of the other commit behind;
+  - a merge, cherry-pick, revert or rebase was left in progress, or the index has unmerged
+    entries (or cannot be read).
+
+  Commits the agent added on top of the noted tip pass (they are counted as `agentCommits`), and a
+  staged index is otherwise ignored, because the runner commits from a fresh index of the work
+  tree. On a refusal the clone is moved aside to `.stale-<KEY>-<time>-<random>` (nothing deleted),
+  the run's `code.error` says `the agent moved HEAD in the workspace (...); nothing was committed
+or synced`, the run log has it as a `code:` event, and a system comment on the issue tells the
+  agents and the board; the next run starts in a fresh clone of the server branch. The guard
+  catches mistakes, not an agent set on hiding a move (`.git` is writable): the boundary stays on
+  the server side, where the sync is fast-forward only and a run never rewrites the branch. Paths
+  the sandbox keeps read-only are not filtered separately; a change to them only appears in a
+  commit after such a move, which the guard refuses.
+
 - After the unit has ended and the helper has handed the clone back, the runner (not the agent)
   commits: first the entries Claude Code's Bash sandbox leaves in `.git` (it creates
   `config.worktree` and `commondir` to mount them read-only, bubblewrap leaves the mount points
@@ -188,11 +222,10 @@ The probe mode of the acceptance script checks that such a reference reaches the
   the branch tip, `git add -A` skips `node_modules/`, `.venv/` and other caches, and
   `commit-tree` writes one commit with the author `Conclavix <agent name>`
   (`agent-<id>@<AGENT_EMAIL_DOMAIN>`, default `conclavix.invalid`). The message is the agent's result, redacted like the run log,
-  with `Conclavix-Issue/Run/Agent` trailers. Commits the agent made itself stay below it. If the
-  agent reset or rebased the branch so that it no longer contains the server tip the run started
-  from, the runner commits the work tree on top of that server tip instead (the rewritten commits
-  are dropped, their content is in the work tree) and records a run event; the server branch is
-  never rewritten by a run.
+  with `Conclavix-Issue/Run/Agent` trailers. Commits the agent made itself stay below it. A
+  branch the agent reset or rebased never gets this far (HEAD guard above); should a clone still
+  not contain the server tip the run started from, the runner commits the work tree on top of that
+  server tip instead and records a run event; the server branch is never rewritten by a run.
 - If `cvx/<KEY>` moved on the server during the run (an agent with git integration merged into
   it, see [Workspace](workspace.md#git-integration-merge-tools)), the runner reconciles before
   the sync: it fetches the clone's tip into the project repository (with `fsckObjects`), merges
@@ -204,8 +237,11 @@ The probe mode of the acceptance script checks that such a reference reaches the
   conflict branch in its error. A merge can also land between this check and the sync; a
   refused fast-forward or compare-and-swap is then retried after another reconciliation, up to
   three rounds.
-- Then `syncIssueBranch` fetches `cvx/<KEY>` into the project repository (fast-forward only; a
-  rewritten branch is not forced and the run records the refusal). A clone that is removed and
+- Then `syncIssueBranch` fetches `cvx/<KEY>` into a temporary ref of the project repository and
+  moves the branch with compare-and-swap against the tip it read (fast-forward only; a rewritten
+  branch is not forced and the run records the refusal). A clone that still contains a head the
+  branch was rewound away from is refused as well (409), also when the rewind lands between the
+  reconciliation and the sync; the retry then reconciles and sets the clone aside. A clone that is removed and
   created again starts from the server's `cvx/<KEY>`, not from `main`.
 - Before a run in an existing clone, the runner does the same reconciliation when the server
   branch differs from the clone: a clone ahead of it stays (the sync after the run brings it
@@ -213,7 +249,9 @@ The probe mode of the acceptance script checks that such a reference reaches the
   files such as build output and `node_modules/` may be overwritten), a diverged one is merged as
   above. A clone that still holds uncommitted work of an earlier run (its sandbox stopped it, for
   example at the disk limit, or its commit failed), or whose checkout would overwrite other
-  files, is neither committed nor overwritten: it is moved aside to
+  files, or that still contains a commit the branch was rewound away from with `set_branch`
+  (a `refs/backup/cvx/<KEY>/...` ref the server tip does not contain), is neither committed,
+  merged nor overwritten: it is moved aside to
   `workspaces/<projectId>/.stale-<KEY>-<time>-<random>` and the run starts in a fresh clone of the
   server branch; commits of it that the server branch lacks are kept as `conflict/<KEY>/<sha>`
   first. The server never deletes such directories or `conflict/` branches: look at them (the

@@ -33,6 +33,7 @@ export const KNOWN_ACTIONS = [
   'agent.git_integration_changed',
   'branch.merged',
   'branch.main_fast_forwarded',
+  'branch.set',
   'project.agent_access_changed',
   'skill_source.created',
   'skill_source.updated',

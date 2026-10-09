@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { conflict } from '../../errors.js';
+import { AppError, conflict } from '../../errors.js';
 import { GitError, type Git, type GitCallOptions } from './git.js';
 import { safeIdent, type CommitIdentity } from './identity.js';
 import { OBJECT_ID } from './repo-base.js';
@@ -14,7 +14,8 @@ import { OBJECT_ID } from './repo-base.js';
 
 /**
  * The only configuration an issue clone keeps when the runner commits in it; whatever an agent
- * wrote to `.git/config` (filters, includes, fsmonitor, hooks path, worktree) is replaced.
+ * wrote to `.git/config` (filters, includes, fsmonitor, hooks path, worktree) is replaced. No
+ * automatic gc: it could expire reflog entries during a run, which the HEAD guard reads.
  */
 export const CLONE_CONFIG = [
   '[core]',
@@ -25,6 +26,8 @@ export const CLONE_CONFIG = [
   '\tsymlinks = true',
   '\tautocrlf = false',
   '\tsharedRepository = 0660',
+  '[gc]',
+  '\tauto = 0',
   '',
 ].join('\n');
 
@@ -248,4 +251,21 @@ export function withWarnings(error: unknown, warnings: string[]): unknown {
     error.message = `${error.message} (${warnings.join('; ')})`;
   }
   return error;
+}
+
+/** Fast-forward checkout of the clone; false when it would overwrite files in the work tree. */
+export async function checkedOut(
+  git: CloneGit,
+  gitDir: string,
+  ref: string,
+  from: string,
+  to: string,
+): Promise<boolean> {
+  try {
+    await checkoutClone(git, gitDir, ref, { from, to, force: false });
+    return true;
+  } catch (error) {
+    if (error instanceof AppError && error.statusCode === 409) return false;
+    throw error;
+  }
 }

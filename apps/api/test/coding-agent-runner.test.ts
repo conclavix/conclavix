@@ -164,6 +164,7 @@ describe('CodeRuns.finish', () => {
     skillsDir: null,
     branch: 'cvx/COD-9',
     base: 'a'.repeat(40),
+    start: { tip: 'a'.repeat(40), logs: { head: 0, branch: 0 } },
   };
   const setup = (workspace: Partial<CodeWorkspace>) => {
     const updateOne = vi.fn().mockResolvedValue(undefined);
@@ -174,6 +175,7 @@ describe('CodeRuns.finish', () => {
       {
         agentEmailDomain: 'conclavix.invalid',
         branchTip: vi.fn().mockResolvedValue(context.base),
+        guardCloneHead: vi.fn().mockResolvedValue({ problems: [], setAside: null }),
         ...workspace,
       } as CodeWorkspace,
     );
@@ -294,6 +296,9 @@ describe('CodeRuns.prepare', () => {
         createIssueWorkspace,
         branchTip: vi.fn().mockResolvedValue(null),
         reconcileClone: vi.fn().mockResolvedValue({ action: 'none', warnings: [] }),
+        cloneHeadState: vi
+          .fn()
+          .mockResolvedValue({ tip: 'a'.repeat(40), logs: { head: 0, branch: 0 } }),
       } as unknown as CodeWorkspace,
       reclaim,
     );

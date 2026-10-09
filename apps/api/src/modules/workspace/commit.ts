@@ -2,8 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { lstat, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { issueBranchName } from '@conclavix/core';
-import { AppError, notFound } from '../../errors.js';
+import { notFound } from '../../errors.js';
 import {
+  checkedOut,
   checkoutClone,
   cloneGit,
   commitTree,
@@ -14,6 +15,7 @@ import {
   withWarnings,
   type CloneGit,
 } from './clone-git.js';
+import { captureCloneHead, checkCloneHead, type CloneHead } from './head-guard.js';
 import { safeIdent, type CommitIdentity } from './identity.js';
 import type { ConflictFile } from './merge.js';
 import { removeSandboxPlaceholders } from './placeholders.js';
@@ -25,23 +27,6 @@ export { CLONE_CONFIG, DEFAULT_EXCLUDES } from './clone-git.js';
 
 /** Where the runner fetches the server's issue branch into a clone while reconciling the two. */
 const SERVER_TIP_REF = 'refs/conclavix/server';
-
-/** Fast-forward checkout of the clone; false when it would overwrite files in the work tree. */
-async function checkedOut(
-  git: CloneGit,
-  gitDir: string,
-  ref: string,
-  from: string,
-  to: string,
-): Promise<boolean> {
-  try {
-    await checkoutClone(git, gitDir, ref, { from, to, force: false });
-    return true;
-  } catch (error) {
-    if (error instanceof AppError && error.statusCode === 409) return false;
-    throw error;
-  }
-}
 
 export interface CloneReconcile {
   /**
@@ -59,6 +44,11 @@ export interface CloneReconcile {
   preservedBranch?: string;
   conflicts?: ConflictFile[];
   setAside?: string;
+  /**
+   * The old head of a rewind (set_branch with allowRewind) that the clone still contains; such a
+   * clone is always set aside, never merged or synced, so the dropped commits stay dropped.
+   */
+  rewound?: string;
   /** Problems that did not stop the reconciliation, such as a temporary ref left behind. */
   warnings: string[];
 }
@@ -195,6 +185,38 @@ export class CodeWorkspace extends Workspace {
     });
   }
 
+  /** The state of an issue clone a run starts from, for the HEAD guard (see head-guard.ts). */
+  async cloneHeadState(projectId: string, issueKey: string): Promise<CloneHead> {
+    const ref = `refs/heads/${await this.assertBranchName(issueBranchName(issueKey))}`;
+    return this.queue.run(`workspace:${projectId}:${issueKey}`, async () => {
+      const gitDir = await this.cloneGitDir(projectId, issueKey);
+      await resetCloneConfig(gitDir);
+      return captureCloneHead(this.cloneGit(gitDir), gitDir, ref);
+    });
+  }
+
+  /**
+   * The HEAD guard after a run: what the agent changed in the clone's git state since `start`
+   * that the runner must not commit over (see checkCloneHead). With any problem the clone is set
+   * aside (nothing committed, synced or deleted) and the next run gets a fresh clone.
+   */
+  async guardCloneHead(
+    projectId: string,
+    issueKey: string,
+    start: CloneHead,
+  ): Promise<{ problems: string[]; setAside: string | null }> {
+    const ref = `refs/heads/${await this.assertBranchName(issueBranchName(issueKey))}`;
+    return this.queue.run(`workspace:${projectId}:${issueKey}`, async () => {
+      const gitDir = await this.cloneGitDir(projectId, issueKey);
+      await resetCloneConfig(gitDir);
+      const problems = await checkCloneHead(this.cloneGit(gitDir), gitDir, ref, start).catch(
+        (error: unknown) => [`checking the workspace failed: ${(error as Error).message}`],
+      );
+      if (problems.length === 0) return { problems, setAside: null };
+      return { problems, setAside: await this.setAside(projectId, issueKey) };
+    });
+  }
+
   /**
    * Whether the clone holds uncommitted work (see hasUncommittedWork). A check that fails counts
    * as uncommitted work, so the clone is set aside instead of blocking every later run.
@@ -240,8 +262,10 @@ export class CodeWorkspace extends Workspace {
    * work of an earlier run (its sandbox stopped it, or its commit failed), or whose checkout would
    * overwrite files, is set aside (see setAside) instead of being committed or overwritten, after
    * its commits the server lacks were kept as `conflict/<KEY>/<sha>`; the caller then creates a
-   * fresh clone. The server branch only moves forward, with
-   * compare-and-swap. Runs only while no sandbox works in the clone.
+   * fresh clone. A clone that still contains an old head the branch was rewound away from
+   * (set_branch with allowRewind) is set aside the same way, whatever else holds, so the dropped
+   * commits never come back through a merge or a sync. The server branch only moves forward,
+   * with compare-and-swap. Runs only while no sandbox works in the clone.
    */
   async reconcileClone(
     projectId: string,
@@ -285,7 +309,10 @@ export class CodeWorkspace extends Workspace {
       try {
         await this.fetchIntoClone(projectId, git, ref);
         let result = none;
-        if (await git.isAncestor(server, clone)) {
+        const rewound = await this.rewoundInClone(projectId, git, branch, server, clone);
+        if (rewound) {
+          result = { ...(await aside(rewound !== clone)), rewound };
+        } else if (await git.isAncestor(server, clone)) {
           result = none;
         } else if (await this.hasLeftovers(git, gitDir, clone, warnings)) {
           result = await aside(!(await git.isAncestor(clone, server)));
@@ -311,6 +338,25 @@ export class CodeWorkspace extends Workspace {
         throw withWarnings(error, warnings);
       }
     });
+  }
+
+  /**
+   * The rewound old head of the branch (see RepoBrancher.rewoundHeads) the clone still contains,
+   * or null. An old head missing from the clone's objects is not contained in it.
+   */
+  private async rewoundInClone(
+    projectId: string,
+    git: CloneGit,
+    branch: string,
+    server: string,
+    clone: string,
+  ): Promise<string | null> {
+    for (const head of await this.rewoundHeads(projectId, branch, server)) {
+      if (head === clone) return head;
+      // A head missing from the clone's objects cannot be in it; other failures propagate.
+      if ((await git.commit(head)) && (await git.isAncestor(head, clone))) return head;
+    }
+    return null;
   }
 
   /**

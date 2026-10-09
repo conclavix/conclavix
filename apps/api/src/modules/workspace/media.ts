@@ -16,7 +16,7 @@ import {
 import { GitError } from './git.js';
 import { parseLsTree } from './parse.js';
 import { OBJECT_ID } from './repo-base.js';
-import { RepoMerger } from './merge.js';
+import { RepoBrancher } from './branch-set.js';
 
 /** A branch the media scan covers. */
 interface ScanRef {
@@ -184,7 +184,7 @@ function facetsOf(items: readonly MediaItem[], refs: readonly ScanRef[]): MediaF
  * The media files (images, videos, PDFs) of a project repository across `main` and every issue
  * branch, deduplicated by blob id. A scan is cached per project until a branch tip changes.
  */
-export class MediaReader extends RepoMerger {
+export class MediaReader extends RepoBrancher {
   private readonly mediaCache = new Map<
     string,
     { key: string; scan: Promise<MediaScan>; expiresAt?: number }

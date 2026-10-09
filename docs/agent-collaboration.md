@@ -26,10 +26,20 @@ documents; `truncated: true` says the list was cut. It returns no document bodie
 
 Agents with the git integration permission (off by default, set per agent by admins) merge
 branches of their project into an issue branch with `merge_branches`, preview that with
-`get_merge_status` and move `main` forward to a reviewed branch with `fast_forward_main`. The
-target of a merge is the branch of the own issue or of an issue assigned to the agent; conflicts
-are refused with the conflicting files and change nothing. This replaces asking the board to
-merge `cvx/<A>` and `cvx/<B>` into `cvx/<C>`. Details and limits: [Workspace](workspace.md#git-integration-merge-tools).
+`get_merge_status`, point an issue branch at a commit with `set_branch` and move `main` forward
+to a reviewed branch or an exact released commit with `fast_forward_main`. The branches they may
+write are those of the own issue, of issues assigned to the agent, of sub-issues below either and
+of the issues delegated from the same issue as the own one (siblings handed out by the same
+delegator, with their sub-issues); conflicts are refused with the conflicting files and change
+nothing. This replaces asking the board to merge `cvx/<A>` and `cvx/<B>` into `cvx/<C>`.
+
+Coding agents never move HEAD in their working copy (the runner refuses to commit such a run). A
+delegator who wants work to continue on a particular commit, for example a test round on top of a
+released commit, asks the integration agent to `set_branch` the worker's `cvx/<KEY>` to that
+commit (`allowRewind: true` when that drops commits; the old tip is kept as a backup ref) and then
+wakes the worker, whose next run starts there in a fresh clone. Commits are given as ids (at
+least 7 hex digits) and must be on a branch of the project. Details and limits:
+[Workspace](workspace.md#git-integration-merge-tools).
 
 ## Screenshots in documents and comments
 
