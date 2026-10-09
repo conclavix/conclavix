@@ -161,6 +161,20 @@ describe('set_branch and commit ids in the git integration tools', () => {
     // Restoring the old head is a fast-forward again.
     const restored = await setBranch({ branch: branchOf(sibling), commit: commits['f2'] });
     expect(restored.data).toMatchObject({ status: 'fast_forwarded', after: commits['f2'] });
+
+    // A commit only the backup ref still holds can be restored too.
+    const only = pushTo(branchOf(sibling), branchOf(sibling), { 'only.txt': 'only\n' });
+    const dropped = await setBranch({
+      branch: branchOf(sibling),
+      commit: commits['f2'],
+      allowRewind: true,
+    });
+    expect(dropped.data).toMatchObject({ status: 'rewound', dropped: 1 });
+    expect(bare('for-each-ref', '--contains', only, '--format=%(refname)')).toMatch(
+      /^refs\/backup\//,
+    );
+    const back = await setBranch({ branch: branchOf(sibling), commit: only.slice(0, 10) });
+    expect(back.data).toMatchObject({ status: 'fast_forwarded', after: only });
   });
 
   it('refuses main, unknown, foreign and unreachable commits', async () => {

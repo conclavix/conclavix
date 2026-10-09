@@ -329,6 +329,7 @@ export class Workspace extends MediaReader {
         if (!force && before) await this.assertSyncable(projectId, branch, before, tip);
         if (before !== tip) await this.moveBranch(projectId, branch, tip, before);
       } finally {
+        // A leftover temporary ref holds nothing new (the next sync overwrites it with `+`).
         await this.run(projectId, ['update-ref', '-d', incoming]).catch(() => undefined);
       }
       const after = await this.commitOf(projectId, ref);

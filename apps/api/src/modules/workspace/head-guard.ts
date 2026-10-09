@@ -41,7 +41,10 @@ const MAX_REPORTED = 5;
 
 const reflogPath = (gitDir: string, ref: string): string => join(gitDir, 'logs', ...ref.split('/'));
 
-/** Read a regular file from `offset` (at most `max` bytes) without following a symlink. */
+/**
+ * Read a regular file from `offset` (at most `max` bytes) without following a symlink; opened
+ * non-blocking so a FIFO the agent left in place of a reflog cannot stall the runner.
+ */
 async function readFrom(
   path: string,
   offset: number,
@@ -49,7 +52,7 @@ async function readFrom(
 ): Promise<{ size: number; text: string } | null> {
   let handle;
   try {
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
     if (isMissing(error)) return null;
     throw error;
