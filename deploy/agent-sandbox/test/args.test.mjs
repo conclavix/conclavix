@@ -156,13 +156,57 @@ describe('validateClaudeArgs', () => {
     'a plugin directory': ['--plugin-dir', '/tmp'],
     'an allow rule': ['--allowedTools', 'Bash(*)'],
     'an unknown tool': ['--tools', 'Read,WebFetch'],
+    'the board server off loopback': [
+      '--mcp-config',
+      JSON.stringify({ mcpServers: { conclavix: { type: 'http', url: 'http://10.0.0.1/mcp' } } }),
+    ],
     'a stdio MCP server': [
       '--mcp-config',
       JSON.stringify({ mcpServers: { x: { type: 'stdio', command: '/bin/sh' } } }),
     ],
-    'an MCP server off loopback': [
+    'a literal header value': [
       '--mcp-config',
-      JSON.stringify({ mcpServers: { x: { type: 'http', url: 'http://10.0.0.1/mcp' } } }),
+      JSON.stringify({
+        mcpServers: {
+          x: {
+            type: 'http',
+            url: 'https://mcp.example.com/',
+            headers: { Authorization: 'Bearer abc' },
+          },
+        },
+      }),
+    ],
+    'a header reference to another variable': [
+      '--mcp-config',
+      JSON.stringify({
+        mcpServers: {
+          x: {
+            type: 'http',
+            url: 'https://mcp.example.com/',
+            headers: { A: '${CONCLAVIX_RUN_BEARER}' },
+          },
+        },
+      }),
+    ],
+    'a variable reference in a server URL': [
+      '--mcp-config',
+      JSON.stringify({
+        mcpServers: {
+          x: { type: 'http', url: 'https://x.example.com/?t=${CONCLAVIX_RUN_BEARER}' },
+        },
+      }),
+    ],
+    'credentials in a server URL': [
+      '--mcp-config',
+      JSON.stringify({ mcpServers: { x: { type: 'http', url: 'https://u:p@mcp.example.com/' } } }),
+    ],
+    'a server name with capitals': [
+      '--mcp-config',
+      JSON.stringify({ mcpServers: { X: { type: 'http', url: 'https://mcp.example.com/' } } }),
+    ],
+    'a non-http server URL': [
+      '--mcp-config',
+      JSON.stringify({ mcpServers: { x: { type: 'http', url: 'file:///etc/passwd' } } }),
     ],
     'a flag without its value': ['--model'],
   };
@@ -175,6 +219,47 @@ describe('validateClaudeArgs', () => {
       assert.throws(() => validateClaudeArgs(args), UsageError);
     });
   }
+
+  it('accepts connection servers with header references and names them', async () => {
+    const { parseRunArgs } = await import('../args.mjs');
+    const config = JSON.stringify({
+      mcpServers: {
+        conclavix: { type: 'http', url: 'http://127.0.0.1:3300/mcp' },
+        docs: {
+          type: 'http',
+          url: 'https://mcp.example.com/mcp',
+          headers: {
+            Authorization: '${CONCLAVIX_MCP_HEADER_1}',
+            'X-Team': '${CONCLAVIX_MCP_HEADER_32}',
+          },
+        },
+        lan: { type: 'http', url: 'http://192.168.10.5:8080/mcp' },
+      },
+    });
+    const args = [
+      ...CLAUDE.filter((a, i, all) => a !== '--mcp-config' && all[i - 1] !== '--mcp-config'),
+      '--mcp-config',
+      config,
+    ];
+    assert.deepEqual(validateClaudeArgs(args), args);
+    const options = parseRunArgs([
+      'run',
+      '--run-id',
+      'a'.repeat(24),
+      '--project',
+      PROJECT,
+      '--issue',
+      'CVX-2',
+      '--status-tag',
+      'b'.repeat(32),
+      '--allow-address',
+      '192.168.10.5',
+      '--',
+      ...args,
+    ]);
+    assert.deepEqual(options.mcpServers, ['conclavix', 'docs', 'lan']);
+    assert.deepEqual(options.allowAddresses, ['192.168.10.5']);
+  });
 
   it('requires dontAsk, strict MCP config and the user setting source', () => {
     assert.throws(() => validateClaudeArgs(['-p']), /required/);

@@ -1,5 +1,6 @@
 import { constants } from 'node:fs';
 import { access, lstat, readFile, realpath, stat } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import { dirname, isAbsolute, normalize } from 'node:path';
 
 /** Root-owned configuration; every field is optional and falls back to DEFAULTS. */
@@ -52,6 +53,11 @@ export const DEFAULTS = Object.freeze({
     'fc00::/7',
     'fe80::/10',
   ],
+  /**
+   * Private networks (CIDR) a run may open for the MCP servers of its connections. Empty: a
+   * coding run reaches no MCP server on a private address (docs/connections.md).
+   */
+  mcpAllowedAddresses: [],
   /** Upper bounds; a run asking for more is refused. */
   maxLimits: {
     memoryMaxBytes: 16 * 1024 * MIB,
@@ -69,6 +75,15 @@ const isPlainObject = (value) =>
 
 const absolutePath = (value) =>
   typeof value === 'string' && isAbsolute(value) && normalize(value) === value && value !== '/';
+
+/** An IPv4 or IPv6 network in CIDR notation. */
+export function cidr(value) {
+  if (typeof value !== 'string') return false;
+  const [address, prefix, ...rest] = value.split('/');
+  const family = isIP(address ?? '');
+  if (rest.length > 0 || family === 0 || !/^\d{1,3}$/.test(prefix ?? '')) return false;
+  return Number(prefix) <= (family === 4 ? 32 : 128);
+}
 
 const userName = (value) => typeof value === 'string' && /^[a-z_][a-z0-9_-]{0,31}$/.test(value);
 
@@ -89,6 +104,7 @@ const CHECKS = {
   inaccessiblePaths: (value) => Array.isArray(value) && value.every(absolutePath),
   deniedAddresses: (value) =>
     Array.isArray(value) && value.every((a) => /^[0-9a-f:.]+\/\d{1,3}$/i.test(a)),
+  mcpAllowedAddresses: (value) => Array.isArray(value) && value.every(cidr),
   maxLimits: (value) =>
     isPlainObject(value) &&
     Object.entries(value).every(

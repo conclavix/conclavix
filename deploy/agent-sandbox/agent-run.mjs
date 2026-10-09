@@ -5,6 +5,7 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { copyFile, chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { BlockList, isIP } from 'node:net';
 import { join } from 'node:path';
 import { assertWithinLimits, parseReleaseArgs, parseRunArgs, UsageError } from './args.mjs';
 import { assertRootProgram, CONFIG_PATH, loadConfig, resolveIds } from './config.mjs';
@@ -211,11 +212,34 @@ function configPath() {
   return override;
 }
 
+/**
+ * Split the run's --allow-address values into those inside the configured mcpAllowedAddresses
+ * (kept for IPAddressAllow=) and the rest (dropped, reported in the prepared status line).
+ */
+export function partitionAddresses(addresses, ranges) {
+  const allowed = new BlockList();
+  for (const range of ranges) {
+    const [network, prefix] = range.split('/');
+    const family = isIP(network) === 6 ? 'ipv6' : 'ipv4';
+    allowed.addSubnet(network, Number(prefix), family);
+  }
+  const kept = [];
+  const refused = [];
+  for (const address of addresses) {
+    const family = isIP(address) === 6 ? 'ipv6' : 'ipv4';
+    (allowed.check(address, family) ? kept : refused).push(address);
+  }
+  return { kept, refused };
+}
+
 /** Validate everything about a run before anything changes on disk; returns what it needs. */
 async function check(argv, probe) {
   const options = parseRunArgs(argv, { probe: probe !== null });
   const config = await loadConfig(configPath());
   assertWithinLimits(options, config.maxLimits);
+  const addresses = partitionAddresses(options.allowAddresses, config.mcpAllowedAddresses);
+  options.allowAddresses = addresses.kept;
+  options.refusedAddresses = addresses.refused;
   const ids = await resolveIds(config);
   const clone = clonePath(config, options);
   await assertRealDirectoryBelow(config.codeRoot, clone);
@@ -255,7 +279,12 @@ async function startUnit({ config, options, ids, clone, probe, supervisor }) {
 export async function runAgent(argv, { probe = null } = {}) {
   const { options, config, ids, clone, name } = await check(argv, probe);
   const before = await diskUsage(clone);
-  status(options.statusTag, { event: 'prepared', unit: name, diskBytes: before });
+  status(options.statusTag, {
+    event: 'prepared',
+    unit: name,
+    diskBytes: before,
+    ...(options.refusedAddresses.length > 0 ? { refusedAddresses: options.refusedAddresses } : {}),
+  });
   if (before > options.diskLimitBytes) {
     status(options.statusTag, { event: 'finished', result: 'disk-limit', diskBytes: before });
     return EXIT.diskBefore;

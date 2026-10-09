@@ -7,17 +7,19 @@ const ADMIN_ROUTES = [
   'admin-roles',
   'admin-settings',
   'admin-skill-directories',
+  'admin-connections',
   'admin-audit',
 ];
 
 describe('administration menu entries', () => {
-  it('link users, roles, settings, skill directories and audit in that order', () => {
+  it('link users, roles, settings, skill directories, connections and audit in that order', () => {
     expect(ADMIN_MENU_ITEMS.map((item) => item.to)).toEqual(ADMIN_ROUTES.map((name) => ({ name })));
     expect(ADMIN_MENU_ITEMS.map((item) => item.title)).toEqual([
       'Users',
       'Roles',
       'Settings',
       'Skill directories',
+      'Connections',
       'Audit log',
     ]);
   });

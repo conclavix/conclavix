@@ -34,6 +34,9 @@ const ProjectMediaTab = defineAsyncComponent(
 const ProjectSecretsTab = defineAsyncComponent(
   () => import('../components/projects/ProjectSecretsTab.vue'),
 );
+const ConnectionsPanel = defineAsyncComponent(
+  () => import('../components/connections/ConnectionsPanel.vue'),
+);
 
 const props = defineProps<{ projectKey: string }>();
 const route = useRoute();
@@ -237,12 +240,15 @@ const opened = (issue: IssueDetail): void =>
         :project-id="project.id"
         :project-key="project.key"
       />
-      <ProjectSecretsTab
-        v-else-if="tab === 'secrets'"
-        :project-id="project.id"
-        :is-owner="auth.me?.role === 'owner'"
-        style="max-width: 1100px"
-      />
+      <div v-else-if="tab === 'secrets'" style="max-width: 1100px">
+        <ProjectSecretsTab :project-id="project.id" :is-owner="auth.me?.role === 'owner'" />
+        <h2 class="text-h6 mt-6 mb-2">Connections</h2>
+        <ConnectionsPanel
+          :project-id="project.id"
+          :is-owner="auth.me?.role === 'owner'"
+          :projects="[]"
+        />
+      </div>
       <IssueBoard
         v-else
         :issues="issues"

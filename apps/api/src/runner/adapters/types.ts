@@ -1,6 +1,7 @@
 import type { FinishedRunStatus, RunEventData } from '@conclavix/core';
 import type { AgentDoc, IssueDoc, RunDoc, RunEventType } from '../../db.js';
 import type { CodeRunTarget, SandboxStatus } from './sandbox.js';
+import type { RunMcpServer } from '../run-connections.js';
 
 export interface AdapterRunInput {
   run: RunDoc;
@@ -15,6 +16,12 @@ export interface AdapterRunInput {
   code?: CodeRunTarget;
   /** Project secrets for a coding run, by variable name; never passed to read-only runs. */
   secretEnv?: Record<string, string>;
+  /** External MCP servers of the agent's connections (docs/connections.md). */
+  mcpServers?: RunMcpServer[];
+  /** The variables their header references point to. */
+  mcpEnv?: Record<string, string>;
+  /** Private addresses the coding sandbox lets claude reach for those servers. */
+  allowAddresses?: string[];
   onEvent(type: RunEventType, text: string, data?: RunEventData): void;
 }
 

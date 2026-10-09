@@ -35,6 +35,7 @@ import type {
 import type { ApiTokenDoc, SettingsDoc } from './db/settings.js';
 import type { DecisionCollections, DecisionDoc, IssueDecisionFields } from './db/decisions.js';
 import type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
+import { vaultCollections, type VaultCollections } from './db/vault.js';
 
 export type { ApiTokenDoc, SettingsDoc, SmtpSettingsDoc } from './db/settings.js';
 export type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
@@ -314,7 +315,7 @@ export interface AuditDoc {
   details: Record<string, unknown>;
 }
 
-export interface Collections extends DecisionCollections {
+export interface Collections extends DecisionCollections, VaultCollections {
   projects: Collection<ProjectDoc>;
   agents: Collection<AgentDoc>;
   issues: Collection<IssueDoc>;
@@ -339,7 +340,6 @@ export interface Collections extends DecisionCollections {
   orgLayout: Collection<LayoutDoc>;
   notifications: Collection<NotificationDoc>;
   skillSources: Collection<SkillSourceDoc>;
-  secrets: Collection<import('./db/secrets.js').SecretDoc>;
 }
 
 export interface Database {
@@ -416,7 +416,7 @@ export async function connectDatabase(uri: string): Promise<Database> {
       orgLayout: db.collection<LayoutDoc>('org_layout'),
       notifications: db.collection<NotificationDoc>('notifications'),
       skillSources: db.collection<SkillSourceDoc>('skill_sources'),
-      secrets: db.collection('secrets'),
+      ...vaultCollections(db),
       decisions: db.collection<DecisionDoc>('decisions'),
     };
     await ensureIndexes(collections);

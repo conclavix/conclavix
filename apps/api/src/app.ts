@@ -44,6 +44,9 @@ import { AuditLog } from './modules/audit/audit.js';
 import { SecretBox, vaultBox } from './modules/settings/secret-box.js';
 import { SecretRepository } from './modules/secrets/repository.js';
 import { passwordCheck, registerSecretRoutes } from './modules/secrets/routes.js';
+import { registerConnectionRoutes } from './modules/connections/routes.js';
+import { ConnectionService } from './modules/connections/service.js';
+import { clientVersion } from './modules/connections/types/mcp-http.js';
 import { MemoryDirectoryCache, type DirectoryCache } from './modules/skill-sources/cache.js';
 import { createGuardedTransport, type HttpTransport } from './modules/skill-sources/http.js';
 import { SkillSourceRepository } from './modules/skill-sources/repository.js';
@@ -159,6 +162,13 @@ async function registerAuth(
     new SecretRepository(collections, vaultBox(options.authSecret)),
     system.audit,
     passwordCheck(system.auth, options.database),
+  );
+  clientVersion.value = options.version;
+  registerConnectionRoutes(
+    app,
+    options.database,
+    new ConnectionService(options.database, vaultBox(options.authSecret)),
+    system.audit,
   );
   return reauthorize;
 }

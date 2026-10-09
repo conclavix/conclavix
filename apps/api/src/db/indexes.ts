@@ -1,4 +1,5 @@
 import type { Collections } from '../db.js';
+import { ensureConnectionIndexes } from './connections.js';
 import { ensureSecretIndexes } from './secrets.js';
 import { ensureDecisionIndexes } from './decisions.js';
 
@@ -46,6 +47,7 @@ export async function ensureIndexes(collections: Collections): Promise<void> {
   );
   await collections.agents.createIndex({ skillIds: 1 });
   await ensureSecretIndexes(collections);
+  await ensureConnectionIndexes(collections);
   await collections.wakes.createIndex(
     { agentId: 1, issueId: 1 },
     { unique: true, partialFilterExpression: { processedAt: null } },
