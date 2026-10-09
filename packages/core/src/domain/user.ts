@@ -47,8 +47,14 @@ export const DEFAULT_THEME_PREFERENCE = { mode: 'system' } as const;
 const legacyTheme = (value: unknown): unknown =>
   typeof value === 'string' ? { mode: value } : value;
 
+/** The navigation drawer on wide screens: a rail that expands on hover, or pinned open. */
+export const SIDEBAR_MODES = ['rail', 'pinned'] as const;
+export const sidebarModeSchema = z.enum(SIDEBAR_MODES);
+
 export const preferencesSchema = z.strictObject({
   theme: z.preprocess(legacyTheme, themePreferenceSchema).default(DEFAULT_THEME_PREFERENCE),
+  /** Missing until the user picks one; the board then falls back to the device's choice. */
+  sidebar: sidebarModeSchema.optional().catch(undefined),
 });
 
 const nameSchema = z.string().trim().min(1).max(100);
@@ -75,7 +81,9 @@ export const resetPasswordSchema = z.strictObject({ password: passwordSchema.opt
 export const updateMeSchema = z
   .strictObject({
     name: nameSchema,
-    preferences: z.strictObject({ theme: themePreferenceSchema }).partial(),
+    preferences: z
+      .strictObject({ theme: themePreferenceSchema, sidebar: sidebarModeSchema })
+      .partial(),
   })
   .partial()
   .refine((value) => Object.keys(value).length > 0, 'at least one field is required');
@@ -90,6 +98,7 @@ export type MfaPolicy = z.infer<typeof mfaPolicySchema>;
 export type ThemeMode = z.infer<typeof themeModeSchema>;
 export type ThemeTemplate = z.infer<typeof themeTemplateSchema>;
 export type ThemePreference = z.infer<typeof themePreferenceSchema>;
+export type SidebarMode = z.infer<typeof sidebarModeSchema>;
 export type Preferences = z.infer<typeof preferencesSchema>;
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;

@@ -139,6 +139,7 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, Capability>> = {
   'POST /api/users/:id/reset-2fa': 'users',
   'GET /api/settings': 'settings',
   'PATCH /api/settings': 'settings',
+  'POST /api/settings/smtp/test': 'settings',
   'GET /api/audit': 'audit',
   'GET /api/roles': 'users',
 };
