@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { SettingsValues } from '../src/admin/api';
 import {
+  describeSmtpTest,
   groupPatch,
   isDirty,
   normalizeModels,
   resetPatch,
   revertGroup,
+  smtpTestBody,
   toDraft,
   validateGroup,
 } from '../src/admin/settings-form';
@@ -110,5 +112,43 @@ describe('settings form', () => {
     // An unset host may stay empty.
     const unset = { ...values(), smtp: { ...values().smtp, host: null } };
     expect(validateGroup('smtp', toDraft(unset), unset)).toEqual({});
+  });
+
+  it('builds the test-mail body from unsaved SMTP edits and the recipient', () => {
+    const stored = values();
+    const draft = toDraft(stored);
+    expect(smtpTestBody(draft.smtp, stored.smtp, '  ')).toEqual({});
+    draft.smtp.port = '2525';
+    expect(smtpTestBody(draft.smtp, stored.smtp, ' a@b.test ')).toEqual({
+      to: 'a@b.test',
+      smtp: { port: 2525 },
+    });
+    draft.smtp.clearPass = true;
+    expect(smtpTestBody(draft.smtp, stored.smtp, '').smtp).toEqual({ port: 2525, pass: null });
+  });
+
+  it('describes test-mail results for the alert', () => {
+    expect(
+      describeSmtpTest({
+        ok: true,
+        to: 'a@b.test',
+        unsaved: false,
+        messageId: 'x',
+        response: null,
+      }),
+    ).toEqual({
+      title: 'Test mail sent to a@b.test',
+      text: 'The server accepted it using the saved settings. Check the inbox (and the spam folder).',
+    });
+    expect(
+      describeSmtpTest({
+        ok: false,
+        to: 'a@b.test',
+        unsaved: true,
+        kind: 'tls',
+        message: 'The TLS handshake failed.',
+        response: null,
+      }),
+    ).toEqual({ title: 'TLS failed', text: 'The TLS handshake failed. Tried the unsaved values.' });
   });
 });

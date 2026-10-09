@@ -124,6 +124,32 @@ describe('sign-in', () => {
     expect(email.statusCode).toBe(400);
   });
 
+  it('stores the sidebar mode next to the theme and ignores an invalid stored one', async () => {
+    const id = await createUser(ctx, 'side@example.com', 'viewer');
+    const { cookie } = await signIn(ctx, 'side@example.com');
+    const me = () => asBrowser(ctx, cookie, { method: 'GET', url: '/api/me' });
+    expect((await me()).json().preferences).not.toHaveProperty('sidebar');
+    const pinned = await asBrowser(ctx, cookie, {
+      method: 'PATCH',
+      url: '/api/me',
+      payload: { preferences: { sidebar: 'pinned' } },
+    });
+    expect(pinned.statusCode).toBe(200);
+    expect(pinned.json().preferences).toEqual({ theme: { mode: 'system' }, sidebar: 'pinned' });
+    expect((await me()).json().preferences.sidebar).toBe('pinned');
+    const invalid = await asBrowser(ctx, cookie, {
+      method: 'PATCH',
+      url: '/api/me',
+      payload: { preferences: { sidebar: 'floating' } },
+    });
+    expect(invalid.statusCode).toBe(400);
+    await ctx.database.collections.users.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { 'preferences.sidebar': 'floating', 'preferences.theme': { mode: 'dark' } } },
+    );
+    expect((await me()).json().preferences).toEqual({ theme: { mode: 'dark' } });
+  });
+
   it('changes the own password through better-auth', async () => {
     await createUser(ctx, 'pw@example.com', 'viewer');
     const { cookie } = await signIn(ctx, 'pw@example.com');
