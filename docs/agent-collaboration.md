@@ -33,6 +33,12 @@ of the issues delegated from the same issue as the own one (siblings handed out 
 delegator, with their sub-issues); conflicts are refused with the conflicting files and change
 nothing. This replaces asking the board to merge `cvx/<A>` and `cvx/<B>` into `cvx/<C>`.
 
+A release that should land on `main` as one clean commit (for example `feat(feedback): add the
+Feedback module`) needs no squash by hand either: the integration agent sets a release branch to
+`main` with `set_branch`, squashes the reviewed branches into it with `merge_branches({ target,
+sources, squash: true, message, paths })` (`paths` proves that only the module directory
+changed), has it verified and then promotes it with `fast_forward_main`.
+
 Coding agents never move HEAD in their working copy (the runner refuses to commit such a run). A
 delegator who wants work to continue on a particular commit, for example a test round on top of a
 released commit, asks the integration agent to `set_branch` the worker's `cvx/<KEY>` to that

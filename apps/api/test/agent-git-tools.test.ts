@@ -280,6 +280,53 @@ describe('agent git integration tools', () => {
     ]);
   });
 
+  it('squashes a release into one commit, guarded by paths, and audits the flag', async () => {
+    const release = await fx.issue({ title: 'Release', assigneeAgentId: integrator.id });
+    const main = bare(fx.projectId, 'rev-parse', 'main');
+    pushTo(fx.projectId, 'main', 'cvx/APP-20', { 'modules/feedback/index.txt': 'inbox\n' });
+    const args = {
+      target: `cvx/${release.key}`,
+      sources: ['cvx/APP-20'],
+      squash: true,
+      message: 'feat(feedback): add the Feedback inbox module',
+    };
+    const before = refs(fx.projectId);
+    const outside = await callTool(client, 'merge_branches', { ...args, paths: ['modules/x'] });
+    expect(outside.data['details']).toMatchObject({ outside: ['modules/feedback/index.txt'] });
+    const noMessage = await callTool(client, 'merge_branches', { ...args, message: '' });
+    expect(noMessage.data['error']).toMatch(/subject line/);
+    const unsquashed = await callTool(client, 'merge_branches', {
+      ...args,
+      squash: false,
+      paths: ['modules'],
+    });
+    expect(unsquashed.data['error']).toMatch(/set squash: true/);
+    expect(refs(fx.projectId)).toBe(before);
+
+    const preview = await callTool(client, 'get_merge_status', { ...args, squash: true });
+    expect(preview.data['squash']).toMatchObject({
+      clean: true,
+      changes: { files: 1, topLevel: ['modules'] },
+    });
+    const result = await callTool(client, 'merge_branches', {
+      ...args,
+      paths: ['modules/feedback'],
+    });
+    expect(result.isError).toBe(false);
+    const after = result.data['after'] as string;
+    expect(bare(fx.projectId, 'rev-list', '--parents', '-n', '1', after)).toBe(`${after} ${main}`);
+    expect(bare(fx.projectId, 'log', '-1', '--format=%B', after)).toContain(
+      `feat(feedback): add the Feedback inbox module\n\nConclavix-Issue: ${release.key}`,
+    );
+    const entries = await audit('branch.merged');
+    expect(entries.at(-1)?.details).toMatchObject({
+      target: `cvx/${release.key}`,
+      after,
+      squash: true,
+      paths: ['modules/feedback'],
+    });
+  });
+
   it('tells agents with the permission about the tools in the run prompt', () => {
     const position: OrgPosition = {
       isLead: false,
