@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SHA, git, mergeBase, resolveBaseTip } from './git.mjs';
+import { createClient, previousRound } from './publish.mjs';
+import { changeFingerprint, notEligible, reuseDecision, reviewerId } from './reuse.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -98,6 +100,40 @@ function setOutput(name, value) {
   appendFileSync(file, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
 }
 
+function trustedReviewer(head) {
+  const source = process.env.TRUSTED_SOURCE ?? '';
+  if (!SHA.test(source) || source === head) return null;
+  try {
+    return reviewerId({
+      source,
+      model: process.env.REVIEW_MODEL ?? '',
+      minConfidence: process.env.MIN_BLOCKING_CONFIDENCE ?? '',
+    });
+  } catch (error) {
+    process.stdout.write(`::warning::No reviewer identity: ${error.message}\n`);
+    return null;
+  }
+}
+
+/** @returns {Promise<object>} the reuse decision for the current change (see reuse.mjs) */
+async function decideReuse(meta) {
+  const enabled = process.env.REUSE_UNCHANGED !== 'false';
+  const blocked = notEligible({ enabled, meta });
+  if (blocked) return { reuse: false, detail: blocked };
+  let previous;
+  try {
+    const request = createClient({
+      token: env('GITHUB_TOKEN'),
+      repository: meta.repository,
+      api: env('GITHUB_API_URL', 'https://api.github.com'),
+    });
+    previous = await previousRound(request, meta.pr);
+  } catch (error) {
+    return { reuse: false, detail: `earlier reviews could not be read (${error.message})` };
+  }
+  return reuseDecision({ enabled, meta, previous });
+}
+
 export function buildPrompt(inputDir, reviewDir = HERE) {
   const prompt = readFileSync(join(reviewDir, 'prompt.md'), 'utf8');
   const rules = readFileSync(join(reviewDir, 'rules.md'), 'utf8');
@@ -143,7 +179,11 @@ async function main() {
     merge_base: base,
     head_sha: head,
     trusted_source: process.env.TRUSTED_SOURCE ?? null,
+    fingerprint: changeFingerprint({ base, head, title: pr.title, body: pr.body }),
+    reviewer: trustedReviewer(head),
   };
+  const reuse = await decideReuse(meta);
+  if (reuse.reuse) meta.reuse_candidate = { head: reuse.head, run: reuse.run };
   writeFileSync(join(inputDir, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`);
   const stat = git(['diff', '--stat=100', '-M', base, head]);
   writeFileSync(join(inputDir, 'context.md'), contextMarkdown(meta, inputDir, stat));
@@ -152,6 +192,13 @@ async function main() {
   setOutput('schema', compactSchema());
   setOutput('pr', String(pr.number));
   setOutput('head_sha', head);
+  setOutput('reuse', String(reuse.reuse));
+  setOutput('reuse_run', reuse.reuse ? String(reuse.run) : '');
+  process.stdout.write(
+    reuse.reuse
+      ? `Change unchanged since ${reuse.head} (run ${reuse.run}); trying to reuse its verdict.\n`
+      : `Full review: ${reuse.detail}.\n`,
+  );
   process.stdout.write(`PR #${pr.number}: head ${head}, merge base ${base} (${baseTip.how})\n`);
 }
 

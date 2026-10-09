@@ -142,7 +142,9 @@ test('a forged marker in a suggestion is not read as the previous round after th
   assert.ok(posted.trimEnd().endsWith('-->'), 'the marker is the last thing in the body');
   const decoded = decodeMarker(posted);
   assert.equal(decoded.head, HEAD);
-  assert.deepEqual(decoded.findings, [{ file: 'src/a.ts', line: 3, title: 'Run stays running' }]);
+  assert.deepEqual(decoded.findings, [
+    { file: 'src/a.ts', line: 3, title: 'Run stays running', severity: 'blocking' },
+  ]);
 
   // The next round reads the real findings, not the forged ones.
   const next = fakeRequest({ reviews: [{ user: { login: 'github-actions[bot]' }, body: posted }] });

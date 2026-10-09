@@ -51,7 +51,8 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read # check out the PR head and its history
-      pull-requests: read # eval mode reads the PR's title, description and base
+      pull-requests: read # eval mode reads the PR's title, description and base; earlier reviews
+      actions: read # download the result of an earlier run to carry over its verdict
     outputs:
       enabled: ${{ steps.gate.outputs.enabled }}
       blocking: ${{ steps.finalize.outputs.blocking }}
@@ -114,10 +115,35 @@ jobs:
           INPUT_DIR: ${{ runner.temp }}/review-input
           TRUSTED_SOURCE: ${{ steps.trusted.outputs.source }}
           REVIEW_DIR: ${{ steps.trusted.outputs.dir }}
+          REVIEW_MODEL: ${{ vars.REVIEW_MODEL || 'claude-opus-5-5' }}
+          MIN_BLOCKING_CONFIDENCE: ${{ vars.REVIEW_MIN_BLOCKING_CONFIDENCE || '0.6' }}
+          REUSE_UNCHANGED: ${{ vars.REVIEW_REUSE_UNCHANGED || 'true' }}
         run: node "$REVIEW_DIR/prepare.mjs"
 
+      # Only when the change equals the latest reviewed head (prepare.mjs, reuse.mjs). A failed
+      # download or a mismatching result falls back to a full review.
+      - name: Download the result of the earlier run
+        if: steps.gate.outputs.enabled == 'true' && steps.prep.outputs.reuse == 'true'
+        id: previous
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: review-pr-${{ steps.prep.outputs.pr }}
+          run-id: ${{ steps.prep.outputs.reuse_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/review-previous
+
+      - name: Check the earlier verdict
+        if: steps.gate.outputs.enabled == 'true' && steps.prep.outputs.reuse == 'true'
+        id: carry
+        env:
+          INPUT_DIR: ${{ runner.temp }}/review-input
+          PREVIOUS_DIR: ${{ runner.temp }}/review-previous
+          REVIEW_DIR: ${{ steps.trusted.outputs.dir }}
+        run: node "$REVIEW_DIR/reuse.mjs"
+
       - name: Review with Claude (read-only tools)
-        if: steps.gate.outputs.enabled == 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.carry.outputs.carry != 'true'
         id: claude
         uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea # v1.0.241
         with:
@@ -145,6 +171,8 @@ jobs:
           RESULT_DIR: ${{ runner.temp }}/review-result
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
           MIN_BLOCKING_CONFIDENCE: ${{ vars.REVIEW_MIN_BLOCKING_CONFIDENCE || '0.6' }}
+          CARRY: ${{ steps.carry.outputs.carry }}
+          PREVIOUS_DIR: ${{ runner.temp }}/review-previous
           REVIEW_DIR: ${{ steps.trusted.outputs.dir }}
         run: node "$REVIEW_DIR/finalize.mjs"
 

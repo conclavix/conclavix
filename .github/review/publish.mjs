@@ -1,7 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { decodeMarker, encodeMarker, renderSummary, resolvedSince, sanitize } from './render.mjs';
+import {
+  decodeMarker,
+  encodeMarker,
+  renderCarried,
+  renderSummary,
+  resolvedSince,
+  sanitize,
+} from './render.mjs';
 
 const BOT_LOGIN = 'github-actions[bot]';
 const STATUS_CONTEXT = 'review';
@@ -52,11 +59,26 @@ export async function previousRound(request, pr) {
   return null;
 }
 
-function markerFor(document) {
+/**
+ * Hidden record of this round. `run` names the run whose `review-pr-<n>` artifact holds the full
+ * findings document; fingerprint, reviewer and complete decide whether a later head may reuse it.
+ */
+export function markerFor(document, runId) {
+  const run = Number(runId);
   return encodeMarker({
-    v: 1,
+    v: 2,
     head: document.meta.head_sha,
-    findings: document.review.findings.map((f) => ({ file: f.file, line: f.line, title: f.title })),
+    run: Number.isSafeInteger(run) && run > 0 ? run : null,
+    fingerprint: document.meta.fingerprint ?? null,
+    reviewer: document.meta.reviewer ?? null,
+    complete: document.complete === true,
+    blocking: document.blocking,
+    findings: document.review.findings.map((f) => ({
+      file: f.file,
+      line: f.line,
+      title: f.title,
+      severity: f.severity,
+    })),
   });
 }
 
@@ -123,8 +145,11 @@ export async function postReview(request, pr, payload, summary, marker) {
   }
 }
 
-export async function setStatus(request, sha, blocking, targetUrl) {
-  const description = blocking > 0 ? `${blocking} blocking finding(s)` : 'No blocking findings';
+export async function setStatus(request, sha, blocking, targetUrl, carriedFrom = null) {
+  const base = blocking > 0 ? `${blocking} blocking finding(s)` : 'No blocking findings';
+  const description = carriedFrom
+    ? `${base}, carried over from ${String(carriedFrom).slice(0, 7)}`
+    : base;
   return request('POST', `/statuses/${sha}`, {
     state: blocking > 0 ? 'failure' : 'success',
     context: STATUS_CONTEXT,
@@ -133,9 +158,36 @@ export async function setStatus(request, sha, blocking, targetUrl) {
   });
 }
 
-export async function publish({ request, document, payload, runUrl }) {
+/** Posts the note for a carried-over verdict after checking that its source is still the latest round. */
+async function publishCarried({ request, document, previous, runUrl, runId }) {
+  const from = document.meta.carried_from;
+  if (
+    !previous ||
+    previous.head !== from.head ||
+    previous.run !== from.run ||
+    previous.fingerprint !== document.meta.fingerprint ||
+    previous.reviewer !== document.meta.reviewer ||
+    previous.blocking !== document.blocking
+  ) {
+    throw new Error(`the latest review on the PR is not the carried-over round of ${from.head}`);
+  }
+  const payload = { commit_id: document.meta.head_sha, comments: [] };
+  await postReview(
+    request,
+    document.meta.pr,
+    payload,
+    renderCarried(document),
+    markerFor(document, runId),
+  );
+  await setStatus(request, document.meta.head_sha, document.blocking, runUrl, from.head);
+  return { resolved: 0, carried: true };
+}
+
+export async function publish({ request, document, payload, runUrl, runId }) {
   const pr = document.meta.pr;
   const previous = await previousRound(request, pr);
+  if (document.meta.carried_from)
+    return publishCarried({ request, document, previous, runUrl, runId });
   const resolved =
     previous && previous.head !== document.meta.head_sha
       ? resolvedSince(previous.findings, document.review.findings)
@@ -148,7 +200,7 @@ export async function publish({ request, document, payload, runUrl }) {
     metrics: document.metrics,
     resolved,
   });
-  await postReview(request, pr, payload, summary, markerFor(document));
+  await postReview(request, pr, payload, summary, markerFor(document, runId));
   await setStatus(request, document.meta.head_sha, document.blocking, runUrl);
   return { resolved: resolved.length };
 }
@@ -173,7 +225,13 @@ async function main() {
     repository,
     api: process.env.GITHUB_API_URL || 'https://api.github.com',
   });
-  const { resolved } = await publish({ request, document, payload, runUrl: process.env.RUN_URL });
+  const { resolved } = await publish({
+    request,
+    document,
+    payload,
+    runUrl: process.env.RUN_URL,
+    runId: process.env.GITHUB_RUN_ID,
+  });
   process.stdout.write(
     `PR #${document.meta.pr}: review posted, ${document.blocking} blocking, ${resolved} resolved since the previous round\n`,
   );
