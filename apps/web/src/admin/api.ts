@@ -77,8 +77,32 @@ export interface SettingsPatch {
   smtp?: SmtpPatch | null;
 }
 
+export type SmtpFailureKind =
+  'connection' | 'tls' | 'auth' | 'sender' | 'recipient' | 'message' | 'unknown';
+
+/** The outcome of a test mail; `response` is the server's (sanitized) answer when there is one. */
+export type SmtpTestResult =
+  | { ok: true; to: string; unsaved: boolean; messageId: string; response: string | null }
+  | {
+      ok: false;
+      to: string;
+      unsaved: boolean;
+      kind: SmtpFailureKind;
+      message: string;
+      response: string | null;
+    };
+
+export interface SmtpTestRequest {
+  to?: string;
+  smtp?: SmtpPatch;
+}
+
 export type AuditActor =
-  { type: 'user'; userId: string } | { type: 'board' } | { type: 'system' } | null;
+  | { type: 'user'; userId: string }
+  | { type: 'board' }
+  | { type: 'system' }
+  | { type: 'agent'; agentId: string; name: string }
+  | null;
 
 export interface AuditEntry {
   id: string;
@@ -108,6 +132,7 @@ export const adminApi = {
   roles: () => api<RolesOverview>('/roles'),
   settings: () => api<SettingsResponse>('/settings'),
   updateSettings: (patch: SettingsPatch) => send<SettingsResponse>('/settings', 'PATCH', patch),
+  testSmtp: (body: SmtpTestRequest) => send<SmtpTestResult>('/settings/smtp/test', 'POST', body),
   audit: (query: string) =>
     api<{ items: AuditEntry[]; nextCursor: string | null }>(`/audit?${query}`),
 };

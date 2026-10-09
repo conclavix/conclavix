@@ -14,16 +14,19 @@ import { computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useVuetiwatch } from 'vuetiwatch';
 import HeaderStatus from './components/HeaderStatus.vue';
+import SidebarPinToggle from './components/SidebarPinToggle.vue';
 import ThemeToggle from './components/ThemeToggle.vue';
 import UserMenu from './components/UserMenu.vue';
 import { useAuthStore } from './stores/auth';
 import { useLiveStore } from './stores/live';
+import { useSidebarStore } from './stores/sidebar';
 import { useThemeStore } from './stores/theme';
 import { ADMIN_MENU_ITEMS, visibleMenuItems } from './user-menu';
 
 const auth = useAuthStore();
 const live = useLiveStore();
 const router = useRouter();
+const sidebar = useSidebarStore();
 const themeStore = useThemeStore();
 const vuetiwatch = useVuetiwatch();
 
@@ -73,7 +76,7 @@ watch(
 <template>
   <v-app>
     <template v-if="auth.signedIn">
-      <v-navigation-drawer permanent rail expand-on-hover>
+      <v-navigation-drawer permanent :rail="!sidebar.pinned" :expand-on-hover="!sidebar.pinned">
         <v-list density="compact" nav>
           <v-list-item
             :prepend-icon="mdiViewDashboardOutline"
@@ -117,6 +120,9 @@ watch(
               :to="item.to"
             />
           </v-list>
+        </template>
+        <template #append>
+          <SidebarPinToggle />
         </template>
       </v-navigation-drawer>
       <v-app-bar density="compact" flat border>

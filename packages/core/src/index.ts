@@ -20,5 +20,6 @@ export * from './domain/org.js';
 export * from './domain/skill.js';
 export * from './domain/skill-source.js';
 export * from './domain/workspace.js';
+export * from './domain/media.js';
 export * from './domain/secret.js';
 export * from './domain/connection.js';

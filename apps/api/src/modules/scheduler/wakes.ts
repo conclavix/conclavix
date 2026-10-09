@@ -53,9 +53,14 @@ export async function requestWake(
 export async function wakeUnblocked(
   collections: Collections,
   closedIssueId: ObjectId,
+  exclude: readonly ObjectId[] = [],
 ): Promise<void> {
   const waiting = await collections.issues
-    .find({ blockedBy: closedIssueId, status: { $in: [...ACTIONABLE_STATUSES] } })
+    .find({
+      blockedBy: closedIssueId,
+      status: { $in: [...ACTIONABLE_STATUSES] },
+      ...(exclude.length > 0 ? { _id: { $nin: [...exclude] } } : {}),
+    })
     .toArray();
   for (const issue of waiting) {
     if (!issue.assigneeAgentId) {
@@ -71,11 +76,18 @@ export async function wakeUnblocked(
   }
 }
 
-/** Create the wakes implied by an issue change; runs after the change is committed. */
+const isClosedStatus = (status: IssueStatus): boolean =>
+  (CLOSED_ISSUE_STATUSES as readonly IssueStatus[]).includes(status);
+
+/**
+ * Create the wakes implied by an issue change; runs after the change is committed. `resumed` are
+ * issues the closing transaction already handed back with their own wake (resumeWaitingIssues).
+ */
 export async function wakeOnIssueChange(
   collections: Collections,
   before: IssueDoc | null,
   after: IssueDoc,
+  resumed: readonly ObjectId[] = [],
 ): Promise<void> {
   const becameActionable = isActionable(after) && (before === null || !isActionable(before));
   const reassigned =
@@ -91,15 +103,20 @@ export async function wakeOnIssueChange(
       logDeferredWake(after._id, error);
     }
   }
-  const closedNow = (CLOSED_ISSUE_STATUSES as readonly IssueStatus[]).includes(after.status);
-  const closedBefore =
-    before !== null && (CLOSED_ISSUE_STATUSES as readonly IssueStatus[]).includes(before.status);
-  if (closedNow && !closedBefore) {
-    try {
-      await wakeUnblocked(collections, after._id);
-    } catch (error) {
-      logDeferredWake(after._id, error);
-    }
+  if (isClosedStatus(after.status) && !(before !== null && isClosedStatus(before.status))) {
+    await wakeUnblockedOrLog(collections, after._id, resumed);
+  }
+}
+
+async function wakeUnblockedOrLog(
+  collections: Collections,
+  closedIssueId: ObjectId,
+  resumed: readonly ObjectId[],
+): Promise<void> {
+  try {
+    await wakeUnblocked(collections, closedIssueId, resumed);
+  } catch (error) {
+    logDeferredWake(closedIssueId, error);
   }
 }
 

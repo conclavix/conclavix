@@ -175,15 +175,43 @@ The probe mode of the acceptance script checks that such a reference reaches the
   fsmonitor, hooks path), git runs with `core.hooksPath=/dev/null` and a fresh index built from
   the branch tip, `git add -A` skips `node_modules/`, `.venv/` and other caches, and
   `commit-tree` writes one commit with the author `Conclavix <agent name>`
-  (`agent-<id>@conclavix.invalid`). The message is the agent's result, redacted like the run log,
+  (`agent-<id>@<AGENT_EMAIL_DOMAIN>`, default `conclavix.invalid`). The message is the agent's result, redacted like the run log,
   with `Conclavix-Issue/Run/Agent` trailers. Commits the agent made itself stay below it. If the
   agent reset or rebased the branch so that it no longer contains the server tip the run started
   from, the runner commits the work tree on top of that server tip instead (the rewritten commits
   are dropped, their content is in the work tree) and records a run event; the server branch is
   never rewritten by a run.
+- If `cvx/<KEY>` moved on the server during the run (an agent with git integration merged into
+  it, see [Workspace](workspace.md#git-integration-merge-tools)), the runner reconciles before
+  the sync: it fetches the clone's tip into the project repository (with `fsckObjects`), merges
+  it with the server tip there (`git merge-tree`, no-ff, first parent: the run's work, by the
+  run's agent), moves the server branch with compare-and-swap and fast-forwards the clone to the
+  merge. If that merge conflicts, the run's tip is kept as the branch `conflict/<KEY>/<sha>`, the
+  clone is reset to the server tip and the run records the conflicting files; nothing is lost and
+  the issue continues from the server branch; such a run is recorded as not synced, with the
+  conflict branch in its error. A merge can also land between this check and the sync; a
+  refused fast-forward or compare-and-swap is then retried after another reconciliation, up to
+  three rounds.
 - Then `syncIssueBranch` fetches `cvx/<KEY>` into the project repository (fast-forward only; a
   rewritten branch is not forced and the run records the refusal). A clone that is removed and
   created again starts from the server's `cvx/<KEY>`, not from `main`.
+- Before a run in an existing clone, the runner does the same reconciliation when the server
+  branch differs from the clone: a clone ahead of it stays (the sync after the run brings it
+  over), a clone behind it is fast-forwarded (git's two-tree checkout with a fresh index; ignored
+  files such as build output and `node_modules/` may be overwritten), a diverged one is merged as
+  above. A clone that still holds uncommitted work of an earlier run (its sandbox stopped it, for
+  example at the disk limit, or its commit failed), or whose checkout would overwrite other
+  files, is neither committed nor overwritten: it is moved aside to
+  `workspaces/<projectId>/.stale-<KEY>-<time>-<random>` and the run starts in a fresh clone of the
+  server branch; commits of it that the server branch lacks are kept as `conflict/<KEY>/<sha>`
+  first. The server never deletes such directories or `conflict/` branches: look at them (the
+  branches are in the Code tab and `list_branches`), take over what is needed with
+  `merge_branches` or by hand, and remove them by hand (`rm -r` on the runner host, `git branch -D`
+  in the project repository).
+  Inside the clone git runs only after its configuration was replaced, with hooks off, and the
+  project repository is marked as a safe directory for the fetch from it. Failures to remove the
+  temporary refs (`refs/conclavix/...`) are recorded as run events; the next reconciliation
+  overwrites them.
 - The run stores `code` (branch, base, head, commit, agent commits, files, insertions,
   deletions, synced, error); the run view shows it with a link to the Code tab.
 - Two runs never share a clone at the same time: the runner locks the issue clone, and while a

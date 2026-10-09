@@ -24,8 +24,9 @@ function toFilter(filter: AuditFilter, before?: ObjectId): Filter<AuditDoc> {
   const query: Filter<AuditDoc> = {};
   if (before) query._id = { $lt: before };
   if (filter.actions) query.action = { $in: filter.actions };
-  if (filter.actor === 'board' || filter.actor === 'system') query['actor.type'] = filter.actor;
-  else if (filter.actor) query['actor.userId'] = filter.actor;
+  if (filter.actor === 'board' || filter.actor === 'system' || filter.actor === 'agent') {
+    query['actor.type'] = filter.actor;
+  } else if (filter.actor) query['actor.userId'] = filter.actor;
   if (filter.from || filter.to) {
     query.at = {
       ...(filter.from ? { $gte: filter.from } : {}),
