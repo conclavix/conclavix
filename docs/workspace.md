@@ -74,19 +74,20 @@ until a remote is attached.
 Reading needs the `read` capability (every role, including viewers). Workspaces are admin and
 owner only (`agents` capability).
 
-| Route                                          | What                                                          |
-| ---------------------------------------------- | ------------------------------------------------------------- |
-| `GET /api/projects/:id/branches`               | Branches with ahead/behind against `main` and the last commit |
-| `GET /api/projects/:id/commits?ref&limit&skip` | History of a ref, newest first, `nextSkip` for the next page  |
-| `GET /api/projects/:id/commits/:sha`           | Commit with message body and diff against its first parent    |
-| `GET /api/projects/:id/tree?ref&path`          | Directory entries at a ref                                    |
-| `GET /api/projects/:id/file?ref&path`          | File content at a ref (`binary`, `tooLarge` flags)            |
-| `GET /api/projects/:id/raw?ref&path`           | An image at a ref, raw (see [Images](#images))                |
-| `GET /api/projects/:id/compare?branch`         | Branch against `main`: merge base, commits, diff              |
-| `GET /api/projects/:id/archive?ref=main`       | ZIP from `git archive`, `<KEY>-<ref>-<shortsha>.zip`          |
-| `POST /api/issues/:ref/workspace`              | Create (201) or return (200) the issue's clone and branch     |
-| `POST /api/issues/:ref/workspace/sync`         | Fetch the issue branch into the bare repository (`{force}`)   |
-| `DELETE /api/issues/:ref/workspace?force`      | Remove the clone; the branch stays                            |
+| Route                                                         | What                                                          |
+| ------------------------------------------------------------- | ------------------------------------------------------------- |
+| `GET /api/projects/:id/branches`                              | Branches with ahead/behind against `main` and the last commit |
+| `GET /api/projects/:id/commits?ref&limit&skip`                | History of a ref, newest first, `nextSkip` for the next page  |
+| `GET /api/projects/:id/commits/:sha`                          | Commit with message body and diff against its first parent    |
+| `GET /api/projects/:id/tree?ref&path`                         | Directory entries at a ref                                    |
+| `GET /api/projects/:id/file?ref&path`                         | File content at a ref (`binary`, `tooLarge` flags)            |
+| `GET /api/projects/:id/raw?ref&path`                          | An image, video or PDF at a ref, raw (see [Images](#images))  |
+| `GET /api/projects/:id/media?kind&branch&q&sort&limit&offset` | Media files of all branches (see [Media tab](#media-tab))     |
+| `GET /api/projects/:id/compare?branch`                        | Branch against `main`: merge base, commits, diff              |
+| `GET /api/projects/:id/archive?ref=main`                      | ZIP from `git archive`, `<KEY>-<ref>-<shortsha>.zip`          |
+| `POST /api/issues/:ref/workspace`                             | Create (201) or return (200) the issue's clone and branch     |
+| `POST /api/issues/:ref/workspace/sync`                        | Fetch the issue branch into the bare repository (`{force}`)   |
+| `DELETE /api/issues/:ref/workspace?force`                     | Remove the clone; the branch stays                            |
 
 Removing a workspace is refused (409) while any ref of the clone (HEAD, any branch, tag or stash)
 holds commits the project repository lacks, or the clone no longer has its issue branch;
@@ -100,32 +101,43 @@ and retries do not repeat it),
 
 ### Limits
 
-| What                     | Limit                                          |
-| ------------------------ | ---------------------------------------------- |
-| File shown in the viewer | 1 MiB (larger: `tooLarge`, no content)         |
-| Image served raw         | 10 MiB (larger: 413 `file_too_large`)          |
-| Binary detection         | NUL byte in the first 8000 bytes (as git)      |
-| Patch text of one diff   | 2 MiB, then `truncated`                        |
-| Patch text of one file   | 256 KiB, then `truncated`                      |
-| Files in one diff        | 1000                                           |
-| File list of one diff    | 4 MiB of `--raw`/`--numstat`, then `truncated` |
-| Branches listed          | 200                                            |
-| Commits in a comparison  | 250                                            |
-| One git call             | 15 s                                           |
-| ZIP download             | 5 min, 1 GiB                                   |
+| What                     | Limit                                            |
+| ------------------------ | ------------------------------------------------ |
+| File shown in the viewer | 1 MiB (larger: `tooLarge`, no content)           |
+| File served raw          | 10 MiB (larger: 413 `file_too_large`)            |
+| Binary detection         | NUL byte in the first 8000 bytes (as git)        |
+| Patch text of one diff   | 2 MiB, then `truncated`                          |
+| Patch text of one file   | 256 KiB, then `truncated`                        |
+| Files in one diff        | 1000                                             |
+| File list of one diff    | 4 MiB of `--raw`/`--numstat`, then `truncated`   |
+| Branches listed          | 200                                              |
+| Commits in a comparison  | 250                                              |
+| One git call             | 15 s                                             |
+| ZIP download             | 5 min, 1 GiB                                     |
+| Media scan: branches     | `main` plus 199 issue branches, newest first     |
+| Media scan: files        | 5000 distinct blobs                              |
+| Media scan: history      | 5000 commits, 4 MiB of `git log --raw`           |
+| Media scan: time         | 20 s of branch listings (the history walk: 15 s) |
 
 ### Images
 
-`GET /api/projects/:id/raw?ref&path` serves images from the bare repository so the Code tab and
-Markdown can show them. `ref` and `path` are validated exactly like the file route.
+`GET /api/projects/:id/raw?ref&path` serves media from the bare repository so the Code tab, the
+Media tab and Markdown can show them. `ref` and `path` are validated exactly like the file route.
 
-- Types by file extension: `png`, `jpg`/`jpeg`, `gif`, `webp`, `svg` with the matching
-  `Content-Type`. Any other file answers 415, a missing one 404, one above 10 MiB 413 (checked
-  from the tree entry before any content is read).
-- `ETag` is the blob id, so an unchanged image answers 304 on every branch and commit.
+- Types by file extension: images `png`, `jpg`/`jpeg`, `gif`, `webp`, `svg`; videos `mp4`,
+  `webm`; documents `pdf`, each with the matching `Content-Type`. Any other file answers 415, a
+  missing one 404, one above 10 MiB 413 (checked from the tree entry before any content is read).
+- PDFs are sent with `Content-Disposition: attachment` only: the browser downloads them instead
+  of rendering a document an agent wrote inside this origin (and Chrome refuses to render a PDF
+  under the `sandbox` CSP anyway). Images and videos are shown inline.
+- A single byte range (`Range: bytes=a-b`, `bytes=a-`, `bytes=-n`) answers 206 with
+  `Content-Range`, so videos can seek; a range past the end answers 416, several ranges or an
+  `If-Range` that is not the current ETag get the whole file. The body is read into memory first,
+  which the 10 MiB limit keeps cheap.
+- `ETag` is the blob id, so an unchanged file answers 304 on every branch and commit.
   `Cache-Control` is `private, no-cache` for branch refs (revalidate every time) and
-  `private, max-age=31536000, immutable` when `ref` is a full commit id; the Code tab addresses
-  images by commit id.
+  `private, max-age=31536000, immutable` when `ref` is a full commit id; the Code and Media tabs
+  address files by commit id.
 - `X-Content-Type-Options: nosniff` and a `sandbox` CSP, so an SVG opened on its own cannot run
   scripts.
 - Same capability as every other read route (`read`), by session cookie or token.
@@ -145,6 +157,46 @@ origins and from this origin's raw and avatar routes only (an image must never t
 GET such as the audited archive); `http:`, `data:`, protocol-relative, relative and other
 same-origin URLs show the alt text instead. Clicking an image opens it enlarged. Coding agents get these instructions in their
 run prompt.
+
+### Media tab
+
+The project page's **Media** tab lists every image, video and PDF in the project repository: on
+`main` and on every issue branch (`cvx/<KEY>`), so screenshots show up as soon as an agent's work
+is synced, before anything is merged. `GET /api/projects/:id/media` does the work:
+
+- **Scan.** `git ls-tree -r` of each branch tip (identical trees are listed once), keeping files
+  with a media extension. Each blob is listed once: the same screenshot on `main` and two issue
+  branches, or under two paths, is one item with all its `locations` (branch, issue key, path),
+  `main` first, then the issue branches with the newest commit first.
+- **Who and when.** One `git log --raw` over the scanned tips (restricted to the media paths
+  when there are at most 200) finds the newest commit that wrote each blob at its path: author,
+  date and the commit id. `ref` is that commit, so thumbnails and downloads are addressed by an
+  immutable commit and cached by the browser; a file whose commit lies beyond the history limit
+  has no `commit` and is addressed by the branch tip.
+- **Query.** `kind` (`image`, `video`, `pdf`), `branch` (files present on that branch), `q`
+  (case-insensitive substring of any of its paths), `sort` (`newest`, default, or `oldest`; files
+  without a known commit last), `limit` (1-200, default 60) and `offset`. The answer has `items`,
+  `total`, `nextOffset` (null on the last page), `facets` (counts per kind and per branch over
+  the whole scan, for the filters), `scannedBranches`, `truncated`, `history` and `version`. `version`
+  is new for every scan built (a branch tip moved, or a failed history walk was retried); a next page with another `version` does not
+  continue the previous one, so the tab starts over at offset 0 (and skips items it already shows).
+- **Limits and cache.** See [Limits](#limits): past the branch, file or time limit the scan stops
+  and sets `truncated` (files may be missing), which the tab shows as a notice. A branch whose
+  listing times out is skipped as well, and that scan is rebuilt after one minute. `history`
+  tells how far the dating got: `complete`, `limited` (the commit or size limit, or a timeout of
+  `git log`, stopped the walk before every file was found; those files have no `commit` and sort
+  last) or `failed` (git failed otherwise: the files are listed without author and date, the API
+  logs a warning once, and the scan is reused for one minute only, so paging keeps working and a
+  later request tries the history again). The tab shows a notice for both. The scan is cached in
+  memory per project (the 32 most recently used projects) and reused until a branch tip moves, so
+  paging and filtering do not run git again.
+- **Permission.** `read`, like the Code tab.
+
+The tab shows a grid with lazily loaded thumbnails (videos and PDFs get an icon; images above
+10 MiB a placeholder), filters for type, branch or issue and path, sorting by date, and a lightbox
+with zoom (fit, 25-400 %, click or `+`/`-`), previous/next (buttons or arrow keys, loading the
+next page when needed), download, "Open in Code tab" on the first branch holding the file, and
+links to the issues whose branches hold it.
 
 ## Agent access (read-only MCP tools)
 
@@ -206,6 +258,71 @@ secret redaction. The tools never write.
 dontAsk` and pre-approve the whole `conclavix` MCP server (`mcp__conclavix`, the rule the coding
 sandbox uses as well). The server decides per run which tools exist, so new tools need no change
 in the runner.
+
+## Git integration (merge tools)
+
+Agents with the **git integration** permission (`gitIntegration: true`, agent settings "May merge
+branches and update main") get three more MCP tools. They run in the API process on the project's
+bare repository, never inside a sandbox or an issue clone, so an agent does not need code access
+or a working copy for them. The permission is off by default and for every existing agent; only
+admins and owners can change it, and every change is audited as `agent.git_integration_changed`.
+It is checked again on every call, so revoking it takes effect within a running run.
+
+| Tool                | What                                                                                    |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| `merge_branches`    | Merge `sources` (existing branches, in order) into the issue branch `target`            |
+| `fast_forward_main` | Move `main` to an issue branch that passed review, fast-forward only                    |
+| `get_merge_status`  | Read-only preview: target against main, which sources it contains, which files conflict |
+
+**Which branches.**
+
+- `merge_branches` `target` must be `cvx/<KEY>` of the run's own issue or of an issue in the same
+  project that is assigned to the calling agent. Anything else (another agent's issue, another
+  project, `main`, a free branch name) is refused with `forbidden` or a validation error.
+- `sources` are 1 to 10 distinct existing branches of the project's repository (branch names, not
+  commit ids), not the target itself. `base` (default `main`) is only used when the target does not
+  exist yet; an existing target is always the starting point.
+- `fast_forward_main` `source` must be `cvx/<KEY>` of an issue in the run's project. Pushing to
+  external remotes is not part of this.
+- The agent must be enabled in the project, as for the read-only tools.
+
+**How a merge works.** For each source the target does not contain yet, `git merge-tree
+--write-tree` computes the merge without a work tree, and `git commit-tree` writes a no-ff merge
+commit with two parents (first: the target line) whose author and committer are the agent:
+`Conclavix <agent name>` with `agent-<id>@<AGENT_EMAIL_DOMAIN>`. Its message is `Merge branch
+'<source>' into <target>`, the optional `message` (control characters removed, at most 4,000
+characters) and `Conclavix-Issue/Run/Agent` trailers. Sources the target already contains are
+skipped. The branch moves once, at the end, with a compare-and-swap `update-ref`; if the branch
+changed meanwhile the call answers 409 and nothing moves.
+
+**Conflicts.** The first source that conflicts ends the call with 409 `merge_conflict` and a
+report: `source`, `conflicts` (path and git's conflict kinds such as `contents` or
+`modify/delete`, at most 100, `moreConflicts` counts the rest) and `mergedCleanlyBefore`. No ref
+is changed, the target is not created; the merge trees written so far are unreferenced objects.
+Conflicts are resolved on one of the branches (by the agent working on it), then merged again.
+
+**Fast-forward of main.** `main` moves only when the source contains every commit of `main`;
+otherwise the answer is 409 `not_fast_forward` with the number of missing commits, and the fix is
+to merge `main` into the source, review it again and promote again. Whether a branch was reviewed
+is up to the agent's instructions; the server only enforces the fast-forward.
+
+**Issue clones after a merge.** A merge moves `cvx/<KEY>` on the server while the issue may have
+a clone. The runner reconciles the two when it next touches the clone (see
+[Coding agents](coding-agents.md#5-git-and-the-clone)): before a run, a clone behind the server is
+fast-forwarded, so the run starts from the merged branch; after a run during which the branch was
+merged, the run's work is merged with the server tip. A merge into the run's own issue therefore
+does not change the running agent's working copy; its next run starts from the result.
+
+**Audit and safety.** Successful merges are audited as `branch.merged`, promotions as
+`branch.main_fast_forwarded`, both with the agent as actor (`{type: 'agent', agentId, name}`) and
+the project, run, issue, branch and before/after commits; refusals change nothing and appear in
+the run log. All git calls use the options below (no hooks, no fsmonitor, no system or user
+configuration, no transports); merge drivers named in `.gitattributes` of the content need a
+command in the repository configuration, which only the server writes.
+
+| Variable             | Meaning                                                       | Default             |
+| -------------------- | ------------------------------------------------------------- | ------------------- |
+| `AGENT_EMAIL_DOMAIN` | Domain of agent commit addresses, API and runner (same value) | `conclavix.invalid` |
 
 ## Security notes
 

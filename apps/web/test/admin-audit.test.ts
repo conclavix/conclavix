@@ -28,6 +28,9 @@ describe('audit view helpers', () => {
 
   it('labels actors', () => {
     expect(actorLabel({ type: 'board' }, {})).toBe('board token');
+    expect(actorLabel({ type: 'agent', agentId: 'a1', name: 'Integrator' }, {})).toBe(
+      'agent Integrator',
+    );
     expect(actorLabel({ type: 'user', userId: 'u1' }, { u1: 'Ada' })).toBe('Ada');
     expect(actorLabel({ type: 'user', userId: '0123456789ab' }, {})).toMatch(/deleted user/);
     expect(actorLabel(null, {})).toBe('anonymous');

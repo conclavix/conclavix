@@ -62,6 +62,7 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, Capability>> = {
   'GET /api/projects/:id/tree': 'read',
   'GET /api/projects/:id/file': 'read',
   'GET /api/projects/:id/raw': 'read',
+  'GET /api/projects/:id/media': 'read',
   'GET /api/projects/:id/compare': 'read',
   'GET /api/projects/:id/archive': 'read',
   // Project secrets: admins manage them and see metadata; revealing a value is owner-only.

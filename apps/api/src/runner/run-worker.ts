@@ -275,7 +275,7 @@ export class RunWorker {
     const codeRuns = this.codeRunsFor(agent, writes);
     if (codeRuns && 'status' in codeRuns) return codeRuns;
     const context = codeRuns
-      ? await codeRuns.prepare(issue, skillsDirOf(workspace, skills.length), events)
+      ? await codeRuns.prepare(issue, skillsDirOf(workspace, skills.length), events, agent)
       : null;
     const where = context ? `the sandbox on ${context.branch}` : workspace;
     events.record('runner', `starting ${agent.adapter.type} for ${issue.key} in ${where}`);
@@ -290,7 +290,7 @@ export class RunWorker {
         issue,
         run.reason,
         await loadPosition(this.database, agent, issue.projectId),
-        { code: context !== null },
+        { code: context !== null, git: agent.gitIntegration === true },
       ),
       workspace,
       mcpUrl: this.options.mcpUrl,

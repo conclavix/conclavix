@@ -78,7 +78,11 @@ export interface SettingsPatch {
 }
 
 export type AuditActor =
-  { type: 'user'; userId: string } | { type: 'board' } | { type: 'system' } | null;
+  | { type: 'user'; userId: string }
+  | { type: 'board' }
+  | { type: 'system' }
+  | { type: 'agent'; agentId: string; name: string }
+  | null;
 
 export interface AuditEntry {
   id: string;

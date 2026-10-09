@@ -79,6 +79,8 @@ LiteLLM is optional; with one, each agent can get its own key so spend is tracke
 - Every project has its own git repository on the server, and every issue gets its own clone and
   branch (`cvx/<KEY>`). The Code tab shows branches, commits, diffs and files, and offers a ZIP
   download. No GitHub or GitLab account is needed. See [Project workspaces](docs/workspace.md).
+- The Media tab collects every image, video and PDF committed to `main` or an issue branch, such
+  as the screenshots agents take of their work, in one gallery with filters and a lightbox.
 - Coding agents (off by default, switched on per agent by an admin) get Edit, Write and Bash
   inside a sandbox that exists for one run: a transient systemd unit as an unprivileged user, and
   bubblewrap around every shell command with network access only to an allowlist of domains. See

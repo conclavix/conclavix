@@ -12,13 +12,16 @@ async function main(): Promise<void> {
   const dispatcher = new QueueDispatcher(redisConnection(config.REDIS_URL));
   const scheduler = new Scheduler(database, dispatcher, {
     heartbeatMinutes: config.HEARTBEAT_MINUTES,
+    stallWatchdogMinutes: config.STALL_WATCHDOG_MINUTES,
     idleBackoffMs: config.IDLE_BACKOFF_MINUTES * 60_000,
     idleRunsAfterBackoff: 1,
     maxRunsPerIssuePerDay: config.MAX_RUNS_PER_ISSUE_PER_DAY,
     batchSize: 100,
   });
   const maxRunningMs = (config.RUN_TIMEOUT_MINUTES + 5) * 60_000;
+  const stallIntervalMs = config.STALL_WATCHDOG_MINUTES * 60_000;
   let lastSweep = 0;
+  let lastStallSweep = Date.now();
   let stopping = false;
 
   const tick = async (): Promise<void> => {
@@ -28,6 +31,10 @@ async function main(): Promise<void> {
       const heartbeats = await scheduler.sweepHeartbeats();
       const recovered = await scheduler.recoverRuns(maxRunningMs);
       log.debug({ heartbeats, ...recovered }, 'sweep');
+    }
+    if (stallIntervalMs > 0 && now - lastStallSweep >= stallIntervalMs) {
+      lastStallSweep = now;
+      log.info(await scheduler.sweepStalls(), 'stall watchdog sweep');
     }
     const counts = await scheduler.processPendingWakes();
     if (counts.run + counts.skip > 0) {

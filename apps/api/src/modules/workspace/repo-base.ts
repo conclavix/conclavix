@@ -5,6 +5,7 @@ import type { Readable } from 'node:stream';
 import { DEFAULT_BRANCH, MAX_RAW_BYTES, issueKeySchema, repoPathSchema } from '@conclavix/core';
 import { AppError, notFound } from '../../errors.js';
 import { Git, GitError } from './git.js';
+import { DEFAULT_AGENT_EMAIL_DOMAIN } from './identity.js';
 
 /** Git's well-known empty tree; it exists in every SHA-1 repository without being stored. */
 export const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
@@ -37,6 +38,16 @@ export interface WorkspaceLimits {
   /** Timeout and size cap of a ZIP download. */
   archiveTimeoutMs: number;
   archiveMaxBytes: number;
+  /** Branches (main and `cvx/*`) the media listing scans. */
+  maxMediaBranches: number;
+  /** Distinct media files (blobs) the media listing collects. */
+  maxMediaItems: number;
+  /** Commits the media listing reads to find who wrote a file and when. */
+  maxMediaLogCommits: number;
+  /** Time budget of one media scan; branches past it are skipped and the scan is `truncated`. */
+  mediaScanBudgetMs: number;
+  /** How long a scan whose history walk failed is reused before the walk is tried again. */
+  mediaHistoryRetryMs: number;
 }
 
 export const DEFAULT_LIMITS: WorkspaceLimits = {
@@ -51,6 +62,11 @@ export const DEFAULT_LIMITS: WorkspaceLimits = {
   timeoutMs: 15_000,
   archiveTimeoutMs: 5 * 60_000,
   archiveMaxBytes: 1024 * 1024 * 1024,
+  maxMediaBranches: 200,
+  maxMediaItems: 5000,
+  maxMediaLogCommits: 5000,
+  mediaScanBudgetMs: 20_000,
+  mediaHistoryRetryMs: 60_000,
 };
 
 export interface ResolvedRef {
@@ -178,11 +194,21 @@ export class RepoBase {
   protected readonly git: Git;
   protected readonly limits: WorkspaceLimits;
   protected readonly queue = new KeyedQueue();
+  /** Domain of the no-reply addresses agents commit and merge with (`agent-<id>@<domain>`). */
+  readonly agentEmailDomain: string;
 
-  constructor(root: string, options: { gitBin?: string; limits?: Partial<WorkspaceLimits> } = {}) {
+  constructor(
+    root: string,
+    options: {
+      gitBin?: string;
+      limits?: Partial<WorkspaceLimits>;
+      agentEmailDomain?: string;
+    } = {},
+  ) {
     this.root = resolve(root);
     this.git = new Git(options.gitBin ?? 'git');
     this.limits = { ...DEFAULT_LIMITS, ...options.limits };
+    this.agentEmailDomain = options.agentEmailDomain ?? DEFAULT_AGENT_EMAIL_DOMAIN;
   }
 
   /**

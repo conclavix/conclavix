@@ -9,6 +9,8 @@ export const wakeReasonSchema = z.enum([
   'manual',
   'delegation_closed',
   'report_closed',
+  'subissue_closed',
+  'stall_watchdog',
 ]);
 
 export const runStatusSchema = z.enum([
