@@ -10,8 +10,9 @@ import {
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseDiff } from './diff.mjs';
-import { metricsLine, renderComment, renderSummary } from './render.mjs';
+import { metricsLine, renderCarried, renderComment, renderSummary } from './render.mjs';
 import { countBlocking, extractResult, prepareFindings, validateReview } from './result.mjs';
+import { carryOver, isComplete } from './reuse.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -58,9 +59,30 @@ export function finalize({ meta, structured, metrics, diffText, minBlockingConfi
     }));
   const body = renderSummary({ review, findings, blocking, meta, metrics });
   return {
-    document: { meta, metrics, blocking, review: { ...review, findings } },
+    document: {
+      meta,
+      metrics,
+      blocking,
+      complete: isComplete(metrics),
+      review: { ...review, findings },
+    },
     payload: { commit_id: meta.head_sha, body, comments },
   };
+}
+
+/** Builds the document and a comment-free payload from the verdict of an earlier run. */
+export function finalizeCarried({ meta, previousDoc }) {
+  const document = carryOver({ meta, previousDoc, from: meta.reuse_candidate });
+  const body = renderCarried(document);
+  return { document, payload: { commit_id: meta.head_sha, body, comments: [] } };
+}
+
+function writeResult(resultDir, document, payload) {
+  writeJson(join(resultDir, 'findings.json'), document);
+  writeJson(join(resultDir, 'review-payload.json'), payload);
+  writeFileSync(join(resultDir, 'summary.md'), `${payload.body}\n`);
+  stepSummary(payload.body);
+  setOutput('blocking', String(document.blocking));
 }
 
 function main() {
@@ -73,6 +95,17 @@ function main() {
   if (!meta) throw new Error('meta.json is missing, prepare did not run');
   writeJson(join(resultDir, 'meta.json'), meta);
   copyFileSync(join(inputDir, 'diff.patch'), join(resultDir, 'diff.patch'));
+
+  if (process.env.CARRY === 'true') {
+    const previousDoc = readJson(join(process.env.PREVIOUS_DIR ?? '', 'findings.json'), null);
+    const { document, payload } = finalizeCarried({ meta, previousDoc });
+    stepSummary(`## Review of PR #${meta.pr} (verdict carried over)\n`);
+    writeResult(resultDir, document, payload);
+    process.stdout.write(
+      `PR #${meta.pr}: verdict of ${document.meta.carried_from.head} carried over, ${document.blocking} blocking\n`,
+    );
+    return;
+  }
 
   const executionFile =
     process.env.EXECUTION_FILE ||
@@ -91,11 +124,7 @@ function main() {
     diffText: readFileSync(join(inputDir, 'diff.patch'), 'utf8'),
     minBlockingConfidence: Number(process.env.MIN_BLOCKING_CONFIDENCE || '0.6'),
   });
-  writeJson(join(resultDir, 'findings.json'), document);
-  writeJson(join(resultDir, 'review-payload.json'), payload);
-  writeFileSync(join(resultDir, 'summary.md'), `${payload.body}\n`);
-  stepSummary(payload.body);
-  setOutput('blocking', String(document.blocking));
+  writeResult(resultDir, document, payload);
   process.stdout.write(
     `PR #${meta.pr}: ${document.review.findings.length} finding(s), ${document.blocking} blocking, ${payload.comments.length} inline\n`,
   );
