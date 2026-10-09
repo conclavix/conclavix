@@ -129,6 +129,11 @@ const baseConfigSchema = z.object({
     z.coerce.number().int().min(0).max(3600).default(120),
   ),
   HEARTBEAT_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
+  /**
+   * Stall watchdog interval: issues an agent could work on but where nothing happened for this
+   * long get one `stall_watchdog` wake. 0 turns the watchdog off.
+   */
+  STALL_WATCHDOG_MINUTES: z.coerce.number().int().min(0).max(1440).default(5),
   /** How long an agent waits on an issue after `maxIdleRunsPerIssue` runs without progress. */
   IDLE_BACKOFF_MINUTES: z.coerce.number().int().min(1).max(1440).default(10),
   /**

@@ -56,7 +56,8 @@ issue`). The new sub-issue uses the normal blocker mechanism:
 
 - its assignee's wake is skipped with `skipReason: 'blocked'` while any blocker is open;
 - when the last open blocker closes (`done` or `cancelled`), the assignee gets an `unblocked`
-  wake for the sub-issue.
+  wake for the sub-issue; an `in_review` sub-issue is moved back to `in_progress` first (see
+  [Waiting in `in_review`](#waiting-in-in_review-for-sub-issues-and-blockers)).
 
 ## Sending work back: `reopen_issue`
 
@@ -91,13 +92,43 @@ ping-pong an issue that waits for the board.
 If the issue left `in_review` between the read and the transaction (two board answers at once, or
 the agent changed the status), the comment is posted the ordinary way instead of being refused.
 
+### Waiting in `in_review` for sub-issues and blockers
+
+An agent that waits for work below it (a delegator waiting for a merge on a sub-issue) often sets
+its own issue to `in_review`. The scheduler never runs `in_review` issues, so the issue is handed
+back when what it waits for closes, in the same transaction as the closing status change:
+
+- **A sub-issue closes** (`done` or `cancelled`) and its direct parent is assigned and `in_review`:
+  the parent moves to `in_progress` (its board column follows) and its assignee gets one
+  `subissue_closed` wake for the parent.
+- **The last open blocker closes** for an assigned `in_review` issue: the issue moves to
+  `in_progress` and its assignee gets an `unblocked` wake, as an actionable issue does.
+
+Both also apply when a board edit closes the sub-issue or blocker (a column changing to a closed
+status). A parent that still has an open blocker stays `in_review` until that blocker closes (then it is
+handed back as above, `unblocked`). An issue whose assignee could not run (paused, deleted or not
+enabled in the project) stays `in_review` as well, so it remains in the board's review list instead of sitting in `in_progress`
+with nobody working on it. The post-commit `unblocked` wakes leave out the issues handed back this
+way, because their wake is already queued: a scheduler tick that picks it up before the post-commit
+step would otherwise be followed by a second run for the same closure. A pending wake for the same agent and issue absorbs further ones, so several sub-issues
+closing at once still give one wake, and the delegator's `delegation_closed` wake for the same
+closure is absorbed too (it is woken instead of getting a notification). Only the direct parent is
+handed back; issues further up are reached through the delegation and report wakes below, which
+still need an actionable issue.
+
+The status does not say why the agent set `in_review`: it may also have been waiting for a board
+decision, such as an escalation. It is woken once per closure anyway, sees the open question in its
+issue and sets `in_review` again if it still needs the board. That costs one run per closure, which
+is bounded by the number of sub-issues and blockers, and is preferable to a chain that stops until
+someone comments.
+
 ## Who is woken when delegated work closes
 
 When an issue that an agent delegated (`delegatedBy`) closes:
 
 1. **The delegator** is woken (`delegation_closed`) on the issue it delegated from, if that issue
-   is still assigned to it and actionable (`todo` or `in_progress`). Otherwise it gets a
-   notification.
+   is still assigned to it and actionable (`todo` or `in_progress`; an `in_review` parent was just
+   moved back to `in_progress`, see above). Otherwise it gets a notification.
 2. **Every other `reports` target** of the assignee gets a notification (`list_notifications`,
    also listed in the next run's prompt) naming the closed issue.
 3. **A `reports` link with `wakeOnReport: true`** additionally wakes its target (`report_closed`)
@@ -130,7 +161,7 @@ While a wake waits, further wakes for the same agent and issue are absorbed by i
 lead gets exactly one run when the window frees. A manual wake from the board (after raising the
 limits, for example) clears `notBefore`, so the wake is checked on the next tick, and marks the
 wake as a board wake, which skips the idle backoff (the run cap, the cost limit and every other
-gate still apply). Wakes from events (comments, closed sub-issues, unblocking, reports, heartbeats) do not
+gate still apply). Wakes from events (comments, closed sub-issues, unblocking, reports, heartbeats, the stall watchdog) do not
 skip it. Wakes deferred by the former hourly window (`run_rate_limit`) are released on the first
 start after the upgrade.
 
@@ -173,6 +204,36 @@ that every heartbeat would skip anyway: open blockers, an assignee not enabled i
 an assignee that is paused or no longer exists. Resuming the agent lets the next sweep wake those
 issues again. Explicit wakes (assignment, comments, unblocking, reports, manual) are still queued
 for a paused agent and skipped with `skipReason: 'agent_paused'`, so the reason stays visible.
+
+## Stall watchdog
+
+A missed wake (a post-commit wake that failed, a run lost by the runner, an agent that stopped
+expecting a wake that never comes) would otherwise leave an issue untouched until the next
+heartbeat. Every `STALL_WATCHDOG_MINUTES` (default 5, `0` turns it off) the scheduler looks for
+issues an agent could work on but where nothing happened for that long, and queues one
+`stall_watchdog` wake for each:
+
+- status `todo` or `in_progress`, assigned to an **active** agent that is enabled in the project;
+- not checked out, no queued or running run, no run that finished within the interval;
+- no change to the issue and no run start within the interval (`updatedAt`, `lastRunAt`);
+- no pending wake for the issue (a deferred one counts), no open sub-issue (its closing wakes the
+  issue) and no open blocker (its closing wakes the issue, `unblocked`);
+- one more run without progress would not reach the agent's idle-run limit on the issue
+  (`maxIdleRunsPerIssue` consecutive runs without progress). With the default limit of 2 the
+  watchdog nudges once after a run that made progress; if that run changes nothing, the issue is
+  left to the heartbeat. With a limit of 1 the watchdog never wakes. A watchdog run alone never
+  reaches the idle backoff or the loop pause, but an idle one counts toward the streak like any
+  run, so later heartbeat runs reach the backoff and the pause one run earlier.
+
+At most `batchSize * 5` (500) wakes are queued per sweep, oldest change first; the filters above run
+before that limit, so issues that wait cannot crowd out stalled ones.
+
+`in_review` issues are never woken by the watchdog: they wait for the board, and those that waited
+for a sub-issue or blocker were already handed back when it closed (see above). Watchdog wakes
+pass the scheduler gates like heartbeat wakes (paused agent, project access, idle backoff, run cap,
+cost limit), and the pending-wake index keeps it to one wake per agent and issue. Each sweep logs
+one line, `stall watchdog sweep`, with the counts: candidates, woken, and the issues left alone for
+an open sub-issue, an open blocker, a pending wake, a recent run or the idle limit.
 
 Processed wakes (run or skipped) are only kept for debugging; runs carry their own reason. A TTL
 index on `processedAt` removes them after 30 days. Pending wakes have `processedAt: null` and never
