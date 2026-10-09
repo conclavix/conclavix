@@ -13,7 +13,8 @@
 # sudo, helper) with the runner's credentials from /etc/conclavix/runner.env and asks it to run
 # one probe script with Bash; it costs one short model turn. That run also gets an MCP server like
 # the board's: a stub on 127.0.0.1 that answers only the run's bearer, which claude must expand from
-# the variable the runner uses (the init event has to report it as connected). Nothing secret is
+# the variable the runner uses (the init event has to report it as connected), and a connection's
+# server whose `Bearer ${CONCLAVIX_MCP_HEADER_1}` header must arrive exactly. Nothing secret is
 # printed: the probes report PASS/FAIL per check, and the Claude output is parsed for those lines
 # only.
 set -euo pipefail
@@ -197,25 +198,36 @@ INNER
   ln -s /proc/self/environ "$clones/ACC-1/environ-link"
   chown -h cvx-runner:cvx-code "$clones/ACC-1/acceptance-probe.sh" "$clones/ACC-1/environ-link"
   # A minimal MCP server (streamable HTTP, JSON responses) on loopback, where the board API listens.
-  # It answers only `Bearer <run bearer>` and counts the requests it accepts and refuses.
+  # On /mcp it answers only `Bearer <run bearer>`, on /connection only `Bearer <connection
+  # credential>`, and logs per path whether it accepted or refused a request (with the length of
+  # what it got, never the value).
   bearer="cvx_run_acceptance-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  # Long enough that Claude Code would blank a variable holding `Bearer <it>` under its env scrub:
+  # the runner writes the scheme into the config and only the credential into the variable.
+  connection_credential="acceptance-connection-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   # Throwaway values standing in for project secrets: one plain name, one that looks like a credential.
   project_value="acceptance-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
   api_key_value="acceptance-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
   printf '%s' "$bearer" >"$work/bearer"
+  printf '%s' "$connection_credential" >"$work/connection-credential"
   cat >"$work/mcp-stub.cjs" <<'STUB'
 const http = require('node:http');
 const fs = require('node:fs');
-const [bearerFile, portFile, logFile] = process.argv.slice(2);
-const expected = `Bearer ${fs.readFileSync(bearerFile, 'utf8')}`;
+const [bearerFile, connectionFile, portFile, logFile] = process.argv.slice(2);
+const expected = {
+  '/mcp': `Bearer ${fs.readFileSync(bearerFile, 'utf8')}`,
+  '/connection': `Bearer ${fs.readFileSync(connectionFile, 'utf8')}`,
+};
 const send = (res, status, body) => {
   res.writeHead(status, { 'content-type': 'application/json' });
   res.end(body === undefined ? '' : JSON.stringify(body));
 };
 const server = http.createServer((req, res) => {
   if (req.method !== 'POST') return send(res, 405, { error: 'method_not_allowed' });
-  const ok = req.headers.authorization === expected;
-  fs.appendFileSync(logFile, ok ? 'accepted\n' : 'refused\n');
+  const want = expected[req.url];
+  const got = req.headers.authorization ?? '';
+  const ok = want !== undefined && got === want;
+  fs.appendFileSync(logFile, `${ok ? 'accepted' : 'refused'} ${req.url === '/connection' ? 'connection' : 'board'} ${got.length}\n`);
   if (!ok) return send(res, 401, { error: 'unauthorized' });
   let raw = '';
   req.on('data', (chunk) => (raw += chunk));
@@ -243,10 +255,10 @@ const server = http.createServer((req, res) => {
 server.listen(0, '127.0.0.1', () => fs.writeFileSync(portFile, String(server.address().port)));
 STUB
   : >"$work/mcp-log"
-  /usr/bin/node "$work/mcp-stub.cjs" "$work/bearer" "$work/mcp-port" "$work/mcp-log" &
+  /usr/bin/node "$work/mcp-stub.cjs" "$work/bearer" "$work/connection-credential" "$work/mcp-port" "$work/mcp-log" &
   stub=$!
   for _ in $(seq 1 50); do [[ -s $work/mcp-port ]] && break; sleep 0.1; done
-  mcp_config="{\"mcpServers\":{\"conclavix\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:$(cat "$work/mcp-port")/mcp\",\"headers\":{\"Authorization\":\"Bearer \${CONCLAVIX_RUN_BEARER}\"}},\"acceptance-extra\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:$(cat "$work/mcp-port")/mcp\",\"headers\":{\"Authorization\":\"\${CONCLAVIX_MCP_HEADER_1}\"}}}}"
+  mcp_config="{\"mcpServers\":{\"conclavix\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:$(cat "$work/mcp-port")/mcp\",\"headers\":{\"Authorization\":\"Bearer \${CONCLAVIX_RUN_BEARER}\"}},\"acceptance-extra\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:$(cat "$work/mcp-port")/connection\",\"headers\":{\"Authorization\":\"Bearer \${CONCLAVIX_MCP_HEADER_1}\"}}}}"
   {
     while IFS= read -r line; do
       name=${line%%=*}
@@ -257,8 +269,9 @@ STUB
       printf '%s=%s\n' "$name" "$(printf '%s' "$value" | base64 -w0)"
     done <"$RUNNER_ENV"
     printf 'CONCLAVIX_RUN_BEARER=%s\n' "$(base64 -w0 <"$work/bearer")"
-    # A connection's MCP server (docs/connections.md): the same stub, its header from the block.
-    printf 'CONCLAVIX_MCP_HEADER_1=%s\n' "$(printf 'Bearer %s' "$(cat "$work/bearer")" | base64 -w0)"
+    # A connection's MCP server (docs/connections.md): the same stub on /connection. Like the
+    # runner, the scheme stands in the config and the variable holds the credential alone.
+    printf 'CONCLAVIX_MCP_HEADER_1=%s\n' "$(base64 -w0 <"$work/connection-credential")"
     printf 'ACCEPTANCE_PROJECT_VALUE=%s\n' "$(printf '%s' "$project_value" | base64 -w0)"
     printf 'ACCEPTANCE_API_KEY=%s\n' "$(printf '%s' "$api_key_value" | base64 -w0)"
     printf '\n'
@@ -281,7 +294,7 @@ STUB
     --setting-sources user \
     --tools Read,Grep,Glob,Skill,Edit,Write,Bash --permission-mode dontAsk \
     >"$work/stream" 2>"$work/stderr" || true
-  rm -f "$work/stdin" "$work/bearer"
+  rm -f "$work/stdin" "$work/bearer" "$work/connection-credential"
   kill "$stub" 2>/dev/null || true
   wait "$stub" 2>/dev/null || true
   stub=
@@ -319,8 +332,15 @@ PARSE
   # token, ANTHROPIC_CUSTOM_HEADERS with the gateway key); ANTHROPIC_BASE_URL may stay visible.
   check 'conclavix MCP server connected (run bearer expanded into the header)' "$(inner mcp-conclavix)" connected
   check 'connection MCP server connected (header value expanded from the block)' "$(inner mcp-acceptance-extra)" connected
-  check 'MCP stub accepted the bearer and refused nothing' \
-    "$(grep -c '^accepted$' "$work/mcp-log" | awk '{print ($1 > 0) ? "yes" : "no"}')/$(grep -c '^refused$' "$work/mcp-log" || true)" yes/0
+  accepted_by() { grep -c "^accepted $1 " "$work/mcp-log" | awk '{print ($1 > 0) ? "yes" : "no"}'; }
+  check 'MCP stub accepted the run bearer on the board server' "$(accepted_by board)" yes
+  # Exact match in the stub; on a mismatch the log holds only the length that arrived.
+  check 'MCP stub accepted the connection header (exactly Bearer <credential>)' "$(accepted_by connection)" yes
+  check 'MCP stub refused nothing' "$(grep -c '^refused ' "$work/mcp-log" || true)" 0
+  if grep -q '^refused ' "$work/mcp-log"; then
+    echo "refused requests (server, header length; expected board $((7 + ${#bearer})), connection $((7 + ${#connection_credential}))):"
+    sed -n 's/^refused //p' "$work/mcp-log" | sort | uniq -c
+  fi
   check 'no credential variables in Bash' "$(inner credential-env)" none
   sum() { printf '%s' "$1" | sha256sum | cut -c1-16; }
   check 'project secret visible to Bash with its value' "$(inner project-secret)" "$(sum "$project_value")"

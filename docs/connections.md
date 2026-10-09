@@ -62,9 +62,20 @@ decryptable, URL refused, DNS failure) is left out with a run event
 
 How the header values travel:
 
-- The MCP config passed to claude contains only references: `"headers": {"Authorization":
+- The MCP config passed to claude contains only references: `"headers": {"X-Api-Key":
 "${CONCLAVIX_MCP_HEADER_1}"}`. claude expands them from its environment, so no credential is in
   argv (sudo logs the command line) or in a file.
+- A value of the form `<scheme> <credential>` with the scheme `Bearer`, `Basic` or `Token` (any
+  case, any run of blanks in between) is split: the config gets the scheme literally,
+  `"Authorization": "Bearer ${CONCLAVIX_MCP_HEADER_2}"`, and the variable holds the credential
+  alone. Under `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` (coding runs) Claude Code expands a variable
+  whose value looks like `Bearer <credential>` or `Basic <credential>` to an empty string (seen with
+  2.1.285 and 2.1.289; short credentials pass, typical tokens do not), so the server would get an
+  empty `Authorization` header. The scheme keeps its spelling and is followed by one space; the
+  credential keeps any blanks inside it. Read-only runs use the same config. Other first words
+  (`Digest ...`, `ApiKey ...`) stay in the variable: Claude Code passes them unchanged, a first
+  word may be part of the secret, and the root helper would have to allow arbitrary literal text
+  in argv.
 - **Read-only runs:** the variables are in claude's environment. Through sudo they need
   `CONCLAVIX_MCP_HEADER_*` in `env_keep` (`deploy/sudoers/conclavix-runner`).
 - **Coding runs:** they travel in the helper's stdin environment block like the run bearer;
@@ -74,12 +85,14 @@ How the header values travel:
 - The names avoid the words Claude Code's subprocess scrub treats as credentials (TOKEN, KEY,
   AUTH, SECRET, PASSWORD, ...): under `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` such names expand to an
   empty string in MCP headers, the same reason the run token is `CONCLAVIX_RUN_BEARER` there.
-  `sandbox-acceptance.sh --with-claude` connects a second MCP server whose header comes from
-  `CONCLAVIX_MCP_HEADER_1` and checks it is `connected`.
+  `sandbox-acceptance.sh --with-claude` connects a second MCP server with the header
+  `Bearer ${CONCLAVIX_MCP_HEADER_1}`, checks it is `connected` and that the stub server received
+  exactly `Bearer <credential>` (it logs only the length of what arrived).
 - URLs may not contain `$`: claude expands `${NAME}` in MCP server URLs too, which would send
   the run's variables to the server. The API and the root helper both refuse it.
 - The root helper accepts a connection server only as `type: "http"` with an http(s) URL without
-  credentials and header values that are exactly `${CONCLAVIX_MCP_HEADER_<n>}`; at most 8 servers
+  credentials and header values that are exactly `${CONCLAVIX_MCP_HEADER_<n>}`, optionally
+  preceded by `Bearer`, `Basic` or `Token` (any case) and a single space; at most 8 servers
   plus `conclavix`, 8 headers each, 32 values per run.
 
 Tool permissions: read-only runs add `mcp__<name>` to `--allowedTools`; in coding runs the helper

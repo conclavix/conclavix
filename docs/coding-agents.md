@@ -156,6 +156,12 @@ headers, so the conclavix MCP server would receive `Authorization: Bearer ` and 
 managed `sandbox.credentials.envVars` deny entry is what keeps it away from Bash;
 `sandbox-acceptance.sh --with-claude` checks both (MCP `connected`, no `CONCLAVIX_*` in Bash).
 
+The scrub also looks at values: a variable holding `Bearer <credential>` or `Basic <credential>`
+expands to an empty string in MCP headers, whatever its name. That is why the run bearer's
+variable holds the token alone behind a literal `Bearer ` in the config, and why the runner splits
+connection header values the same way (`Bearer ${CONCLAVIX_MCP_HEADER_<n>}`, see
+[connections.md](connections.md)).
+
 The helper starts the unit with `systemd-run --expand-environment=no` (systemd 254 or later). By
 default the service manager expands `${NAME}` and `$NAME` in the command line from the unit's own
 environment, which holds none of the run's variables, so the MCP config's

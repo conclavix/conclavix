@@ -147,6 +147,14 @@ describe('validateClaudeArgs', () => {
     assert.deepEqual(validateClaudeArgs(args), args);
   });
 
+  const headerConfig = (value) => [
+    '--mcp-config',
+    JSON.stringify({
+      mcpServers: {
+        x: { type: 'http', url: 'https://mcp.example.com/', headers: { Authorization: value } },
+      },
+    }),
+  ];
   const refused = {
     'skipping permissions': ['--dangerously-skip-permissions'],
     'another permission mode': ['--permission-mode', 'bypassPermissions'],
@@ -176,6 +184,19 @@ describe('validateClaudeArgs', () => {
         },
       }),
     ],
+    ...Object.fromEntries(
+      Object.entries({
+        'another scheme before a header reference': 'Digest ${CONCLAVIX_MCP_HEADER_1}',
+        'two blanks after the scheme': 'Bearer  ${CONCLAVIX_MCP_HEADER_1}',
+        'a tab after the scheme': 'Bearer\t${CONCLAVIX_MCP_HEADER_1}',
+        'text after a header reference': '${CONCLAVIX_MCP_HEADER_1} x',
+        'a literal credential before a header reference': 'Bearer abc ${CONCLAVIX_MCP_HEADER_1}',
+        'two header references': 'Bearer ${CONCLAVIX_MCP_HEADER_1}${CONCLAVIX_MCP_HEADER_2}',
+        'a scheme without a reference': 'Bearer ',
+        'a scheme before another variable': 'Bearer ${CONCLAVIX_RUN_BEARER}',
+        'a header reference out of range': 'Bearer ${CONCLAVIX_MCP_HEADER_33}',
+      }).map(([name, value]) => [name, headerConfig(value)]),
+    ),
     'a header reference to another variable': [
       '--mcp-config',
       JSON.stringify({
@@ -229,8 +250,10 @@ describe('validateClaudeArgs', () => {
           type: 'http',
           url: 'https://mcp.example.com/mcp',
           headers: {
-            Authorization: '${CONCLAVIX_MCP_HEADER_1}',
+            Authorization: 'Bearer ${CONCLAVIX_MCP_HEADER_1}',
             'X-Team': '${CONCLAVIX_MCP_HEADER_32}',
+            'X-Basic': 'basic ${CONCLAVIX_MCP_HEADER_2}',
+            'X-Token': 'TOKEN ${CONCLAVIX_MCP_HEADER_3}',
           },
         },
         lan: { type: 'http', url: 'http://192.168.10.5:8080/mcp' },
@@ -281,6 +304,37 @@ describe('parseReleaseArgs', () => {
       ['release', '--project', PROJECT, '--issue', 'CVX-2', '--force'],
     ]) {
       assert.throws(() => parseReleaseArgs(argv), UsageError);
+    }
+  });
+});
+
+describe('headerValueValid', () => {
+  it('accepts a reference with at most an authorization scheme in front', async () => {
+    const { headerValueValid } = await import('../args.mjs');
+    for (const value of [
+      '${CONCLAVIX_MCP_HEADER_1}',
+      'Bearer ${CONCLAVIX_MCP_HEADER_9}',
+      'bearer ${CONCLAVIX_MCP_HEADER_10}',
+      'Basic ${CONCLAVIX_MCP_HEADER_20}',
+      'token ${CONCLAVIX_MCP_HEADER_32}',
+    ]) {
+      assert.ok(headerValueValid(value), value);
+    }
+    for (const value of [
+      'Bearer abc',
+      'Digest ${CONCLAVIX_MCP_HEADER_1}',
+      'Bearer  ${CONCLAVIX_MCP_HEADER_1}',
+      ' ${CONCLAVIX_MCP_HEADER_1}',
+      'Bearer ${CONCLAVIX_MCP_HEADER_1} ',
+      'Bearer ${CONCLAVIX_MCP_HEADER_0}',
+      'Bearer ${CONCLAVIX_RUN_BEARER}',
+      'Bearer Basic ${CONCLAVIX_MCP_HEADER_1}',
+      'Bearer\n${CONCLAVIX_MCP_HEADER_1}',
+      '$CONCLAVIX_MCP_HEADER_1',
+      42,
+      null,
+    ]) {
+      assert.ok(!headerValueValid(value), String(value));
     }
   });
 });
