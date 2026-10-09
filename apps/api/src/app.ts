@@ -18,6 +18,8 @@ import { AvatarRepository } from './modules/avatars/repository.js';
 import { registerAvatarRoutes } from './modules/avatars/routes.js';
 import { CommentRepository } from './modules/comments/repository.js';
 import { registerCommentRoutes } from './modules/comments/routes.js';
+import { registerDecisionRoutes } from './modules/decisions/routes.js';
+import { DecisionService } from './modules/decisions/service.js';
 import { DocumentRepository } from './modules/documents/repository.js';
 import { registerDocumentRoutes } from './modules/documents/routes.js';
 import { IssueRepository } from './modules/issues/repository.js';
@@ -44,6 +46,9 @@ import { AuditLog } from './modules/audit/audit.js';
 import { SecretBox, vaultBox } from './modules/settings/secret-box.js';
 import { SecretRepository } from './modules/secrets/repository.js';
 import { passwordCheck, registerSecretRoutes } from './modules/secrets/routes.js';
+import { registerConnectionRoutes } from './modules/connections/routes.js';
+import { ConnectionService } from './modules/connections/service.js';
+import { clientVersion } from './modules/connections/types/mcp-http.js';
 import { MemoryDirectoryCache, type DirectoryCache } from './modules/skill-sources/cache.js';
 import { createGuardedTransport, type HttpTransport } from './modules/skill-sources/http.js';
 import { SkillSourceRepository } from './modules/skill-sources/repository.js';
@@ -160,6 +165,13 @@ async function registerAuth(
     system.audit,
     passwordCheck(system.auth, options.database),
   );
+  clientVersion.value = options.version;
+  registerConnectionRoutes(
+    app,
+    options.database,
+    new ConnectionService(options.database, vaultBox(options.authSecret)),
+    system.audit,
+  );
   return reauthorize;
 }
 
@@ -233,6 +245,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   });
   registerIssueRoutes(app, new IssueRepository(options.database));
   registerCommentRoutes(app, new CommentRepository(options.database));
+  registerDecisionRoutes(app, new DecisionService(options.database));
   registerDocumentRoutes(app, new DocumentRepository(options.database));
   registerRunRoutes(app, new RunRepository(collections));
   registerChatRoutes(app, new ChatService(options.database, audit));

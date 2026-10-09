@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline';
 import type { Adapter, AdapterResult, AdapterRunInput } from './types.js';
 import { parseStreamLine, type StreamSummary } from './claude-stream.js';
 import { secretEnvNameProblem } from '@conclavix/core';
+import type { RunMcpServer } from '../run-connections.js';
 import { MissingSecretError, type SecretResolver } from '../secrets.js';
 import {
   CODE_BUILTIN_TOOLS,
@@ -125,8 +126,15 @@ export function agentEnv(
   return { ANTHROPIC_CUSTOM_HEADERS: `x-litellm-api-key: Bearer ${key}` };
 }
 
-/** MCP config for one run; claude expands the token from the environment, so it holds no secret. */
-export function mcpConfig(mcpUrl: string, tokenEnv: string = RUN_TOKEN_ENV): string {
+/**
+ * MCP config for one run: the board's server and the agent's connections. claude expands the
+ * token and the header values from the environment, so the config holds no secret.
+ */
+export function mcpConfig(
+  mcpUrl: string,
+  tokenEnv: string = RUN_TOKEN_ENV,
+  extra: readonly RunMcpServer[] = [],
+): string {
   return JSON.stringify({
     mcpServers: {
       conclavix: {
@@ -134,9 +142,19 @@ export function mcpConfig(mcpUrl: string, tokenEnv: string = RUN_TOKEN_ENV): str
         url: mcpUrl,
         headers: { Authorization: `Bearer \${${tokenEnv}}` },
       },
+      ...Object.fromEntries(
+        extra.map((server) => [
+          server.name,
+          { type: 'http', url: server.url, headers: server.headers },
+        ]),
+      ),
     },
   });
 }
+
+/** Tool rules of the agent's connections: every tool of each of their servers. */
+export const connectionToolRules = (input: AdapterRunInput): string[] =>
+  (input.mcpServers ?? []).map((server) => `mcp__${server.name}`);
 
 /**
  * Build the claude CLI arguments for one run. They hold no prompt or instruction text, because
@@ -153,7 +171,7 @@ export function claudeArgs(input: AdapterRunInput): string[] {
     '--no-session-persistence',
     '--strict-mcp-config',
     '--mcp-config',
-    mcpConfig(input.mcpUrl),
+    mcpConfig(input.mcpUrl, RUN_TOKEN_ENV, input.mcpServers),
     '--max-budget-usd',
     String(input.run.maxCostPerRunUsd),
     '--setting-sources',
@@ -163,7 +181,7 @@ export function claudeArgs(input: AdapterRunInput): string[] {
     '--permission-mode',
     'dontAsk',
     '--allowedTools',
-    [AGENT_MCP_RULE, 'Skill'].join(' '),
+    [AGENT_MCP_RULE, ...connectionToolRules(input), 'Skill'].join(' '),
     '--disallowedTools',
     DENIED_BUILTIN_TOOLS.join(' '),
   ];
@@ -191,7 +209,7 @@ export function codeClaudeArgs(input: AdapterRunInput): string[] {
     '--no-session-persistence',
     '--strict-mcp-config',
     '--mcp-config',
-    mcpConfig(input.mcpUrl, SANDBOX_RUN_TOKEN_ENV),
+    mcpConfig(input.mcpUrl, SANDBOX_RUN_TOKEN_ENV, input.mcpServers),
     '--max-budget-usd',
     budgetArg(input.run.maxCostPerRunUsd),
     '--setting-sources',
@@ -383,6 +401,7 @@ export class ClaudeCliAdapter implements Adapter {
           HOME: process.env['HOME'],
           ...this.options.extraEnv,
           ...env,
+          ...input.mcpEnv,
           ENABLE_TOOL_SEARCH: 'false',
           [RUN_TOKEN_ENV]: input.token,
         },
@@ -420,6 +439,7 @@ export class ClaudeCliAdapter implements Adapter {
         detached: true,
         stdin: `${environmentBlock({
           ...projectSecretEnv(input),
+          ...input.mcpEnv,
           ...this.options.extraEnv,
           ...env,
           ENABLE_TOOL_SEARCH: 'false',

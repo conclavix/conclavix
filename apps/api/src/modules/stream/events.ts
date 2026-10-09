@@ -11,7 +11,8 @@ export type StreamEventType =
   | 'org_layout'
   | 'org'
   | 'chat'
-  | 'chat_message';
+  | 'chat_message'
+  | 'decision';
 
 export interface StreamEvent {
   type: StreamEventType;
@@ -29,6 +30,7 @@ const WATCHED: Record<string, StreamEventType> = {
   org: 'org',
   board_chats: 'chat',
   chat_messages: 'chat_message',
+  decisions: 'decision',
 };
 
 /** Collections whose deletions the board sees, as `{ id, deleted: true }`. */
@@ -98,6 +100,20 @@ function summarizeChat(doc: Document): Record<string, unknown> {
   };
 }
 
+function awaitingBoard(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const awaiting = value as Record<string, unknown>;
+  return {
+    decisionId: hex(awaiting['decisionId']),
+    since: awaiting['since'],
+    question: awaiting['question'],
+    options: awaiting['options'],
+    askedBy: hex(awaiting['askedBy']),
+  };
+}
+
 function summarize(type: StreamEventType, doc: Document): Record<string, unknown> {
   switch (type) {
     case 'run':
@@ -122,6 +138,7 @@ function summarize(type: StreamEventType, doc: Document): Record<string, unknown
         columnId: doc['columnId'] ?? null,
         assigneeAgentId: hex(doc['assigneeAgentId']),
         checkoutRunId: hex(doc['checkoutRunId']),
+        awaitingBoard: awaitingBoard(doc['awaitingBoard']),
       };
     case 'comment':
       return {
@@ -153,6 +170,13 @@ function summarize(type: StreamEventType, doc: Document): Record<string, unknown
       return summarizeChat(doc);
     case 'chat_message':
       return summarizeChatMessage(doc);
+    case 'decision':
+      return {
+        id: hex(doc['_id']),
+        issueId: hex(doc['issueId']),
+        projectId: hex(doc['projectId']),
+        status: doc['status'],
+      };
   }
 }
 

@@ -31,9 +31,11 @@ import type {
   WakeSkipReason,
 } from '@conclavix/core';
 import type { ApiTokenDoc, SettingsDoc } from './db/settings.js';
+import type { DecisionCollections, DecisionDoc, IssueDecisionFields } from './db/decisions.js';
 import type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
 import type { AuditDoc, SessionDoc, UserDoc } from './db/users.js';
 import type { ChatDoc, ChatMessageDoc, ChatPlanRevisionDoc } from './db/chats.js';
+import { vaultCollections, type VaultCollections } from './db/vault.js';
 
 export type { ApiTokenDoc, SettingsDoc, SmtpSettingsDoc } from './db/settings.js';
 export type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
@@ -94,7 +96,7 @@ export interface AgentDoc {
   avatarEtag?: string | null;
 }
 
-export interface IssueDoc {
+export interface IssueDoc extends IssueDecisionFields {
   _id: ObjectId;
   projectId: ObjectId;
   key: string;
@@ -291,7 +293,7 @@ export interface LockDoc {
   wakeCursor?: ObjectId | null;
 }
 
-export interface Collections {
+export interface Collections extends DecisionCollections, VaultCollections {
   projects: Collection<ProjectDoc>;
   agents: Collection<AgentDoc>;
   issues: Collection<IssueDoc>;
@@ -319,7 +321,6 @@ export interface Collections {
   chats: Collection<ChatDoc>;
   chatMessages: Collection<ChatMessageDoc>;
   chatPlanRevisions: Collection<ChatPlanRevisionDoc>;
-  secrets: Collection<import('./db/secrets.js').SecretDoc>;
 }
 
 export interface Database {
@@ -399,7 +400,8 @@ export async function connectDatabase(uri: string): Promise<Database> {
       chats: db.collection<ChatDoc>('board_chats'),
       chatMessages: db.collection<ChatMessageDoc>('chat_messages'),
       chatPlanRevisions: db.collection<ChatPlanRevisionDoc>('chat_plan_revisions'),
-      secrets: db.collection('secrets'),
+      ...vaultCollections(db),
+      decisions: db.collection<DecisionDoc>('decisions'),
     };
     await ensureIndexes(collections);
     return {

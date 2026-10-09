@@ -7,9 +7,10 @@ import {
   type UpdateSecretInput,
 } from '@conclavix/core';
 import type { Collections } from '../../db.js';
-import type { SecretDoc } from '../../db/secrets.js';
+import { PROJECT_SECRET, type SecretDoc } from '../../db/secrets.js';
 import { AppError, conflict, isDuplicateKeyError, notFound, unprocessable } from '../../errors.js';
 import type { SecretBox } from '../settings/secret-box.js';
+import { checkAgentIds } from './agent-ids.js';
 
 /** The sealed value is bound to its record, so a copied ciphertext does not open elsewhere. */
 export const secretContext = (id: ObjectId): string => `secret:${id.toHexString()}`;
@@ -17,9 +18,9 @@ export const secretContext = (id: ObjectId): string => `secret:${id.toHexString(
 /** The API view: metadata only. */
 export const toSecret = (doc: SecretDoc): Secret => ({
   id: doc._id.toHexString(),
-  projectId: doc.projectId.toHexString(),
+  projectId: doc.projectId?.toHexString() ?? '',
   name: doc.name,
-  envName: doc.envName,
+  envName: doc.envName ?? '',
   agentIds: doc.agentIds.map((id) => id.toHexString()),
   createdAt: doc.createdAt,
   updatedAt: doc.updatedAt,
@@ -50,7 +51,7 @@ export class SecretRepository {
 
   async list(projectId: ObjectId): Promise<Secret[]> {
     const docs = await this.collections.secrets
-      .find({ projectId }, { collation: { locale: 'en', strength: 2 } })
+      .find({ projectId, ...PROJECT_SECRET }, { collation: { locale: 'en', strength: 2 } })
       .sort({ name: 1 })
       .toArray();
     return docs.map(toSecret);
@@ -71,7 +72,7 @@ export class SecretRepository {
 
   async get(projectId: ObjectId, id: ObjectId, session?: ClientSession): Promise<SecretDoc> {
     const doc = await this.collections.secrets.findOne(
-      { _id: id, projectId },
+      { _id: id, projectId, ...PROJECT_SECRET },
       session ? { session } : {},
     );
     if (!doc) throw notFound('Secret');
@@ -91,33 +92,15 @@ export class SecretRepository {
     }
   }
 
-  /**
-   * The agents to store: unknown ids are refused, except ids already on the secret whose agent
-   * was deleted since, which are dropped.
-   */
-  private async checkAgents(
-    ids: readonly string[],
-    session: ClientSession,
-    current: readonly ObjectId[] = [],
-  ): Promise<ObjectId[]> {
-    const objectIds = ids.map((id) => new ObjectId(id));
-    const existing = await this.collections.agents
-      .find({ _id: { $in: objectIds } }, { session, projection: { _id: 1 } })
-      .toArray();
-    const known = new Set(existing.map((agent) => agent._id.toHexString()));
-    const before = new Set(current.map((id) => id.toHexString()));
-    if (ids.some((id) => !known.has(id) && !before.has(id))) {
-      throw unprocessable('Unknown agent in agentIds');
-    }
-    return objectIds.filter((id) => known.has(id.toHexString()));
-  }
-
   async create(
     projectId: ObjectId,
     input: CreateSecretInput,
     session: ClientSession,
   ): Promise<Secret> {
-    const count = await this.collections.secrets.countDocuments({ projectId }, { session });
+    const count = await this.collections.secrets.countDocuments(
+      { projectId, ...PROJECT_SECRET },
+      { session },
+    );
     if (count >= SECRET_LIMITS.perProject) {
       throw unprocessable(`A project can hold at most ${SECRET_LIMITS.perProject} secrets`);
     }
@@ -129,7 +112,7 @@ export class SecretRepository {
       name: input.name,
       envName: input.envName,
       valueEncrypted: this.box.seal(input.value, secretContext(_id)),
-      agentIds: await this.checkAgents(input.agentIds, session),
+      agentIds: await checkAgentIds(this.collections, input.agentIds, session),
       createdAt: now,
       updatedAt: now,
       lastUsedAt: null,
@@ -161,7 +144,7 @@ export class SecretRepository {
       changes['value'] = 'replaced';
     }
     if (input.agentIds !== undefined) {
-      const next = await this.checkAgents(input.agentIds, session, current.agentIds);
+      const next = await checkAgentIds(this.collections, input.agentIds, session, current.agentIds);
       const before = new Set(current.agentIds.map((agent) => agent.toHexString()));
       const after = new Set(input.agentIds);
       const added = input.agentIds.filter((agent) => !before.has(agent));
@@ -172,7 +155,7 @@ export class SecretRepository {
     }
     const doc = await unique(() =>
       this.collections.secrets.findOneAndUpdate(
-        { _id: id, projectId },
+        { _id: id, projectId, ...PROJECT_SECRET },
         { $set: set },
         { returnDocument: 'after', session },
       ),
@@ -183,7 +166,7 @@ export class SecretRepository {
 
   async remove(projectId: ObjectId, id: ObjectId, session: ClientSession): Promise<SecretDoc> {
     const doc = await this.collections.secrets.findOneAndDelete(
-      { _id: id, projectId },
+      { _id: id, projectId, ...PROJECT_SECRET },
       { session },
     );
     if (!doc) throw notFound('Secret');

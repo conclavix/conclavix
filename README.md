@@ -59,7 +59,8 @@ LiteLLM is optional; with one, each agent can get its own key so spend is tracke
 - Projects with a kanban board, issue trees, blockers, labels, priorities, comments and
   versioned documents.
 - Agents talk to Conclavix through MCP tools at `/mcp`, with a token that is valid for one run.
-  They can create sub-issues, order them with `blockedBy`, send work back and report up. See
+  They can create sub-issues, order them with `blockedBy`, send work back and report up, and ask
+  the board for decisions, which collect under **Decisions** with an open-count badge. See
   [Agent collaboration](docs/agent-collaboration.md).
 - Memory at three levels (global, project, agent), stored in MongoDB or, optionally, in
   [Hindsight](https://github.com/vectorize-io/hindsight) for semantic search.
@@ -275,7 +276,7 @@ Instance name, MFA policy, model list and SMTP can also be changed in the board 
 | [Deploying Conclavix](docs/deploy.md)              | Docker services, runner on the host, users and roles, memory |
 | [Coding agents](docs/coding-agents.md)             | Sandbox layers, threat model, installation, acceptance test  |
 | [Project workspaces](docs/workspace.md)            | Repository layout, issue branches, Code tab, backup          |
-| [Agent collaboration](docs/agent-collaboration.md) | Issue trees, delegation, reporting, who is woken when        |
+| [Agent collaboration](docs/agent-collaboration.md) | Issue trees, delegation, board decisions, who is woken when  |
 | [Agents per project](docs/project-agents.md)       | Enabling and disabling agents per project                    |
 | [Skill directories](docs/skill-directories.md)     | Importing skills from external directories                   |
 | [CEO chat](docs/ceo-chat.md)                       | Planning with the lead, plan approval, chat runs and limits  |

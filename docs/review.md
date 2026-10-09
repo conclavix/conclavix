@@ -11,8 +11,11 @@ pull_request (opened, synchronize, reopened, ready_for_review)
   review job   contents: read, pull-requests: read
     1. check out the PR head (full history, no persisted credentials)
     2. load .github/review from the PR's base commit (trusted copy)
-    3. prepare.mjs: diff against the merge base, changed files, untrusted author claims, prompt
-    4. claude-code-action: Claude with Read, Grep and Glob only, structured output (schema.json)
+    3. prepare.mjs: diff against the merge base, changed files, untrusted author claims, prompt,
+       fingerprint of the change; reuse decision against the latest posted review
+    3a. only on reuse: download the earlier run's result, reuse.mjs checks it (else full review)
+    4. claude-code-action: Claude with Read, Grep and Glob only, structured output (schema.json);
+       skipped when the earlier verdict is carried over
     5. finalize.mjs: validate output, anchor findings on diff lines, metrics, job summary, artifact
   publish job  pull-requests: write, statuses: write   (never runs Claude or PR code)
     6. publish.mjs: one PR review with inline comments and a summary, commit status "review"
@@ -46,6 +49,9 @@ pull_request (opened, synchronize, reopened, ready_for_review)
   and mentions are neutralised; a suggestion containing an HTML comment is dropped), so it cannot
   forge a marker. If GitHub rejects an inline comment, all inline comments are moved into the body
   before the marker, as many as fit GitHub's body size limit.
+- **Unchanged diff.** A push that leaves the change itself untouched, typically "update branch"
+  (merge or rebase of `main` into the PR), reuses the verdict of the latest review instead of
+  running Claude again. Details in [Reuse of an unchanged diff](#reuse-of-an-unchanged-diff).
 - **Metrics.** Cost, duration, turns and token usage from the Claude run are written to the job
   summary, the review body and `metrics.json` in the `review-pr-<n>` artifact.
 
@@ -59,9 +65,51 @@ Drafts are skipped; marking a PR ready for review triggers the review.
 | `REVIEW_MODEL`                   | repository variable | `claude-opus-5-5` | Model for the review                           |
 | `REVIEW_MAX_BUDGET_USD`          | repository variable | `30`              | Abort a runaway review                         |
 | `REVIEW_MIN_BLOCKING_CONFIDENCE` | repository variable | `0.6`             | Below this, blocking becomes advisory          |
+| `REVIEW_REUSE_UNCHANGED`         | repository variable | `true`            | `false` reviews every push, even unchanged     |
 
 Without the secret the review job ends with a notice and nothing is posted. To make the review
 mandatory, require the status check `review` in the branch protection of `main`.
+
+## Reuse of an unchanged diff
+
+`prepare.mjs` computes a fingerprint of the change (`reuse.mjs`, `changeFingerprint`): a SHA-256
+over the full diff from the merge base to the head (`git diff --full-index --binary -M`, no external
+diff or textconv drivers), the PR title and description, and the messages of the non-merge commits.
+Any changed line, whitespace, file mode, rename or binary content changes it. Taking over `main`
+does not, as long as `main` did not touch a file the PR changes: then the base blob ids in the diff
+differ and the PR is reviewed again. A plain `git patch-id` is not used because it ignores
+whitespace and line numbers, so a carried-over finding could point at the wrong line.
+
+The fingerprint does not cover what the change does together with the rest of `main`: a new
+caller on `main` of a function the PR changes, or a semantic conflict in files the PR does not
+touch, is not a reason for a re-review. The fixer's merge commits and commit ids are not covered
+either.
+
+The verdict is reused only when all of the following hold; otherwise the review runs normally:
+
+- the run is a `pull_request` run (eval mode always reviews) and `REVIEW_REUSE_UNCHANGED` is not
+  `false`;
+- the reviewer is loaded from the base revision (not the bootstrap case);
+- the latest review with a marker that `github-actions[bot]` posted on the PR (the same lookup as
+  for resolved findings; reviews by anyone else are ignored, and model text cannot contain a
+  marker) is for an earlier head, records a complete review (Claude finished with `success`) and
+  names the run that produced it;
+- its fingerprint equals the current one;
+- its reviewer identity equals the current one: a hash of the trusted `.github/review` tree, the
+  trusted `review.yml`, `REVIEW_MODEL` and `REVIEW_MIN_BLOCKING_CONFIDENCE`. A change to any of
+  them forces a fresh review;
+- the `review-pr-<n>` artifact of that run can be downloaded (retention 30 days; every carried-over
+  run uploads its own copy) and its `findings.json` matches the marker: same PR, head, fingerprint,
+  reviewer, complete, and a blocking count that matches its findings.
+
+On reuse the Claude step is skipped. The new run's artifact contains the earlier findings document
+for the new head (with `meta.carried_from`), so blocking findings stay blocking and the fixer sees
+them. The publish job re-checks that the latest marker on the PR is still the source, posts a short
+review "Diff unchanged since `<sha>`, verdict carried over" with the blocking findings and a new
+marker, and sets the `review` status from the earlier verdict (`failure` stays `failure`). A
+re-run for the same head always reviews again.
+
+The review job needs `actions: read` for the download; Claude still has only Read, Grep and Glob.
 
 ## Fork pull requests
 

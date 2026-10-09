@@ -2,6 +2,7 @@ import {
   mdiAccountGroupOutline,
   mdiBookArrowDownOutline,
   mdiCogOutline,
+  mdiPowerPlugOutline,
   mdiShieldAccountOutline,
   mdiTextBoxSearchOutline,
 } from '@mdi/js';
@@ -19,7 +20,7 @@ export interface UserMenuItem {
 export const ADMIN_ROLES = ['owner', 'admin'] as const;
 
 /**
- * Administration entries of the user menu (users, roles, settings, skill directories, audit). They are listed below
+ * Administration entries of the user menu (users, roles, settings, skill directories, connections, audit). They are listed below
  * the personal entries, under an "Administration" header, and only for the roles they name.
  */
 export const ADMIN_MENU_ITEMS: UserMenuItem[] = [
@@ -49,6 +50,13 @@ export const ADMIN_MENU_ITEMS: UserMenuItem[] = [
     title: 'Skill directories',
     icon: mdiBookArrowDownOutline,
     to: { name: 'admin-skill-directories' },
+    roles: ADMIN_ROLES,
+  },
+  {
+    key: 'admin-connections',
+    title: 'Connections',
+    icon: mdiPowerPlugOutline,
+    to: { name: 'admin-connections' },
     roles: ADMIN_ROLES,
   },
   {

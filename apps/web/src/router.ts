@@ -38,6 +38,11 @@ export const router = createRouter({
       component: () => import('./views/IssueView.vue'),
       props: true,
     },
+    {
+      path: '/decisions',
+      name: 'decisions',
+      component: () => import('./views/DecisionsView.vue'),
+    },
     { path: '/org', name: 'org', component: () => import('./views/OrgView.vue') },
     { path: '/memory', name: 'memory', component: () => import('./views/MemoryView.vue') },
     { path: '/chats', name: 'chats', component: () => import('./views/ChatsView.vue') },
@@ -95,6 +100,12 @@ export const router = createRouter({
       path: '/admin/skill-directories',
       name: 'admin-skill-directories',
       component: () => import('./views/admin/AdminSkillSourcesView.vue'),
+      meta: { admin: true },
+    },
+    {
+      path: '/admin/connections',
+      name: 'admin-connections',
+      component: () => import('./views/admin/AdminConnectionsView.vue'),
       meta: { admin: true },
     },
     {

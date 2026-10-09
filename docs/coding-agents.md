@@ -113,7 +113,7 @@ Key settings (names checked against the Claude Code settings reference for 2.1.2
 | `sandbox.filesystem.allowWrite`                                                                                                                     | `/tmp/cvx-cache` (package caches on the unit's private `/tmp`)                                                                                               |
 | `sandbox.credentials.envVars`                                                                                                                       | `deny` for the OAuth token, API key/auth token, gateway headers and run token                                                                                |
 | `permissions.blockReadsOutsideWorkingDirectories`                                                                                                   | `true`: file tools refuse reads outside the clone; Bash loses `/home`, `/root`, `/srv`, `/mnt`, ...                                                          |
-| `permissions.allow`                                                                                                                                 | `Bash`, `Edit(//<clone>/**)`, `Skill`, `mcp__conclavix`                                                                                                      |
+| `permissions.allow`                                                                                                                                 | `Bash`, `Edit(//<clone>/**)`, `Skill`, `mcp__conclavix`, plus `mcp__<name>` for each connection server in the run's MCP config                               |
 | `permissions.deny`                                                                                                                                  | `Read(//proc/**)`, `Read(//sys/**)`, `Read(//run/**)`, `Read(//etc/conclavix/**)`, `Edit(//<clone>/.git/**)`, WebFetch, WebSearch, Agent, Task, NotebookEdit |
 | `allowManagedPermissionRulesOnly`, `allowManagedHooksOnly`, `disableAllHooks`, `permissions.disableBypassPermissionsMode`                           | rules come from this file only, no hooks, no bypass mode                                                                                                     |
 
@@ -141,6 +141,8 @@ lines (bash reads a pipe byte by byte, so nothing of the prompt is consumed), ac
 process's environment, which Bash cannot read (scrub, PID namespace, `credentials` deny) and the
 file tools may not read (`Read(//proc/**)` deny, read block).
 
+Header values of the agent's connection MCP servers ([connections.md](connections.md)) travel
+here as `CONCLAVIX_MCP_HEADER_<n>`; like the run bearer they are on the `credentials` deny list.
 Project secrets the board assigned to the agent ([secrets.md](secrets.md)) travel in the same
 block, ahead of these variables, under the names the board chose; the wrapper accepts any
 upper-case name that is not reserved. Unlike the variables above they are meant for Bash and are
@@ -271,8 +273,9 @@ the commit and the sync in the usual case; each git call after a run is capped a
 run's cost is stored before committing, so even a run the scheduler closes in that phase keeps it.
 
 Helper (`/etc/conclavix/agent-sandbox.json`, optional, root:root 0644): paths, user and group
-names, the base domain allowlist, hidden paths and the maximum limits; see
-`deploy/agent-sandbox/agent-sandbox.json.example` and `DEFAULTS` in `config.mjs`.
+names, the base domain allowlist, hidden paths, the maximum limits and `mcpAllowedAddresses`
+(private networks a run may open for connection MCP servers, [connections.md](connections.md));
+see `deploy/agent-sandbox/agent-sandbox.json.example` and `DEFAULTS` in `config.mjs`.
 
 ## Installation
 

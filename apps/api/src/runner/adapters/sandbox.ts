@@ -111,6 +111,7 @@ export function sandboxCommand(
     String(limits.diskLimitMb),
     ...(target.skillsDir ? ['--skills', target.skillsDir] : []),
     ...options.extraDomains.flatMap((domain) => ['--allow-domain', domain]),
+    ...(input.allowAddresses ?? []).flatMap((address) => ['--allow-address', address]),
     '--',
     ...claudeArgs,
   ];

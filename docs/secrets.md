@@ -71,6 +71,13 @@ Not covered: what the agent writes into files of the clone (and so into commits)
 documents or memories through the MCP tools, or anything it sends over the network. Treat a
 secret given to an agent as known to that agent.
 
+## Storage shared with connections
+
+Connection credentials ([connections.md](connections.md)) are kept in the same `secrets`
+collection and sealed the same way, with `connectionId` and `credentialKey` set and no variable
+name; instance connections have no project. They never appear on the Secrets tab and never
+become environment variables of their own.
+
 ## Permissions and audit
 
 | Action                                    | Owner                            | Admin | Member, viewer |

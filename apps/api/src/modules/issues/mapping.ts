@@ -22,4 +22,13 @@ export const toIssue = (doc: IssueDoc): Issue => ({
   checkoutRunId: doc.checkoutRunId ? doc.checkoutRunId.toHexString() : null,
   delegatedBy: doc.delegatedBy ? doc.delegatedBy.toHexString() : null,
   branch: doc.branch ?? null,
+  awaitingBoard: doc.awaitingBoard
+    ? {
+        decisionId: doc.awaitingBoard.decisionId.toHexString(),
+        since: doc.awaitingBoard.since,
+        question: doc.awaitingBoard.question,
+        options: doc.awaitingBoard.options,
+        askedBy: doc.awaitingBoard.askedBy.toHexString(),
+      }
+    : null,
 });

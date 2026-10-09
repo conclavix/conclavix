@@ -1,5 +1,7 @@
 import type { Collections } from '../db.js';
+import { ensureConnectionIndexes } from './connections.js';
 import { ensureSecretIndexes } from './secrets.js';
+import { ensureDecisionIndexes } from './decisions.js';
 
 const NOTIFICATION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
@@ -44,6 +46,7 @@ export async function ensureIndexes(collections: Collections): Promise<void> {
   await collections.issues.createIndex({ closedAt: -1 });
   await collections.issues.createIndex({ createdAt: -1 });
   await collections.issues.createIndex({ projectId: 1, columnId: 1 });
+  await ensureDecisionIndexes(collections);
   await collections.comments.createIndex({ issueId: 1, _id: 1 });
   await collections.comments.createIndex({ createdAt: -1 });
   await collections.memories.createIndex(
@@ -65,6 +68,7 @@ export async function ensureIndexes(collections: Collections): Promise<void> {
   );
   await collections.agents.createIndex({ skillIds: 1 });
   await ensureSecretIndexes(collections);
+  await ensureConnectionIndexes(collections);
   await collections.wakes.createIndex(
     { agentId: 1, issueId: 1 },
     { unique: true, partialFilterExpression: { processedAt: null } },

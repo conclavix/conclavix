@@ -5,6 +5,8 @@ import { agentExists, assertNoOpenChildren, isClosed } from './graph.js';
 
 /**
  * Check that an issue may move to `status` and record the implied closedAt in `changes`.
+ * Leaving in_review clears awaitingBoard: the board question belongs to in_review. The caller
+ * withdraws the decision record afterwards (withdrawDecision) unless an answer settled it.
  * Callers hold the issue-graph and org-chart locks.
  */
 export async function applyStatusChange(
@@ -14,6 +16,9 @@ export async function applyStatusChange(
   changes: Partial<IssueDoc>,
   session: ClientSession,
 ): Promise<void> {
+  if (status !== 'in_review' && current.awaitingBoard) {
+    changes.awaitingBoard = null;
+  }
   const wasClosed = isClosed(current.status);
   const willBeClosed = isClosed(status);
   if (willBeClosed && !wasClosed) {

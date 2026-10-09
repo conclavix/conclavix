@@ -21,7 +21,7 @@ async function projectSecrets(
   for await (const doc of database.collections.secrets.find()) {
     try {
       found.push({
-        name: doc.envName,
+        name: doc.envName ?? doc.name,
         value: box.open(doc.valueEncrypted, secretContext(doc._id)),
       });
     } catch {

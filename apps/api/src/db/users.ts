@@ -1,5 +1,5 @@
 import type { ObjectId } from 'mongodb';
-import type { MfaPolicy, Preferences, Role } from '@conclavix/core';
+import type { Preferences, Role } from '@conclavix/core';
 
 /** The better-auth user document, read and updated natively for roles and bans. */
 export interface UserDoc {
@@ -21,35 +21,6 @@ export interface SessionDoc {
   userId: ObjectId;
   token: string;
   expiresAt: Date;
-}
-
-export interface ApiTokenDoc {
-  _id: ObjectId;
-  userId: ObjectId;
-  name: string;
-  prefix: string;
-  tokenHash: string;
-  createdAt: Date;
-  expiresAt: Date | null;
-  lastUsedAt: Date | null;
-}
-
-export interface SmtpSettingsDoc {
-  host?: string;
-  port?: number;
-  secure?: boolean;
-  user?: string;
-  passEncrypted?: string;
-  from?: string;
-}
-
-export interface SettingsDoc {
-  _id: string;
-  instanceName?: string;
-  mfaPolicy?: MfaPolicy;
-  models?: string[];
-  smtp?: SmtpSettingsDoc;
-  updatedAt: Date;
 }
 
 /** Board-side authors of an audit entry; agents acting through the agent API are added below. */

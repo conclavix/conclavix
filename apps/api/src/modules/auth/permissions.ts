@@ -30,7 +30,7 @@ export const CAPABILITY_DESCRIPTIONS: Readonly<Record<Capability, string>> = {
     'Create, change and remove agents; choose which agents work in which project; edit the org chart and the skill library; import skills from directories; manage issue workspaces; plan with the lead in CEO chats and approve its plans',
   users: 'Invite users, change roles, ban, reset passwords and 2FA, delete users',
   settings:
-    'Change instance settings, skill directory sources and project secrets (MFA policy, SMTP and revealing secret values stay owner-only)',
+    'Change instance settings, skill directory sources, project secrets and connections (MFA policy, SMTP and revealing secret values stay owner-only)',
   audit: 'Read the security audit log',
 };
 
@@ -71,6 +71,12 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, Capability>> = {
   'PATCH /api/projects/:id/secrets/:secretId': 'settings',
   'DELETE /api/projects/:id/secrets/:secretId': 'settings',
   'POST /api/projects/:id/secrets/:secretId/reveal': 'settings',
+  // Connections to external systems hold credentials; allowing private networks is owner-only.
+  'GET /api/connections': 'settings',
+  'POST /api/connections': 'settings',
+  'PATCH /api/connections/:id': 'settings',
+  'DELETE /api/connections/:id': 'settings',
+  'POST /api/connections/:id/test': 'settings',
   // Issue workspaces: admin and owner only.
   'POST /api/issues/:ref/workspace': 'agents',
   'POST /api/issues/:ref/workspace/sync': 'agents',
@@ -120,6 +126,10 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, Capability>> = {
   'GET /api/issues/:ref/documents/:key/revisions': 'read',
   'GET /api/issues/:ref/documents/:key/revisions/:revision': 'read',
   'PUT /api/issues/:ref/documents/:key': 'work',
+  'GET /api/decisions': 'read',
+  'GET /api/decisions/count': 'read',
+  'POST /api/decisions/:id/answer': 'work',
+  'POST /api/decisions/:id/dismiss': 'work',
   'GET /api/runs': 'read',
   'GET /api/runs/:id': 'read',
   'GET /api/runs/:id/events': 'read',
