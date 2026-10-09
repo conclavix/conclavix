@@ -88,6 +88,14 @@ function childCreated(child: IssueDetail): void {
         <v-chip v-for="label in issue.labels" :key="label" variant="outlined">{{ label }}</v-chip>
         <v-chip v-if="liveIssue.checkoutRunId" color="primary">agent working</v-chip>
         <v-chip
+          v-if="liveIssue.awaitingBoard"
+          color="warning"
+          :to="{ name: 'decisions' }"
+          data-test="issue-awaiting-board"
+        >
+          awaiting board decision
+        </v-chip>
+        <v-chip
           v-if="issue.branch && project"
           :prepend-icon="mdiSourceBranch"
           variant="outlined"

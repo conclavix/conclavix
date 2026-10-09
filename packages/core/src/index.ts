@@ -11,6 +11,7 @@ export * from './domain/agent.js';
 export * from './domain/issue.js';
 export * from './domain/board.js';
 export * from './domain/collaboration.js';
+export * from './domain/decision.js';
 export * from './domain/run.js';
 export * from './domain/memory.js';
 export * from './domain/user.js';

@@ -18,6 +18,8 @@ import { AvatarRepository } from './modules/avatars/repository.js';
 import { registerAvatarRoutes } from './modules/avatars/routes.js';
 import { CommentRepository } from './modules/comments/repository.js';
 import { registerCommentRoutes } from './modules/comments/routes.js';
+import { registerDecisionRoutes } from './modules/decisions/routes.js';
+import { DecisionService } from './modules/decisions/service.js';
 import { DocumentRepository } from './modules/documents/repository.js';
 import { registerDocumentRoutes } from './modules/documents/routes.js';
 import { IssueRepository } from './modules/issues/repository.js';
@@ -241,6 +243,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   });
   registerIssueRoutes(app, new IssueRepository(options.database));
   registerCommentRoutes(app, new CommentRepository(options.database));
+  registerDecisionRoutes(app, new DecisionService(options.database));
   registerDocumentRoutes(app, new DocumentRepository(options.database));
   registerRunRoutes(app, new RunRepository(collections));
   registerOverviewRoutes(app, new OverviewService(collections));

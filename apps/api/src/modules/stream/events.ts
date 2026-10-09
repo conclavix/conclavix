@@ -2,7 +2,15 @@ import type { ChangeStreamDocument, Document } from 'mongodb';
 import { avatarUrl } from '../avatars/url.js';
 
 export type StreamEventType =
-  'run' | 'run_event' | 'issue' | 'comment' | 'agent' | 'agent_link' | 'org_layout' | 'org';
+  | 'run'
+  | 'run_event'
+  | 'issue'
+  | 'comment'
+  | 'agent'
+  | 'agent_link'
+  | 'org_layout'
+  | 'org'
+  | 'decision';
 
 export interface StreamEvent {
   type: StreamEventType;
@@ -18,6 +26,7 @@ const WATCHED: Record<string, StreamEventType> = {
   agent_links: 'agent_link',
   org_layout: 'org_layout',
   org: 'org',
+  decisions: 'decision',
 };
 
 /** Collections whose deletions the board sees, as `{ id, deleted: true }`. */
@@ -29,6 +38,20 @@ const hex = (value: unknown): unknown =>
   value && typeof value === 'object' && 'toHexString' in value
     ? (value as { toHexString(): string }).toHexString()
     : value;
+
+function awaitingBoard(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const awaiting = value as Record<string, unknown>;
+  return {
+    decisionId: hex(awaiting['decisionId']),
+    since: awaiting['since'],
+    question: awaiting['question'],
+    options: awaiting['options'],
+    askedBy: hex(awaiting['askedBy']),
+  };
+}
 
 function summarize(type: StreamEventType, doc: Document): Record<string, unknown> {
   switch (type) {
@@ -64,6 +87,7 @@ function summarize(type: StreamEventType, doc: Document): Record<string, unknown
         columnId: doc['columnId'] ?? null,
         assigneeAgentId: hex(doc['assigneeAgentId']),
         checkoutRunId: hex(doc['checkoutRunId']),
+        awaitingBoard: awaitingBoard(doc['awaitingBoard']),
       };
     case 'comment':
       return {
@@ -91,6 +115,13 @@ function summarize(type: StreamEventType, doc: Document): Record<string, unknown
       return { agentId: hex(doc['_id']), x: doc['x'], y: doc['y'] };
     case 'org':
       return { leadAgentId: hex(doc['leadAgentId']) };
+    case 'decision':
+      return {
+        id: hex(doc['_id']),
+        issueId: hex(doc['issueId']),
+        projectId: hex(doc['projectId']),
+        status: doc['status'],
+      };
   }
 }
 
