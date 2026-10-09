@@ -339,6 +339,26 @@ describe('board decisions', () => {
     expect(await openCount()).toBe(0);
   });
 
+  it('keeps an issue awaiting the board in_review when a sub-issue or its blocker closes', async () => {
+    const child = await fx.issue({ title: 'Benchmark both', parentId: issue.id });
+    const blocker = await fx.issue({ title: 'Collect numbers' });
+    await fx.patch(issue.key, { blockedBy: [blocker.id] });
+    (await ask({ question: 'Postgres or Mongo?' })).close();
+    await fx.patch(child.key, { status: 'done' });
+    await fx.patch(blocker.key, { status: 'done' });
+    const doc = await issueDoc();
+    expect(doc?.status).toBe('in_review');
+    expect(doc?.awaitingBoard).toMatchObject({ question: 'Postgres or Mongo?' });
+    expect(await openCount()).toBe(1);
+    expect(
+      await ctx.database.collections.wakes.countDocuments({
+        issueId: new ObjectId(issue.id),
+        reason: { $in: ['subissue_closed', 'unblocked'] },
+        processedAt: null,
+      }),
+    ).toBe(0);
+  });
+
   it('answers 404 for unknown or malformed decision ids', async () => {
     const missing = await ctx.request({
       method: 'POST',
