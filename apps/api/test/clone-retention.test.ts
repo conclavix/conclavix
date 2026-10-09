@@ -121,12 +121,24 @@ describe('CloneRetention', () => {
       },
     }).sweep();
 
-    expect(audited).toHaveLength(3);
-    expect(audited[0]).toMatchObject({
-      action: 'issue.workspace_removed',
-      actor: { type: 'system' },
-      details: { projectId: PROJECT, force: false, reason: 'retention' },
-    });
+    expect(audited).toHaveLength(4);
+    expect(audited).toContainEqual(
+      expect.objectContaining({
+        action: 'issue.workspace_removed',
+        actor: { type: 'system' },
+        details: expect.objectContaining({
+          projectId: PROJECT,
+          issueKey: 'CVX-1',
+          force: false,
+          reason: 'retention',
+        }),
+      }),
+    );
+    expect(audited).toContainEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({ issueKey: 'CVX-3', reason: 'retention_set_aside' }),
+      }),
+    );
     expect(result?.removed.map((clone) => `${clone.kind}:${clone.name}`).sort()).toEqual([
       'closed:CVX-1',
       'closed:CVX-2',
@@ -224,6 +236,23 @@ describe('CloneRetention', () => {
     });
     const result = await sweeper.sweep();
     expect(result?.errors).toBe(1);
+    expect(existsSync(clone)).toBe(true);
+  });
+
+  it('keeps a clone whose issue was reopened before the removal took the lock', async () => {
+    const done = issue('CVX-1', 'done', 5);
+    const clone = await syncedClone('CVX-1');
+    const database = fakeDatabase([done]);
+    let lookups = 0;
+    (database.collections.issues as unknown as { findOne: unknown }).findOne = () => {
+      lookups += 1;
+      // First the check before the lock, then the re-check inside it: reopened meanwhile.
+      return Promise.resolve(lookups === 1 ? done : { ...done, status: 'todo', closedAt: null });
+    };
+    const result = await retention(database).sweep();
+    expect(lookups).toBe(2);
+    expect(result?.removed).toEqual([]);
+    expect(result?.kept).toBe(1);
     expect(existsSync(clone)).toBe(true);
   });
 

@@ -188,6 +188,7 @@ export class CloneRetention {
     try {
       await assertRemovable(base, path);
       const bytes = await treeBytes(path);
+      if (kind === 'stale') await this.audited({ projectId, name, kind, bytes });
       await rm(path, { recursive: true, force: true });
       this.removed(result, { projectId, name, kind, bytes });
     } catch (error) {
@@ -257,6 +258,7 @@ export class CloneRetention {
       const suffix = `${this.now}-${randomBytes(3).toString('hex')}`;
       moved = join(base, projectId, `.removing-${issue.key}-${suffix}`);
       await rename(path, moved);
+      await this.audited({ projectId, name: issue.key, kind: 'closed', bytes });
       return true;
     };
     if (!(await this.workspace.removeIssueWorkspace(projectId, issue.key, false, canRemove))) {
@@ -265,15 +267,6 @@ export class CloneRetention {
     }
     if (moved) await rm(moved, { recursive: true, force: true });
     this.removed(result, { projectId, name: issue.key, kind: 'closed', bytes });
-    await this.options.audit
-      ?.record({
-        action: 'issue.workspace_removed',
-        actor: { type: 'system' },
-        details: { projectId, issueKey: issue.key, force: false, reason: 'retention', bytes },
-      })
-      .catch((error: unknown) =>
-        this.options.log.warn({ projectId, clone: issue.key, err: error }, 'audit entry failed'),
-      );
   }
 
   /** The issue is still closed since before the cutoff and no run of it is queued or running. */
@@ -285,6 +278,32 @@ export class CloneRetention {
       { limit: 1 },
     );
     return active === 0;
+  }
+
+  /**
+   * `issue.workspace_removed` for a clone that left its place: written right after the rename (or
+   * before deleting a set-aside clone), so an interrupted deletion cannot skip it.
+   */
+  private async audited(clone: RemovedClone): Promise<void> {
+    await this.options.audit
+      ?.record({
+        action: 'issue.workspace_removed',
+        actor: { type: 'system' },
+        details: {
+          projectId: clone.projectId,
+          issueKey: STALE_DIR.exec(clone.name)?.[1] ?? clone.name,
+          clone: clone.name,
+          force: false,
+          reason: clone.kind === 'closed' ? 'retention' : 'retention_set_aside',
+          bytes: clone.bytes,
+        },
+      })
+      .catch((error: unknown) =>
+        this.options.log.warn(
+          { projectId: clone.projectId, clone: clone.name, err: error },
+          'audit entry failed',
+        ),
+      );
   }
 
   private removed(result: SweepResult, clone: RemovedClone): void {
