@@ -1,7 +1,7 @@
 import { DEFAULT_BRANCH, ISSUE_BRANCH_PREFIX, issueBranchName } from '@conclavix/core';
 import { AppError } from '../../errors.js';
-import { RepoMerger } from './merge.js';
 import { NO_REF, OBJECT_ID } from './repo-base.js';
+import { RepoSquasher } from './squash.js';
 
 /** Where `setBranch` keeps the old head of a branch it rewound. */
 export const BACKUP_REF_ROOT = 'refs/backup/';
@@ -39,7 +39,7 @@ const stamp = (now: Date): string => now.toISOString().replace(/[-:]|\.\d+/g, ''
  * replacement for `git reset` in an issue clone. Like the merges, it only writes refs of the bare
  * repository, with compare-and-swap, and never touches `main`.
  */
-export class RepoBrancher extends RepoMerger {
+export class RepoBrancher extends RepoSquasher {
   /**
    * Point `cvx/<issueKey>` at `commit` (a branch or a commit id reachable from a branch or a
    * backup ref). A missing branch is created; an existing one moves forward only, unless

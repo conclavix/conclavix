@@ -270,7 +270,7 @@ It is checked again on every call, so revoking it takes effect within a running 
 
 | Tool                | What                                                                                    |
 | ------------------- | --------------------------------------------------------------------------------------- |
-| `merge_branches`    | Merge `sources` (existing branches, in order) into the issue branch `target`            |
+| `merge_branches`    | Merge `sources` (existing branches, in order) into the issue branch `target`, or squash |
 | `fast_forward_main` | Move `main` to an issue branch that passed review, fast-forward only                    |
 | `get_merge_status`  | Read-only preview: target against main, which sources it contains, which files conflict |
 | `set_branch`        | Point an issue branch at a commit: create, fast-forward, or rewind with a backup ref    |
@@ -314,6 +314,31 @@ commit with two parents (first: the target line) whose author and committer are 
 characters) and `Conclavix-Issue/Run/Agent` trailers. Sources the target already contains are
 skipped. The branch moves once, at the end, with a compare-and-swap `update-ref`; if the branch
 changed meanwhile the call answers 409 and nothing moves.
+
+**Squash merges (releases).** `merge_branches({ target, sources, squash: true, message, paths? })`
+merges the sources exactly as above, but the target receives one new commit instead of the merge
+commits: its parent is the current target tip (or `base` when the target is created), its tree
+is the tree the no-ff merges would produce, and the sources do not become parents. The
+intermediate merge commits are unreferenced objects. The whole commit message comes from the
+caller: `message` is required, its first line is the subject (non-empty, at most 100
+characters), the rest is an optional body, and lines starting with `Conclavix-...:` are refused
+(400 `invalid_message`) because the server appends the `Conclavix-Issue/Run/Agent` trailers
+itself. `paths` (squash only, 1 to 20 relative directory prefixes) refuses the squash with 409
+`out_of_scope` and the offending files (`outside`, at most 50) when the change against the target
+tip touches anything outside them, so a release can show that only `modules/<name>` changed. The
+answer carries `squash: true`, `commit` (null when the sources changed nothing: then the branch
+stays where it is, `up_to_date`) and `changes` (`files`, `topLevel` directories). Conflicts,
+compare-and-swap, identity and the `branch.merged` audit entry (with `squash: true` and `paths`)
+are the same as for a normal merge. `get_merge_status` with `squash: true` adds a `squash`
+preview: whether all sources merge one after the other (`clean`, `conflictSource`) and the
+`changes` a squash would make.
+
+A release to `main` as one clean commit:
+
+1. `set_branch({ branch: 'cvx/<KEY>', commit: 'main' })` to start the release branch from `main`;
+2. `get_merge_status({ target: 'cvx/<KEY>', sources, squash: true })` to preview it;
+3. `merge_branches({ target: 'cvx/<KEY>', sources, squash: true, message: 'feat(x): ...', paths: ['modules/x'] })`;
+4. verify (review, tests), then `fast_forward_main({ source: 'cvx/<KEY>' })`.
 
 **Conflicts.** The first source that conflicts ends the call with 409 `merge_conflict` and a
 report: `source`, `conflicts` (path and git's conflict kinds such as `contents` or
