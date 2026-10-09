@@ -1,6 +1,7 @@
 import { isIP } from 'node:net';
 import { isAbsolute, normalize } from 'node:path';
 import { DOMAIN } from './config.mjs';
+import { registryUrlValid } from './registry.mjs';
 
 export class UsageError extends Error {
   constructor(message) {
@@ -80,6 +81,17 @@ const RUN_OPTIONS = {
     repeat: true,
   },
   '--tool': { key: 'tools', parse: parseTool, repeat: true },
+  // The run's package registry; the helper accepts only one listed in packageRegistries.
+  '--package-registry': {
+    key: 'packageRegistry',
+    parse: (v) => (registryUrlValid(v) ? v : null),
+  },
+  // yes: the public npm registry stays reachable next to the run's registry.
+  '--registry-fallback': {
+    key: 'registryFallback',
+    parse: (v) => (v === 'yes' ? true : v === 'no' ? false : null),
+    fallback: false,
+  },
   // A private address of an MCP server the run's connections use; the helper keeps only those
   // inside the configured mcpAllowedAddresses (see agent-run.mjs).
   '--allow-address': {

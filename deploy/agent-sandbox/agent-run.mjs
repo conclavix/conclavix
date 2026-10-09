@@ -24,6 +24,7 @@ import {
   systemdRunArgs,
   unitName,
 } from './policy.mjs';
+import { applyRegistry } from './registry.mjs';
 import { assertRealDirectoryBelow, chownTree, diskUsage } from './tree.mjs';
 
 const SYSTEMCTL = '/usr/bin/systemctl';
@@ -246,6 +247,7 @@ async function check(argv, probe) {
   const addresses = partitionAddresses(options.allowAddresses, config.mcpAllowedAddresses);
   options.allowAddresses = addresses.kept;
   options.refusedAddresses = addresses.refused;
+  applyRegistry(options, config);
   const ids = await resolveIds(config);
   const clone = clonePath(config, options);
   await assertRealDirectoryBelow(config.codeRoot, clone);

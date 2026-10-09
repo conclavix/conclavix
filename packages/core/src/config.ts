@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { mfaPolicySchema } from './domain/user.js';
+import { packageRegistrySchema, packageScopesSchema } from './domain/package-registry.js';
 import { sandboxToolsSchema } from './domain/sandbox-tools.js';
 import { hasControlCharacter } from './domain/workspace.js';
 
@@ -110,6 +111,23 @@ const baseConfigSchema = z.object({
    * comma-separated NAME_BIN=/absolute/path pairs. Each name is set to its path inside the sandbox.
    */
   CODE_SANDBOX_TOOLS: sandboxToolsSchema,
+  /**
+   * Package registry sandboxed coding runs install from (docs/package-registry.md); the root
+   * helper must list the same URL. Unset: npm and PyPI as before.
+   */
+  CODE_PACKAGE_REGISTRY: packageRegistrySchema,
+  /** Keep the public npm registry reachable next to CODE_PACKAGE_REGISTRY; off: registry only. */
+  CODE_PACKAGE_REGISTRY_FALLBACK: z.stringbool().default(false),
+  /** npm scopes published on the registry (for example @acme), named in the run prompt. */
+  CODE_PACKAGE_REGISTRY_SCOPES: packageScopesSchema,
+  /**
+   * Days after which the runner removes the clone of a done or cancelled issue and set-aside
+   * `.stale-*` clones (docs/workspace.md#clone-retention). 0 keeps them forever.
+   */
+  CODE_CLONE_RETENTION_DAYS: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.coerce.number().int().min(0).max(3650).default(3),
+  ),
   WEB_ROOT: z.string().min(1).optional(),
   MEMORY_BACKEND: z.enum(['builtin', 'hindsight']).default('builtin'),
   HINDSIGHT_URL: z.url().optional(),

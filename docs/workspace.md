@@ -386,3 +386,33 @@ syncs the branch. They share the group `cvx-code` (`group_add` with `WORKSPACE_G
   repositories or other clones.
 
 See [Coding agents](coding-agents.md) for the sandbox and the installation steps.
+
+## Clone retention
+
+Git itself is cheap (a clone's `.git` is about as large as the project repository), but
+`node_modules` and build output make a clone hundreds of megabytes. The runner therefore removes
+clones that are no longer needed, a few minutes after it starts and then hourly:
+
+- the clone of an issue that has been `done` or `cancelled` for longer than
+  `CODE_CLONE_RETENTION_DAYS` (runner setting, default `3`; the issue's `closedAt`, or
+  `updatedAt` for issues closed before that field existed);
+- clones the runner set aside as `.stale-<KEY>-<time>-<random>` (see the coding-agent
+  reconciliation) longer ago than the same period. Their commits were kept as
+  `conflict/<KEY>/<sha>` branches when they were set aside; uncommitted files in them are lost.
+
+`0` turns the sweep off and keeps every clone. A clone stays when:
+
+- its issue is open again, or has no issue in this project (it is left alone);
+- a run of the issue is queued or running (checked before and again under the clone's lock,
+  right before the removal);
+- any ref of the clone holds commits the project repository lacks (the same check as
+  `DELETE /api/issues/:ref/workspace` without `force`; logged as a warning);
+- its path is not a real directory directly below `workspaces/<projectId>/` with no symlink on
+  the way (symlinked entries are never followed or removed).
+
+The branch `cvx/<KEY>` stays in the project repository. When the issue is reopened, its next
+coding run (or `POST /api/issues/:ref/workspace`) clones the branch afresh. Each removal is
+logged (`removed issue clone`, with the size in bytes) and each sweep ends with
+`clone retention sweep finished` (removed, bytes freed, kept, errors) in the runner log. The
+runner removes the clones as `cvx-runner`; that works because the tree is shared through the
+group `cvx-code` (directories `2770`), also for clones the API created.

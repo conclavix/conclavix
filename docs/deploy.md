@@ -47,6 +47,10 @@ replica set key with `openssl rand -base64 756 | tr -d '\n'`.
 Ports are published on `127.0.0.1` only. Override them with `API_PORT`, `MONGO_PORT` and
 `REDIS_PORT` if they are taken.
 
+Optional services behind compose profiles: `hindsight` ([Memory backend](#memory-backend)) and
+`registry`, a Verdaccio that caches npm and serves internal packages to coding runs
+([Package registry](package-registry.md)).
+
 The api container keeps the project git repositories in `/var/lib/conclavix/workspace`, a named
 volume unless `WORKSPACE_DIR` (in `deploy/.env`) names a host directory owned by uid 1000. See
 [Project workspaces](workspace.md) for layout, backup and the host directory on a production VM.
@@ -139,7 +143,8 @@ run, so neither stored allow rules nor hooks take effect.
 
 This is the default (`codeAccess: none`). Agents with code access `write` (coding agents) get
 Edit, Write and Bash, but only inside a per-run sandbox started by a root helper. They need the
-extra setup in [Coding agents](coding-agents.md#installation); without it their runs fail with
+extra setup in [Coding agents](coding-agents.md#installation) (optionally with a
+[package registry](package-registry.md) that caches npm and serves internal packages); without it their runs fail with
 an explanation and read-only agents are not affected.
 
 Independently of code access, agents with the git integration permission (off by default) may

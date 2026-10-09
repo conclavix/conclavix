@@ -12,3 +12,5 @@ deploy/mongo.env
 deploy/redis.env
 deploy/runner.env
 data/
+deploy/verdaccio/config.yaml
+deploy/verdaccio/htpasswd

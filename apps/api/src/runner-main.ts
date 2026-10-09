@@ -11,6 +11,7 @@ import { CodeRuns } from './runner/code-run.js';
 import { AuditLog } from './modules/audit/audit.js';
 import {
   releaseClone,
+  packageRegistryOf,
   usableSandboxTools,
   type SandboxOptions,
 } from './runner/adapters/sandbox.js';
@@ -35,6 +36,8 @@ async function codingAgents(
     return {};
   }
   const { CodeWorkspace } = await import('./modules/workspace/commit.js');
+  const { CloneRetention, scheduleCloneRetention } =
+    await import('./modules/workspace/retention.js');
   const workspace = new CodeWorkspace(resolve(config.WORKSPACE_ROOT), {
     gitBin: config.GIT_BIN,
     agentEmailDomain: config.AGENT_EMAIL_DOMAIN,
@@ -45,8 +48,19 @@ async function codingAgents(
     log.warn({ tool: tool.name, path: tool.path }, 'sandbox tool is not executable; left out');
   }
   log.info(
-    { helper, workspaceRoot: workspace.root, tools: tools.usable.map((tool) => tool.name) },
+    {
+      helper,
+      workspaceRoot: workspace.root,
+      tools: tools.usable.map((tool) => tool.name),
+      packageRegistry: config.CODE_PACKAGE_REGISTRY ?? null,
+      cloneRetentionDays: config.CODE_CLONE_RETENTION_DAYS,
+    },
     'coding agents enabled',
+  );
+  // Timers are unref'd; a sweep in progress at shutdown simply stops with the process.
+  scheduleCloneRetention(
+    new CloneRetention(database, workspace, { days: config.CODE_CLONE_RETENTION_DAYS, log }),
+    log,
   );
   return {
     sandbox: {
@@ -60,6 +74,7 @@ async function codingAgents(
       },
       extraDomains: config.CODE_SANDBOX_DOMAINS,
       tools: tools.usable,
+      packageRegistry: packageRegistryOf(config),
     },
     codeRuns: new CodeRuns(
       database,
@@ -102,6 +117,7 @@ async function main(): Promise<void> {
     timeoutMs: config.RUN_TIMEOUT_MINUTES * 60_000,
     knownSecrets: knownSecretsFromEnv(process.env),
     sandboxTools: sandbox?.tools ?? [],
+    packageRegistry: packageRegistryOf(config),
     adapters: {
       claude_cli: new ClaudeCliAdapter({
         bin: config.CLAUDE_BIN,

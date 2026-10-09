@@ -84,8 +84,47 @@ services:
       - '127.0.0.1:${HINDSIGHT_PORT:-8888}:8888'
     restart: unless-stopped
 
+  # Optional package registry for coding runs (docs/package-registry.md):
+  # docker compose --profile registry up -d registry
+  registry:
+    image: verdaccio/verdaccio:6.10.5@sha256:560744912b640ddc0f23cd475d296b663b656c0fcfa0ba17cc5ca1cbcb620225
+    profiles: ['registry']
+    volumes:
+      - registry-storage:/verdaccio/storage
+      - ./verdaccio/config.yaml:/verdaccio/conf/config.yaml:ro
+      - ./verdaccio/htpasswd:/verdaccio/conf/htpasswd:ro
+    # A fixed address on a network of its own, reachable from the host: the sandbox of a coding
+    # run may connect to exactly this address (the helper's packageRegistries), and nothing but
+    # the registry listens on it.
+    networks:
+      registry:
+        ipv4_address: ${REGISTRY_ADDRESS:-172.31.250.10}
+    # For publishing from the host (CI, the operator); the sandbox uses the address above.
+    ports:
+      - '127.0.0.1:${REGISTRY_PORT:-4873}:4873'
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: ['ALL']
+    security_opt: ['no-new-privileges:true']
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:4873/-/ping']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+networks:
+  registry:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${REGISTRY_SUBNET:-172.31.250.0/28}
+
 volumes:
   workspace-data:
   hindsight-data:
   mongo-data:
   redis-data:
+  registry-storage:

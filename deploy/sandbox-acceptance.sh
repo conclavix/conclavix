@@ -41,6 +41,20 @@ for entry in "${tool_entries[@]}"; do
   tool_args+=(--tool "$entry")
   tool_names+=("${entry%%=*}")
 done
+# Package registry (CODE_PACKAGE_REGISTRY, docs/package-registry.md): from this environment, else
+# the runner's. The helper must list the same URL in packageRegistries.
+runner_value() { if [[ -r $RUNNER_ENV ]]; then sed -n "s/^$1=//p" "$RUNNER_ENV" | tail -1 | tr -d "\"' "; fi; }
+[[ -z ${CODE_PACKAGE_REGISTRY+set} ]] && CODE_PACKAGE_REGISTRY=$(runner_value CODE_PACKAGE_REGISTRY)
+[[ -z ${CODE_PACKAGE_REGISTRY_FALLBACK+set} ]] && CODE_PACKAGE_REGISTRY_FALLBACK=$(runner_value CODE_PACKAGE_REGISTRY_FALLBACK)
+registry_args=()
+registry_only=0
+if [[ -n ${CODE_PACKAGE_REGISTRY:-} ]]; then
+  [[ $CODE_PACKAGE_REGISTRY == */ ]] || CODE_PACKAGE_REGISTRY="$CODE_PACKAGE_REGISTRY/"
+  case ${CODE_PACKAGE_REGISTRY_FALLBACK:-false} in
+  true | 1 | yes | on) registry_args=(--package-registry "$CODE_PACKAGE_REGISTRY" --registry-fallback yes) ;;
+  *) registry_args=(--package-registry "$CODE_PACKAGE_REGISTRY" --registry-fallback no) registry_only=1 ;;
+  esac
+fi
 PROJECT=ffffffffffffffffffacce55
 TAG=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 WITH_CLAUDE=0
@@ -114,6 +128,9 @@ for name in $(compgen -e | grep -E '^[A-Z][A-Z0-9_]*_BIN$'); do
   if [[ -x ${!name} ]]; then echo "ACC tool-$name=yes"; else echo "ACC tool-$name=no"; fi
 done
 r mongod-version '[[ -n ${MONGOD_BIN:-} ]] && "$MONGOD_BIN" --version'
+# Package registry: the unit's variable and an install lookup through it (no proxy at this layer).
+echo "ACC registry-env=${npm_config_registry:-unset}"
+r registry-npm-view '[[ -n ${npm_config_registry:-} ]] && timeout 90 npm view is-number version'
 r bwrap 'bwrap --unshare-all --die-with-parent --ro-bind / / --proc /proc --dev /dev -- /bin/true'
 for port in 27017 6379 4000 3300; do
   r "netns-$port" "bwrap --unshare-all --die-with-parent --ro-bind / / --proc /proc --dev /dev -- bash -c 'timeout 3 bash -c \"echo > /dev/tcp/127.0.0.1/$port\"'"
@@ -138,7 +155,7 @@ probe() {
   shift 2
   printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n\n' "$fake" |
     "${helper_env[@]}" /usr/bin/node "$HELPER" probe "$work/probe.sh" run --run-id "$run_id" --project "$PROJECT" \
-      --issue ACC-1 --status-tag "$TAG" "${tool_args[@]}" "$@" -- "$mode" "$literal_arg" 2>"$work/stderr" || true
+      --issue ACC-1 --status-tag "$TAG" "${tool_args[@]}" "${registry_args[@]}" "$@" -- "$mode" "$literal_arg" 2>"$work/stderr" || true
 }
 result_of() { grep -o '"result":"[a-z-]*"' "$work/stderr" | tail -1 | cut -d'"' -f4; }
 
@@ -185,6 +202,15 @@ else
   fi
 fi
 
+echo '--- package registry'
+if [[ -z ${CODE_PACKAGE_REGISTRY:-} ]]; then
+  echo 'NOTICE  CODE_PACKAGE_REGISTRY is not configured; registry checks skipped'
+  check 'no registry variable in the unit' "$(value registry-env)" unset
+else
+  check 'npm_config_registry set in the unit' "$(value registry-env)" "$CODE_PACKAGE_REGISTRY"
+  check 'npm view through the registry from the unit' "$(value registry-npm-view)" yes
+fi
+
 echo '--- limits'
 probe 0000000000000000000acc02 memory --memory-max 256M >/dev/null
 check 'memory limit stops the unit' "$(result_of)" oom-kill
@@ -223,6 +249,8 @@ r token-file 'cat /etc/conclavix/runner.env'
 r example 'curl -sf --max-time 10 https://example.com'
 r example-noproxy 'curl -sf --noproxy "*" --max-time 10 https://example.com'
 r registry 'curl -sf --max-time 20 https://registry.npmjs.org/left-pad'
+echo "ACCIN registry-env=${npm_config_registry:-unset}"
+r npm-view 'timeout 120 npm view is-number version'
 for port in 27017 6379 4000 3300; do r "local-$port" "timeout 3 bash -c 'echo > /dev/tcp/127.0.0.1/$port'"; done
 r git-hooks 'echo x > .git/hooks/pre-commit'
 r claude-settings 'mkdir -p .claude && echo {} > .claude/settings.json'
@@ -322,7 +350,7 @@ STUB
     -p 'CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_AUDIT_WRITE CAP_KILL CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH' \
     -p "ReadWritePaths=-$CODE_ROOT -/run/conclavix-agent" \
     /usr/bin/sudo -n "$HELPER" run --run-id 0000000000000000000acc10 --project "$PROJECT" \
-    --issue ACC-1 --status-tag "$TAG" --runtime-max-sec 600 "${tool_args[@]}" -- \
+    --issue ACC-1 --status-tag "$TAG" --runtime-max-sec 600 "${tool_args[@]}" "${registry_args[@]}" -- \
     -p --input-format stream-json --output-format stream-json --verbose \
     --no-session-persistence --strict-mcp-config --mcp-config "$mcp_config" --max-budget-usd 1 \
     --setting-sources user \
@@ -351,7 +379,7 @@ for (const line of lines) {
     if (block.type !== 'tool_result') continue;
     const use = uses.get(block.tool_use_id);
     const text = Array.isArray(block.content) ? block.content.map((c) => c.text ?? '').join('\n') : String(block.content ?? '');
-    if (use?.name === 'Bash') for (const m of text.matchAll(/^ACCIN [a-z0-9-]+=[A-Za-z0-9_,\/.-]+$/gm)) console.log(m[0]);
+    if (use?.name === 'Bash') for (const m of text.matchAll(/^ACCIN [a-z0-9-]+=[A-Za-z0-9_,\/.:-]+$/gm)) console.log(m[0]);
     if (use?.name === 'Read') {
       const target = String(use.input?.file_path ?? '');
       const label = target.endsWith('environ-link') ? 'read-link' : target === '/proc/self/environ' ? 'read-environ' : null;
@@ -390,7 +418,15 @@ PARSE
   check 'runner.env unreadable from Bash' "$(inner token-file)" no
   check 'non-allowlisted domain refused' "$(inner example)" no
   check 'no direct connection without the proxy' "$(inner example-noproxy)" no
-  check 'registry.npmjs.org reachable through the proxy' "$(inner registry)" yes
+  if ((registry_only)); then
+    check 'registry.npmjs.org not reachable (registry only)' "$(inner registry)" no
+  else
+    check 'registry.npmjs.org reachable through the proxy' "$(inner registry)" yes
+  fi
+  check 'npm view works in the Bash sandbox' "$(inner npm-view)" yes
+  if [[ -n ${CODE_PACKAGE_REGISTRY:-} ]]; then
+    check 'npm_config_registry visible to Bash' "$(inner registry-env)" "$CODE_PACKAGE_REGISTRY"
+  fi
   for port in 27017 6379 4000 3300; do check "127.0.0.1:$port unreachable from Bash" "$(inner "local-$port")" no; done
   check '.git/hooks not writable' "$(inner git-hooks)" no
   check '.claude/settings.json not writable' "$(inner claude-settings)" no

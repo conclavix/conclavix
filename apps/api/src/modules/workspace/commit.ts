@@ -218,8 +218,8 @@ export class CodeWorkspace extends Workspace {
 
   /**
    * Move an issue clone out of the way, next to where it was, as `.stale-<KEY>-<time>-<random>`
-   * (never committed, never deleted by the server), so the next workspace call clones the server
-   * branch afresh. Returns the new path.
+   * (never committed; removed by the clone retention after CODE_CLONE_RETENTION_DAYS, see
+   * retention.ts), so the next workspace call clones the server branch afresh. Returns the new path.
    */
   private async setAside(projectId: string, issueKey: string): Promise<string> {
     const dir = this.issueWorkspaceDir(projectId, issueKey);

@@ -346,12 +346,18 @@ export class Workspace extends MediaReader {
    * Remove the clone of an issue; its branch in the bare repository stays. Any ref of the clone
    * (HEAD, any branch, tag or stash) holding commits the bare repository lacks makes this a 409
    * unless `force` is set. Uncommitted files are not inspected (that would run git inside the
-   * clone) and are always discarded.
+   * clone) and are always discarded. `canRemove` runs under the clone's lock right before the
+   * removal; when it returns false nothing is removed and the result is false.
    */
-  async removeIssueWorkspace(projectId: string, issueKey: string, force: boolean): Promise<void> {
+  async removeIssueWorkspace(
+    projectId: string,
+    issueKey: string,
+    force: boolean,
+    canRemove: () => Promise<boolean> = () => Promise.resolve(true),
+  ): Promise<boolean> {
     const dir = this.issueWorkspaceDir(projectId, issueKey);
     await this.ensureRepo(projectId);
-    await this.queue.run(`workspace:${projectId}:${issueKey}`, async () => {
+    return this.queue.run(`workspace:${projectId}:${issueKey}`, async () => {
       if (!(await exists(dir))) throw notFound(`Workspace of ${issueKey}`);
       if (!force) {
         const gitDir = await this.cloneGitDir(projectId, issueKey);
@@ -363,7 +369,9 @@ export class Workspace extends MediaReader {
           });
         }
       }
+      if (!(await canRemove())) return false;
       await rm(dir, { recursive: true, force: true });
+      return true;
     });
   }
 }

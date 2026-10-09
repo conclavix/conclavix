@@ -1,6 +1,9 @@
 import type { SandboxTool } from '@conclavix/core';
 import type { AgentDoc, IssueDoc } from '../db.js';
 import type { OrgPosition } from '../modules/org/position.js';
+import type { PackageRegistry } from './adapters/sandbox.js';
+
+export type { PackageRegistry };
 
 const names = (agents: OrgPosition['delegates'], none: string): string =>
   agents.length === 0 ? none : agents.map((agent) => `${agent.name} (${agent.role})`).join(', ');
@@ -62,6 +65,25 @@ export function sandboxToolsHint(tools: readonly SandboxTool[]): string[] {
   ];
 }
 
+/**
+ * Where packages come from in a coding run with a package registry (CODE_PACKAGE_REGISTRY):
+ * npm, pnpm and yarn are already pointed at it, and internal packages are installed from it.
+ */
+export function packageRegistryHint(registry: PackageRegistry | null | undefined): string[] {
+  if (!registry) return [];
+  const scopes = registry.scopes.length > 0 ? registry.scopes.join(', ') : '@<scope>';
+  return [
+    `Packages: npm, pnpm and yarn install from the package registry ${registry.url} (already`,
+    'configured in your environment; it caches the public npm registry).',
+    registry.fallback
+      ? 'The public npm registry stays reachable as a fallback.'
+      : 'The public npm registry is not reachable directly; do not point installs elsewhere.',
+    `Internal packages (${scopes}/...) are published there: add them as normal dependencies and`,
+    'install them from the registry; never copy them into the repository or a scratch directory.',
+    'You cannot publish to the registry; ask in a comment when an internal package is missing.',
+  ];
+}
+
 /** What the platform does after a run that left no trace; every agent should know it. */
 export const SILENT_RUN_HINT = [
   'Always leave a trace: a run that ends without a comment, status change, document, sub-issue or',
@@ -76,7 +98,12 @@ export function buildPrompt(
   issue: IssueDoc,
   reason: string,
   position: OrgPosition,
-  options: { code?: boolean; git?: boolean; tools?: readonly SandboxTool[] } = {},
+  options: {
+    code?: boolean;
+    git?: boolean;
+    tools?: readonly SandboxTool[];
+    registry?: PackageRegistry | null;
+  } = {},
 ): string {
   return [
     `You are ${agent.name}${agent.title ? `, ${agent.title}` : ''} (role: ${agent.role}) in a Conclavix organisation.`,
@@ -103,6 +130,7 @@ export function buildPrompt(
     '6. Before you stop, memory_save what will still matter later (decisions, pitfalls, rules), not progress.',
     ...(options.code ? ['', ...SCREENSHOT_HINT] : []),
     ...(options.code && options.tools?.length ? ['', ...sandboxToolsHint(options.tools)] : []),
+    ...(options.code && options.registry ? ['', ...packageRegistryHint(options.registry)] : []),
     ...(options.git ? ['', ...GIT_INTEGRATION_HINT] : []),
     '',
     ...SILENT_RUN_HINT,

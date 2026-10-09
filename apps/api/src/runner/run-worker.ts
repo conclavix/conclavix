@@ -13,10 +13,10 @@ import {
 } from '../db.js';
 import { AppError } from '../errors.js';
 import type { Scheduler } from '../modules/scheduler/scheduler.js';
-import type { Adapter, AdapterResult } from './adapters/types.js';
+import type { Adapter, AdapterResult, AdapterRunInput } from './adapters/types.js';
 import { RunEventRecorder } from './events.js';
 import { loadPosition } from '../modules/org/position.js';
-import { buildPrompt } from './prompt.js';
+import { buildPrompt, type PackageRegistry } from './prompt.js';
 import { buildChatPrompt } from './chat-prompt.js';
 import { recordChatReply } from '../modules/chats/turns.js';
 import { Redactor, errorKind, redactOrWithhold, type KnownSecret } from './redact.js';
@@ -26,7 +26,6 @@ import type { AuditLog } from '../modules/audit/audit.js';
 import type { SecretBox } from '../modules/settings/secret-box.js';
 import { loadRunConnections, noConnections, recordConnectionUse } from './run-connections.js';
 import type { RunConnections } from './run-connections.js';
-import type { AdapterRunInput } from './adapters/types.js';
 import {
   loadRunSecrets,
   recordSecretUse,
@@ -81,6 +80,8 @@ export interface RunWorkerOptions {
   audit?: AuditLog;
   /** Host programs coding runs may execute (CODE_SANDBOX_TOOLS), listed in their prompt. */
   sandboxTools?: readonly SandboxTool[];
+  /** The package registry of coding runs (CODE_PACKAGE_REGISTRY), named in their prompt. */
+  packageRegistry?: PackageRegistry | null;
 }
 
 const CODE_UNAVAILABLE: AdapterResult = {
@@ -111,9 +112,7 @@ export class RunWorker {
   async process(runId: ObjectId): Promise<AdapterResult | null> {
     const { collections } = this.database;
     const run = await collections.runs.findOne({ _id: runId, status: 'queued' });
-    if (!run) {
-      return null;
-    }
+    if (!run) return null;
     if (isChatRun(run)) {
       // Chat runs never touch code; their workspace only holds the materialised skills.
       const workspace = join(
@@ -363,6 +362,7 @@ export class RunWorker {
           code: context !== null,
           git: agent.gitIntegration === true,
           tools: this.options.sandboxTools ?? [],
+          registry: this.options.packageRegistry ?? null,
         },
       ),
       workspace,

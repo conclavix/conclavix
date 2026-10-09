@@ -1,0 +1,62 @@
+# Verdaccio for Conclavix coding runs (docs/package-registry.md). Copy to config.yaml next to this
+# file and replace @internal with the npm scope(s) of your own packages.
+storage: /verdaccio/storage/data
+plugins: /verdaccio/plugins
+
+# No web UI: agents and CI talk to the registry API only.
+web:
+  enable: false
+
+auth:
+  htpasswd:
+    # Created by the operator (htpasswd -B); mounted read-only.
+    file: /verdaccio/conf/htpasswd
+    # No self-registration: `npm adduser` cannot create accounts.
+    max_users: -1
+    algorithm: bcrypt
+
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+    # Keep downloaded tarballs; package metadata is refreshed after maxage.
+    cache: true
+    maxage: 10m
+    timeout: 60s
+    max_fails: 5
+    fail_timeout: 5m
+
+packages:
+  # Internal packages: served from this registry only, never looked up on npmjs (no dependency
+  # confusion). Only users from the htpasswd file may publish. Repeat the block per scope.
+  '@internal/*':
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+
+  # Everything else is a cached copy of npmjs. Nobody may publish under these names: the group
+  # below has no members, so a public name cannot be shadowed by an upload here.
+  '@*/*':
+    access: $all
+    publish: cvx-nobody
+    unpublish: cvx-nobody
+    proxy: npmjs
+
+  '**':
+    access: $all
+    publish: cvx-nobody
+    unpublish: cvx-nobody
+    proxy: npmjs
+
+server:
+  keepAliveTimeout: 60
+
+middlewares:
+  # Forwards `npm audit` to npmjs.
+  audit:
+    enabled: true
+
+# Large enough for tarballs of internal packages.
+max_body_size: 100mb
+
+# Levels: fatal, error, warn, http (one line per request), info, debug, trace.
+log: { type: stdout, format: pretty, level: warn }
