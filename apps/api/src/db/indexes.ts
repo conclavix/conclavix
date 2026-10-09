@@ -1,4 +1,5 @@
 import type { Collections } from '../db.js';
+import { ensureDecisionIndexes } from './decisions.js';
 
 const NOTIFICATION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
@@ -22,9 +23,7 @@ export async function ensureIndexes(collections: Collections): Promise<void> {
   await collections.issues.createIndex({ closedAt: -1 });
   await collections.issues.createIndex({ createdAt: -1 });
   await collections.issues.createIndex({ projectId: 1, columnId: 1 });
-  await collections.decisions.createIndex({ status: 1, askedAt: 1 });
-  await collections.decisions.createIndex({ status: 1, decidedAt: -1 });
-  await collections.decisions.createIndex({ issueId: 1, status: 1 });
+  await ensureDecisionIndexes(collections);
   await collections.comments.createIndex({ issueId: 1, _id: 1 });
   await collections.comments.createIndex({ createdAt: -1 });
   await collections.memories.createIndex(

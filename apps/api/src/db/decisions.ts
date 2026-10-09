@@ -40,3 +40,10 @@ export interface IssueDecisionFields {
 export interface DecisionCollections {
   decisions: Collection<DecisionDoc>;
 }
+
+/** Open questions oldest first, recently decided ones, and the open question of an issue. */
+export async function ensureDecisionIndexes(collections: DecisionCollections): Promise<void> {
+  await collections.decisions.createIndex({ status: 1, askedAt: 1 });
+  await collections.decisions.createIndex({ status: 1, decidedAt: -1 });
+  await collections.decisions.createIndex({ issueId: 1, status: 1 });
+}
