@@ -15,6 +15,7 @@ import { Redactor, errorKind, redactOrWithhold } from '../../runner/redact.js';
 import { generateRunToken } from '../runs/tokens.js';
 import { evaluateWake, type GateResult } from './gates.js';
 import { pauseOnLoop, pauseThreshold, runMadeProgress } from './loop-detection.js';
+import { escalateSilentRun } from './silent-run.js';
 import { sweepStalls, type StallSweep } from './stall-watchdog.js';
 import { ACTIONABLE_STATUSES, requestWake } from './wakes.js';
 import { disabledAssignments } from '../projects/agent-access.js';
@@ -58,6 +59,8 @@ export interface RunOutcome {
   status: FinishedRunStatus;
   costUsd: number;
   error?: string;
+  /** The agent's final message, redacted; quoted when the run is escalated as silent. */
+  finalText?: string | null;
 }
 
 const log = pino({ name: 'scheduler' });
@@ -308,6 +311,9 @@ export class Scheduler {
         { ...run, issueId: run.issueId },
         pauseThreshold(agent, this.options.idleRunsAfterBackoff),
         now,
+      );
+      await escalateSilentRun(this.database, run, outcome.finalText, now).catch((error: unknown) =>
+        log.error({ err: error, runId: run._id.toHexString() }, 'silent run escalation failed'),
       );
     }
     return run;

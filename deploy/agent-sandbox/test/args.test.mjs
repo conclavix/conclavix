@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { assertWithinLimits, parseRunArgs, UsageError, validateClaudeArgs } from '../args.mjs';
+import {
+  assertWithinLimits,
+  parseRunArgs,
+  parseTool,
+  UsageError,
+  validateClaudeArgs,
+} from '../args.mjs';
 import { DEFAULTS } from '../config.mjs';
 
 const RUN = 'a'.repeat(24);
@@ -336,5 +342,59 @@ describe('headerValueValid', () => {
     ]) {
       assert.ok(!headerValueValid(value), String(value));
     }
+  });
+});
+
+describe('--tool', () => {
+  it('parses repeated NAME_BIN=/path values', () => {
+    const options = parseRunArgs(
+      base('--tool', 'MONGOD_BIN=/usr/local/lib/t/mongod', '--tool', 'CHROME_BIN=/opt/c/chrome'),
+    );
+    assert.deepEqual(options.tools, [
+      { name: 'MONGOD_BIN', path: '/usr/local/lib/t/mongod' },
+      { name: 'CHROME_BIN', path: '/opt/c/chrome' },
+    ]);
+    assert.deepEqual(parseRunArgs(base()).tools, []);
+  });
+
+  it('refuses names that are not *_BIN or that a reserved prefix claims', () => {
+    for (const name of [
+      'MONGOD',
+      'mongod_BIN',
+      '_BIN',
+      'CLAUDE_CODE_BIN',
+      'LD_BIN',
+      'NODE_X_BIN',
+    ]) {
+      assert.equal(parseTool(`${name}=/usr/bin/true`), null, name);
+    }
+  });
+
+  it('refuses relative, unnormalised or unusual paths', () => {
+    for (const path of [
+      'usr/bin/true',
+      '/usr/../bin/true',
+      '/usr/./bin/true',
+      '/usr//bin/true',
+      '/usr/bin/',
+      '/usr/bin/a b',
+      '/usr/bin/%n',
+      '/usr/bin/$HOME',
+      '/',
+      '',
+    ]) {
+      assert.equal(parseTool(`X_BIN=${path}`), null, path);
+    }
+    assert.equal(parseTool('X_BIN'), null);
+  });
+
+  it('refuses a name given twice and more than 16 tools', () => {
+    assert.throws(
+      () => parseRunArgs(base('--tool', 'A_BIN=/usr/bin/a', '--tool', 'A_BIN=/usr/bin/b')),
+      UsageError,
+    );
+    const many = Array.from({ length: 17 }, (_, i) => ['--tool', `T${i}_BIN=/usr/bin/t${i}`]);
+    assert.throws(() => parseRunArgs(base(...many.flat())), /too many --tool/);
+    assert.throws(() => parseRunArgs(base('--tool', 'X_BIN=relative')), UsageError);
   });
 });

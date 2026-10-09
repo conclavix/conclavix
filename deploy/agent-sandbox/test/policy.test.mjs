@@ -178,7 +178,7 @@ describe('unitProperties', () => {
     }
   });
 
-  it('never puts an environment variable into the unit', () => {
+  it('puts no environment variable into the unit without sandbox tools', () => {
     const args = systemdRunArgs(config, options, ids);
     assert.ok(
       !args.some(
@@ -206,5 +206,45 @@ describe('unitProperties', () => {
       `/run/conclavix-agent/${'a'.repeat(24)}/probe.sh`,
     ]);
     assert.ok(!command.some((arg) => arg.endsWith('/agent-exec.sh') && arg.startsWith('/run/')));
+  });
+});
+
+describe('sandbox tools', () => {
+  const withTools = parseRunArgs([
+    'run',
+    '--run-id',
+    'a'.repeat(24),
+    '--project',
+    'b'.repeat(24),
+    '--issue',
+    'CVX-3',
+    '--status-tag',
+    'c'.repeat(32),
+    '--tool',
+    'MONGOD_BIN=/usr/local/lib/test-tools/mongodb/bin/mongod',
+    '--tool',
+    'CHROME_BIN=/usr/local/lib/test-tools/chrome/chrome-headless-shell',
+    '--',
+    '-p',
+    '--strict-mcp-config',
+    '--permission-mode',
+    'dontAsk',
+    '--setting-sources',
+    'user',
+  ]);
+  const properties = unitProperties(config, withTools, ids);
+
+  it('sets one Environment= property per tool, holding only its path', () => {
+    assert.deepEqual(
+      properties.filter((p) => p.startsWith('Environment')),
+      [
+        'Environment=MONGOD_BIN=/usr/local/lib/test-tools/mongodb/bin/mongod',
+        'Environment=CHROME_BIN=/usr/local/lib/test-tools/chrome/chrome-headless-shell',
+      ],
+    );
+  });
+
+  it('adds no mount for a tool', () => {
+    assert.ok(!properties.some((p) => /Paths=.*test-tools/.test(p)));
   });
 });

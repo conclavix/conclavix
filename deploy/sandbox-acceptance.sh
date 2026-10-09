@@ -28,6 +28,19 @@ if [[ ! ${LAN_PROBE_HOST:-} =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
   echo 'LAN_PROBE_HOST is not set and no default gateway was found; set it to a LAN IPv4 address' >&2
   exit 2
 fi
+# Host test tools (CODE_SANDBOX_TOOLS, NAME_BIN=/path,...): from this environment, else the runner's.
+if [[ -z ${CODE_SANDBOX_TOOLS+set} && -r $RUNNER_ENV ]]; then
+  CODE_SANDBOX_TOOLS=$(sed -n 's/^CODE_SANDBOX_TOOLS=//p' "$RUNNER_ENV" | tail -1 | tr -d "\"' ")
+fi
+tool_args=()
+tool_names=()
+IFS=, read -ra tool_entries <<<"${CODE_SANDBOX_TOOLS:-}"
+for entry in "${tool_entries[@]}"; do
+  entry=${entry// /}
+  [[ -z $entry ]] && continue
+  tool_args+=(--tool "$entry")
+  tool_names+=("${entry%%=*}")
+done
 PROJECT=ffffffffffffffffffacce55
 TAG=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 WITH_CLAUDE=0
@@ -96,6 +109,11 @@ r write-usr 'echo x > /usr/local/cvx-acceptance'
 r write-tmp 'echo x > /tmp/x'
 r lan 'timeout 3 bash -c "echo > /dev/tcp/$LAN_PROBE_HOST/53"'
 r registry 'timeout 10 bash -c "echo > /dev/tcp/registry.npmjs.org/443"'
+# Host test tools: names only, and whether each path runs (they are not secret, but stay generic).
+for name in $(compgen -e | grep -E '^[A-Z][A-Z0-9_]*_BIN$'); do
+  if [[ -x ${!name} ]]; then echo "ACC tool-$name=yes"; else echo "ACC tool-$name=no"; fi
+done
+r mongod-version '[[ -n ${MONGOD_BIN:-} ]] && "$MONGOD_BIN" --version'
 r bwrap 'bwrap --unshare-all --die-with-parent --ro-bind / / --proc /proc --dev /dev -- /bin/true'
 for port in 27017 6379 4000 3300; do
   r "netns-$port" "bwrap --unshare-all --die-with-parent --ro-bind / / --proc /proc --dev /dev -- bash -c 'timeout 3 bash -c \"echo > /dev/tcp/127.0.0.1/$port\"'"
@@ -120,7 +138,7 @@ probe() {
   shift 2
   printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n\n' "$fake" |
     "${helper_env[@]}" /usr/bin/node "$HELPER" probe "$work/probe.sh" run --run-id "$run_id" --project "$PROJECT" \
-      --issue ACC-1 --status-tag "$TAG" "$@" -- "$mode" "$literal_arg" 2>"$work/stderr" || true
+      --issue ACC-1 --status-tag "$TAG" "${tool_args[@]}" "$@" -- "$mode" "$literal_arg" 2>"$work/stderr" || true
 }
 result_of() { grep -o '"result":"[a-z-]*"' "$work/stderr" | tail -1 | cut -d'"' -f4; }
 
@@ -153,6 +171,20 @@ check 'sandboxed commands have no direct internet' "$(value netns-example)" no
 check 'clone handed back to cvx-runner:cvx-code' "$(stat -c %U:%G "$clones/ACC-1/own.txt")" cvx-runner:cvx-code
 check 'unit result' "$(result_of)" success
 
+echo '--- host test tools'
+if ((${#tool_names[@]} == 0)); then
+  echo 'NOTICE  CODE_SANDBOX_TOOLS is not configured; tool checks skipped'
+else
+  for name in "${tool_names[@]}"; do
+    check "$name set and executable in the unit" "$(value "tool-$name")" yes
+  done
+  if [[ " ${tool_names[*]} " == *' MONGOD_BIN '* ]]; then
+    check '"$MONGOD_BIN" --version runs in the unit' "$(value mongod-version)" yes
+  else
+    echo 'NOTICE  MONGOD_BIN is not configured; mongod check skipped'
+  fi
+fi
+
 echo '--- limits'
 probe 0000000000000000000acc02 memory --memory-max 256M >/dev/null
 check 'memory limit stops the unit' "$(result_of)" oom-kill
@@ -184,6 +216,8 @@ echo "ACCIN credential-env=$(compgen -e | grep -Ev '^(CLOUDSDK_PROXY_|ACCEPTANCE
 echo "ACCIN proxy-env=$(names '^CLOUDSDK_PROXY_')"
 echo "ACCIN anthropic-env=$(names '^ANTHROPIC_')"
 echo "ACCIN home=$HOME"
+echo "ACCIN tools-env=$(compgen -e | grep -E '^[A-Z][A-Z0-9_]*_BIN$' | sort | paste -sd, - | grep . || echo none)"
+r mongod-version '[[ -n ${MONGOD_BIN:-} ]] && "$MONGOD_BIN" --version'
 echo "ACCIN procs=$(ls /proc | grep -c '^[0-9]' || true)"
 r token-file 'cat /etc/conclavix/runner.env'
 r example 'curl -sf --max-time 10 https://example.com'
@@ -288,7 +322,7 @@ STUB
     -p 'CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_AUDIT_WRITE CAP_KILL CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH' \
     -p "ReadWritePaths=-$CODE_ROOT -/run/conclavix-agent" \
     /usr/bin/sudo -n "$HELPER" run --run-id 0000000000000000000acc10 --project "$PROJECT" \
-    --issue ACC-1 --status-tag "$TAG" --runtime-max-sec 600 -- \
+    --issue ACC-1 --status-tag "$TAG" --runtime-max-sec 600 "${tool_args[@]}" -- \
     -p --input-format stream-json --output-format stream-json --verbose \
     --no-session-persistence --strict-mcp-config --mcp-config "$mcp_config" --max-budget-usd 1 \
     --setting-sources user \
@@ -362,6 +396,15 @@ PARSE
   check '.claude/settings.json not writable' "$(inner claude-settings)" no
   # HOME is writable on purpose (Claude keeps ~/.claude there); it lives on the unit's private /tmp.
   check 'HOME is the per-run throwaway dir' "$(inner home)" /tmp/cvx-home
+  if ((${#tool_names[@]} > 0)); then
+    # Claude Code's env scrub must leave the tool variables alone, and bubblewrap must run them.
+    check 'tool variables visible to Bash' "$(inner tools-env)" "$(printf '%s\n' "${tool_names[@]}" | sort | paste -sd, -)"
+    if [[ " ${tool_names[*]} " == *' MONGOD_BIN '* ]]; then
+      check '"$MONGOD_BIN" --version runs in the Bash sandbox' "$(inner mongod-version)" yes
+    fi
+  else
+    echo 'NOTICE  CODE_SANDBOX_TOOLS is not configured; tool checks in Bash skipped'
+  fi
   check 'no credentials file in HOME' "$(inner home-credentials)" no
   check 'clone writable from Bash' "$(inner write-clone)" yes
   check 'Read tool denied on /proc/self/environ' "$(inner read-environ)" denied

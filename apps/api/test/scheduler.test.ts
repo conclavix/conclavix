@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { CommentRepository } from '../src/modules/comments/repository.js';
 import { IssueRepository } from '../src/modules/issues/repository.js';
 import { createTestContext, type TestContext } from './helpers.js';
-import { createFixture, type Fixture } from './scheduler-helpers.js';
+import { createFixture, progressDuring, type Fixture } from './scheduler-helpers.js';
 
 describe('scheduler', () => {
   let ctx: TestContext;
@@ -60,6 +60,7 @@ describe('scheduler', () => {
     expect(await fx.scheduler.processPendingWakes()).toEqual({ run: 0, skip: 0, defer: 1 });
     const first = fx.dispatcher.runs[0];
     if (!first) throw new Error('expected a run');
+    await progressDuring(ctx, first);
     await fx.scheduler.finishRun(first._id, { status: 'succeeded', costUsd: 0.1 });
     expect((await issueDoc(issue.id))?.checkoutRunId).toBeNull();
 
@@ -129,6 +130,7 @@ describe('scheduler', () => {
   const finishLast = async (now: Date, costUsd = 0.1) => {
     const run = fx.dispatcher.runs.at(-1);
     if (!run) throw new Error('expected a run');
+    await progressDuring(ctx, run);
     await fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd }, now);
   };
 

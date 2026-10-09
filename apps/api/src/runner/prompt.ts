@@ -1,3 +1,4 @@
+import type { SandboxTool } from '@conclavix/core';
 import type { AgentDoc, IssueDoc } from '../db.js';
 import type { OrgPosition } from '../modules/org/position.js';
 
@@ -48,13 +49,34 @@ export const GIT_INTEGRATION_HINT = [
   'merge before you edit files the sources also change.',
 ];
 
+/**
+ * The host programs a coding run may execute (CODE_SANDBOX_TOOLS). The sandbox refuses to list or
+ * stat their directories (reads outside the clone are blocked), so the agent must use the path.
+ */
+export function sandboxToolsHint(tools: readonly SandboxTool[]): string[] {
+  if (tools.length === 0) return [];
+  return [
+    'Test tools on this host, not on PATH: each variable below is set in your environment. Run them',
+    `by path (for example "$${tools[0]?.name ?? ''}"); their directories cannot be listed.`,
+    ...tools.map((tool) => `- ${tool.name}=${tool.path} is set`),
+  ];
+}
+
+/** What the platform does after a run that left no trace; every agent should know it. */
+export const SILENT_RUN_HINT = [
+  'Always leave a trace: a run that ends without a comment, status change, document, sub-issue or',
+  'commit counts as ended without a result. The platform then posts your last message on the',
+  'issue and escalates to whoever delegated it (or to the board). If something blocks you',
+  '(a missing tool, access, information), say what with add_comment before you stop.',
+];
+
 /** The task prompt for one run; the agent's own instructions go into the system prompt. */
 export function buildPrompt(
   agent: AgentDoc,
   issue: IssueDoc,
   reason: string,
   position: OrgPosition,
-  options: { code?: boolean; git?: boolean } = {},
+  options: { code?: boolean; git?: boolean; tools?: readonly SandboxTool[] } = {},
 ): string {
   return [
     `You are ${agent.name}${agent.title ? `, ${agent.title}` : ''} (role: ${agent.role}) in a Conclavix organisation.`,
@@ -80,7 +102,10 @@ export function buildPrompt(
     '   and wakes you; set in_review again if you are still waiting.',
     '6. Before you stop, memory_save what will still matter later (decisions, pitfalls, rules), not progress.',
     ...(options.code ? ['', ...SCREENSHOT_HINT] : []),
+    ...(options.code && options.tools?.length ? ['', ...sandboxToolsHint(options.tools)] : []),
     ...(options.git ? ['', ...GIT_INTEGRATION_HINT] : []),
+    '',
+    ...SILENT_RUN_HINT,
     '',
     'Stop when this step is done. You will be woken again when something changes.',
   ].join('\n');

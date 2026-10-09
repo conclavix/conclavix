@@ -27,6 +27,31 @@ function memoryBytes(value) {
   return Number(match[1]) * (match[2] === 'G' ? 1024 ** 3 : 1024 ** 2);
 }
 
+/**
+ * A host program the run may execute by path, as `NAME_BIN=/absolute/path` (CODE_SANDBOX_TOOLS on
+ * the runner). Keep in step with packages/core/src/domain/sandbox-tools.ts; the prefixes are those
+ * reserved for project secrets (agent-exec.sh), so a tool cannot set a variable claude or the
+ * programs in the sandbox read. The path's character set keeps the systemd Environment= value
+ * free of quoting and % specifiers.
+ */
+const TOOL_NAME = /^[A-Z][A-Z0-9_]{0,59}_BIN$/;
+const RESERVED_TOOL_PREFIX =
+  /^(CLAUDE|ANTHROPIC|CONCLAVIX|CVX_|ENABLE_|DISABLE_|LD_|DYLD_|BASH|NODE_|NPM_CONFIG_|XDG_|LC_|SUDO_|SYSTEMD_|DBUS_|GIT_|SSH_|OTEL_|BUN_|PYTHON|PERL|RUBY|GCONV_|GLIBC_|MALLOC_|HIST|COMP_|READLINE_)/;
+const TOOL_PATH = /^(\/[A-Za-z0-9_+-][A-Za-z0-9._+-]*)+$/;
+export const MAX_TOOLS = 16;
+
+/** Parse one `--tool` value; null when it is refused. */
+export function parseTool(value) {
+  const separator = value.indexOf('=');
+  if (separator === -1) return null;
+  const name = value.slice(0, separator);
+  const path = value.slice(separator + 1);
+  if (!TOOL_NAME.test(name) || RESERVED_TOOL_PREFIX.test(name)) return null;
+  if (path.length > 512 || !TOOL_PATH.test(path) || normalize(path) !== path) return null;
+  if (path.split('/').some((part) => part === '.' || part === '..')) return null;
+  return { name, path };
+}
+
 /** Options of `agent-run run`; `required` ones must be given, `repeat` ones may appear often. */
 const RUN_OPTIONS = {
   '--run-id': { key: 'runId', parse: (v) => (OBJECT_ID.test(v) ? v : null), required: true },
@@ -54,6 +79,7 @@ const RUN_OPTIONS = {
     parse: (v) => (DOMAIN.test(v) ? v : null),
     repeat: true,
   },
+  '--tool': { key: 'tools', parse: parseTool, repeat: true },
   // A private address of an MCP server the run's connections use; the helper keeps only those
   // inside the configured mcpAllowedAddresses (see agent-run.mjs).
   '--allow-address': {
@@ -65,7 +91,7 @@ const RUN_OPTIONS = {
 
 /** Parse the helper's own `--name value` options and apply required and default values. */
 function parseOptions(own) {
-  const options = { extraDomains: [], allowAddresses: [] };
+  const options = { extraDomains: [], allowAddresses: [], tools: [] };
   const seen = new Set();
   for (let i = 0; i < own.length; i += 2) {
     const name = own[i];
@@ -99,6 +125,10 @@ export function parseRunArgs(argv, { probe = false } = {}) {
   const options = parseOptions(argv.slice(1, separator));
   if (options.extraDomains.length > 50) throw new UsageError('too many --allow-domain values');
   if (options.allowAddresses.length > 16) throw new UsageError('too many --allow-address values');
+  if (options.tools.length > MAX_TOOLS) throw new UsageError('too many --tool values');
+  if (new Set(options.tools.map((tool) => tool.name)).size !== options.tools.length) {
+    throw new UsageError('--tool names must be unique');
+  }
   const rest = argv.slice(separator + 1);
   options.claudeArgs = probe ? rest : validateClaudeArgs(rest);
   options.mcpServers = probe ? [] : mcpServerNames(options.claudeArgs);

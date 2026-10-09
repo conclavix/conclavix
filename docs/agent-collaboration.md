@@ -227,6 +227,42 @@ Example: Mr. Green delegates integration to the Integrations Agent, which delega
 the PR Reviewer. With `PR Reviewer reports to Mr. Green` set to wake, the closed review wakes the
 Integrations Agent on its integration issue and Mr. Green on his planning issue at the same time.
 
+### Silent runs: escalation
+
+A run can end successfully without leaving anything behind, for example when an agent gives up on
+a missing tool and simply stops. The issue stays `todo` and, until the next heartbeat, nobody
+notices. After every **succeeded** issue run the scheduler therefore checks whether it left a
+trace: progress as above, a commit in the clone (synced or not), a commit or sync error of the
+runner (the work may sit uncommitted in the clone; the error is on the run) or a comment of the
+agent on the issue while it ran. If not, and the issue is still `todo` or `in_progress`, assigned to that agent
+and not taken by another run, it escalates once:
+
+1. A system comment on the issue: `Run <id> ended without a result: ...`, quoting the agent's last
+   message (redacted like the run log, at most 600 characters).
+2. **The delegator** (`delegatedBy`, the agent that created or assigned the issue through
+   `create_subissue`) gets a notification and is woken (`silent_run`) on the issue it delegated
+   from (the one recorded at delegation, else the parent) if that issue is still assigned to it:
+   right away when it is `todo`/`in_progress`; an `in_review` issue that waits for sub-issues is
+   moved back to `in_progress` first, as when a sub-issue closes. When the delegator cannot be
+   woken there (its issue is closed, reassigned, waiting for a board decision or blocked, or the
+   delegator is paused or disabled in the project), it keeps the notification and the issue is
+   handed to the board as in the next point, so the escalation always reaches someone.
+3. **No delegator** (the board created or assigned the issue, the agent delegated to itself, or
+   the delegator no longer exists): the issue moves to `in_review`, where the overview lists it
+   among the issues waiting for the board. It is not a board decision (`awaitingBoard` stays
+   empty), but a board comment answers it like any `in_review` issue (see
+   [Comments and `in_review`](#comments-and-in_review)): the issue moves back to `in_progress`
+   and the agent is woken with the answer. This also stops further runs on the issue until the
+   board has looked at it.
+
+Loop protection: the issue records the escalation (`silentRun`: run, agent, progress count). Until
+the issue makes progress again (its progress counter rises, or a run on it makes progress), the
+assignee changes or the record is replaced, further silent runs are not escalated, so one idle
+streak escalates at most once. Failed, timed-out and cancelled runs (they have their own error
+handling) and chat runs are never escalated. The idle limit, the backoff and the loop pause are
+unchanged and still count every run without progress. The run prompt tells every agent about this
+and asks a blocked agent to say what blocks it with `add_comment` before it stops.
+
 ## Heartbeats and processed wakes
 
 Every minute the scheduler sweeps for actionable, idle issues whose last run is older than

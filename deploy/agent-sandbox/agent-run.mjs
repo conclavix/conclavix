@@ -8,7 +8,13 @@ import { copyFile, chmod, mkdir, readdir, readFile, rm, stat, writeFile } from '
 import { BlockList, isIP } from 'node:net';
 import { join } from 'node:path';
 import { assertWithinLimits, parseReleaseArgs, parseRunArgs, UsageError } from './args.mjs';
-import { assertRootProgram, CONFIG_PATH, loadConfig, resolveIds } from './config.mjs';
+import {
+  assertRootProgram,
+  assertToolProgram,
+  CONFIG_PATH,
+  loadConfig,
+  resolveIds,
+} from './config.mjs';
 import {
   clonePath,
   managedSettings,
@@ -247,6 +253,7 @@ async function check(argv, probe) {
     await assertRealDirectoryBelow(config.runnerWorkspacesRoot, options.skillsDir);
   }
   await assertRootProgram(config.execWrapper);
+  for (const tool of options.tools) await assertToolProgram(config, tool.path);
   if (!(await stat(config.managedSettingsDir)).isDirectory()) {
     throw new Error(`${config.managedSettingsDir} must be a directory`);
   }

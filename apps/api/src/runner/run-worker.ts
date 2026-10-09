@@ -1,5 +1,5 @@
 import pino from 'pino';
-import { CHAT_LIMITS } from '@conclavix/core';
+import { CHAT_LIMITS, type SandboxTool } from '@conclavix/core';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { ObjectId } from 'mongodb';
@@ -79,6 +79,8 @@ export interface RunWorkerOptions {
   secretBox?: SecretBox | null;
   /** Records which runs received which project secrets. */
   audit?: AuditLog;
+  /** Host programs coding runs may execute (CODE_SANDBOX_TOOLS), listed in their prompt. */
+  sandboxTools?: readonly SandboxTool[];
 }
 
 const CODE_UNAVAILABLE: AdapterResult = {
@@ -186,6 +188,7 @@ export class RunWorker {
     await this.scheduler.finishRun(runId, {
       status: result.status,
       costUsd: result.costUsd,
+      ...(result.summary ? { finalText: redact(result.summary) } : {}),
       ...(result.error === undefined
         ? {}
         : {
@@ -356,7 +359,11 @@ export class RunWorker {
         issue,
         run.reason,
         await loadPosition(this.database, agent, issue.projectId),
-        { code: context !== null, git: agent.gitIntegration === true },
+        {
+          code: context !== null,
+          git: agent.gitIntegration === true,
+          tools: this.options.sandboxTools ?? [],
+        },
       ),
       workspace,
       mcpUrl: this.options.mcpUrl,

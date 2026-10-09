@@ -135,3 +135,39 @@ describe('loadConfig', () => {
     );
   });
 });
+
+describe('CODE_SANDBOX_TOOLS', () => {
+  it('is empty by default and parses NAME_BIN=/path pairs', () => {
+    expect(loadConfig(TOKEN).CODE_SANDBOX_TOOLS).toEqual([]);
+    const config = loadConfig({
+      ...TOKEN,
+      CODE_SANDBOX_TOOLS:
+        ' MONGOD_BIN=/opt/tools/mongodb/bin/mongod , CHROME_BIN=/opt/tools/chrome/chrome-headless-shell,',
+    });
+    expect(config.CODE_SANDBOX_TOOLS).toEqual([
+      { name: 'MONGOD_BIN', path: '/opt/tools/mongodb/bin/mongod' },
+      { name: 'CHROME_BIN', path: '/opt/tools/chrome/chrome-headless-shell' },
+    ]);
+  });
+
+  it.each([
+    'MONGOD=/usr/bin/mongod',
+    'mongod_BIN=/usr/bin/mongod',
+    'CLAUDE_BIN=/usr/bin/claude',
+    'LD_PRELOAD_BIN=/usr/lib/x.so',
+    'MONGOD_BIN=relative/mongod',
+    'MONGOD_BIN=/usr/../bin/mongod',
+    'MONGOD_BIN=/usr/bin/',
+    'MONGOD_BIN=/usr/bin/mon god',
+    'MONGOD_BIN=/usr/bin/%h',
+    'MONGOD_BIN',
+    'MONGOD_BIN=/a/b,MONGOD_BIN=/a/c',
+  ])('refuses %s', (value) => {
+    expect(() => loadConfig({ ...TOKEN, CODE_SANDBOX_TOOLS: value })).toThrow(/CODE_SANDBOX_TOOLS/);
+  });
+
+  it('refuses more than 16 tools', () => {
+    const value = Array.from({ length: 17 }, (_, i) => `T${i}_BIN=/usr/bin/t${i}`).join(',');
+    expect(() => loadConfig({ ...TOKEN, CODE_SANDBOX_TOOLS: value })).toThrow(/at most 16/);
+  });
+});
