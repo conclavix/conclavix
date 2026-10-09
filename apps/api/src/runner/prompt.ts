@@ -36,14 +36,32 @@ export const SCREENSHOT_HINT = [
   "issue's branch. Supported: png, jpg, gif, webp, svg up to 10 MB.",
 ];
 
+/** How a coding agent treats git in its working copy; the runner commits, it does not. */
+export const CLONE_GIT_HINT = [
+  'Git in your working copy: the runner commits and syncs your files after the run, on the commit',
+  'the run started from. Do not run git reset, checkout, switch, rebase, merge, pull, stash pop or',
+  'commit there; a run whose HEAD or branch moved is not committed at all. To base work on',
+  'another commit, ask the agent who delegated the issue: an agent with git integration moves',
+  'your branch with set_branch and your next run starts there. Scratch copies, test workspaces',
+  'and other temporary files go to $TMPDIR (unset: /tmp/cvx-cache/scratch), never into the',
+  'working copy: everything left there is committed.',
+];
+
 /** How an agent with the git integration permission integrates branches. */
 export const GIT_INTEGRATION_HINT = [
   'Git integration (you have this permission; it runs on the server, not in a working copy):',
   '- get_merge_status previews a merge: what the target already contains, which files conflict.',
-  '- merge_branches merges existing branches into cvx/<KEY> of your issue or of an issue assigned',
-  '  to you, one merge commit per source. On a conflict nothing changes and you get the files;',
+  '- merge_branches merges existing branches into cvx/<KEY> of your issue, an issue assigned to',
+  '  you, a sub-issue below them or an issue delegated from the same issue as yours (its',
+  '  siblings), one merge commit per source. On a conflict nothing changes and you get the files;',
   '  have them resolved on one of the branches, then merge again.',
-  '- fast_forward_main moves main to an issue branch that passed review, fast-forward only.',
+  '- fast_forward_main moves main to an issue branch that passed review, or to an exact',
+  '  released commit id on one (7 to 40 hex digits), fast-forward only.',
+  '- set_branch points cvx/<KEY> (same branches as merge_branches targets, never main) at a',
+  '  commit id or branch: forward only, unless allowRewind (the old head is kept as backupRef).',
+  '  Use it, never git reset in a working copy, to start an agent on another commit.',
+  '- merge_branches base and set_branch commit take commit ids (full or at least 7 hex digits)',
+  '  that are on a branch of the project.',
   'A merge into your own branch reaches your working copy in your next run, not in this one:',
   'merge before you edit files the sources also change.',
 ];
@@ -79,6 +97,7 @@ export function buildPrompt(
     '   sub-issue or your last blocker closing moves such an in_review issue back to in_progress',
     '   and wakes you; set in_review again if you are still waiting.',
     '6. Before you stop, memory_save what will still matter later (decisions, pitfalls, rules), not progress.',
+    ...(options.code ? ['', ...CLONE_GIT_HINT] : []),
     ...(options.code ? ['', ...SCREENSHOT_HINT] : []),
     ...(options.git ? ['', ...GIT_INTEGRATION_HINT] : []),
     '',

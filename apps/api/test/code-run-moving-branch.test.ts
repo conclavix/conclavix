@@ -42,6 +42,7 @@ describe('CodeRuns.finish with a branch that keeps moving', () => {
       {} as AuditLog,
       {
         agentEmailDomain: 'conclavix.invalid',
+        guardCloneHead: vi.fn().mockResolvedValue({ problems: [], setAside: null }),
         branchTip: vi.fn().mockResolvedValue(base),
         commitIssueWork,
         syncIssueBranch,
@@ -55,6 +56,7 @@ describe('CodeRuns.finish with a branch that keeps moving', () => {
         skillsDir: null,
         branch: 'cvx/COD-9',
         base,
+        start: { tip: 'a'.repeat(40), logs: { head: 0, branch: 0 } },
       },
       agent,
       issue,
@@ -79,6 +81,7 @@ describe('CodeRuns.finish with a branch that keeps moving', () => {
       {} as AuditLog,
       {
         agentEmailDomain: 'conclavix.invalid',
+        guardCloneHead: vi.fn().mockResolvedValue({ problems: [], setAside: null }),
         branchTip: vi.fn().mockResolvedValue('d'.repeat(40)),
         commitIssueWork: vi.fn().mockResolvedValue({
           branch: 'cvx/COD-9',
@@ -104,6 +107,7 @@ describe('CodeRuns.finish with a branch that keeps moving', () => {
         skillsDir: null,
         branch: 'cvx/COD-9',
         base,
+        start: { tip: 'a'.repeat(40), logs: { head: 0, branch: 0 } },
       },
       agent,
       issue,
@@ -128,6 +132,9 @@ describe('CodeRuns.prepare with a moving branch', () => {
     const workspace = {
       createIssueWorkspace: vi.fn().mockResolvedValue({ ...info, head: 'c'.repeat(40) }),
       branchTip: vi.fn().mockResolvedValue('f'.repeat(40)),
+      cloneHeadState: vi
+        .fn()
+        .mockResolvedValue({ tip: 'a'.repeat(40), logs: { head: 0, branch: 0 } }),
       reconcileClone: vi
         .fn()
         .mockResolvedValue({ action: 'none', server: 'a'.repeat(40), warnings: [] }),

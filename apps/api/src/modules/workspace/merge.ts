@@ -251,7 +251,8 @@ export class RepoMerger extends RepoReader {
 
   /**
    * Merge `sources` (existing branches, in order) into the issue branch `cvx/<issueKey>`. An
-   * existing branch is the starting point; a missing one is created from `base` (default main).
+   * existing branch is the starting point; a missing one is created from `base` (default main), a
+   * branch or a commit id reachable from a branch (see resolveReachable).
    * Every source the target does not contain yet gets its own no-ff merge commit (first parent:
    * the target line) by `author`; sources already contained are skipped. The first conflict
    * refuses the whole call with 409 `merge_conflict` and its files, and no ref changes. The
@@ -275,10 +276,7 @@ export class RepoMerger extends RepoReader {
       const before = await this.commitOf(projectId, `refs/heads/${target}`);
       const startedFrom: ResolvedRef = before
         ? { ref: target, sha: before }
-        : {
-            ref: input.base ?? DEFAULT_BRANCH,
-            sha: await this.branchSha(projectId, input.base ?? DEFAULT_BRANCH),
-          };
+        : await this.resolveReachable(projectId, input.base ?? DEFAULT_BRANCH);
       const body = cleanMessage(input.message ?? '');
       const trailers = (input.trailers ?? []).map(oneLine).filter((line) => line !== '');
       let current = startedFrom.sha;
@@ -325,18 +323,20 @@ export class RepoMerger extends RepoReader {
   }
 
   /**
-   * Fast-forward `branch` (main) to the tip of `source`, only when `source` contains it; a
-   * diverged source is refused with 409 `not_fast_forward` and nothing changes.
+   * Fast-forward `branch` (main) to `source`, only when `source` contains it; a diverged source is
+   * refused with 409 `not_fast_forward` and nothing changes. `source` is a branch, or a commit id
+   * reachable from a ref below `within` (see resolveReachable).
    */
   async fastForwardBranch(
     projectId: string,
     branch: string,
     source: string,
+    within?: readonly string[],
   ): Promise<BranchPromotion> {
     await this.ensureRepo(projectId);
     return this.queue.run(`branch:${projectId}:${branch}`, async () => {
       const before = await this.branchSha(projectId, branch);
-      const after = await this.branchSha(projectId, source);
+      const after = (await this.resolveReachable(projectId, source, within)).sha;
       if (before === after) {
         return { branch, source, status: 'up_to_date', before, after, commits: 0 };
       }
@@ -356,7 +356,7 @@ export class RepoMerger extends RepoReader {
   }
 
   /** Commits reachable from `tip` but not from `base`. */
-  private async commitsBetween(projectId: string, base: string, tip: string): Promise<number> {
+  protected async commitsBetween(projectId: string, base: string, tip: string): Promise<number> {
     return (
       Number((await this.text(projectId, ['rev-list', '--count', tip, `^${base}`])).trim()) || 0
     );
@@ -378,7 +378,7 @@ export class RepoMerger extends RepoReader {
     const tips = sources.length > 0 ? await this.sourceTips(projectId, target, sources) : [];
     const main = await this.branchSha(projectId, DEFAULT_BRANCH);
     const tip = await this.commitOf(projectId, `refs/heads/${target}`);
-    const start = tip ?? (await this.branchSha(projectId, base));
+    const start = tip ?? (await this.resolveReachable(projectId, base)).sha;
     const result: MergeStatus = {
       target,
       exists: tip !== null,

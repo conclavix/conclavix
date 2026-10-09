@@ -1,8 +1,10 @@
+import { ObjectId } from 'mongodb';
 import type { RunCode } from '@conclavix/core';
 import { AppError } from '../errors.js';
 import type { AgentDoc, Database, IssueDoc, RunDoc } from '../db.js';
 import type { AuditLog } from '../modules/audit/audit.js';
 import type { CloneReconcile, CodeWorkspace } from '../modules/workspace/commit.js';
+import type { CloneHead } from '../modules/workspace/head-guard.js';
 import {
   DEFAULT_AGENT_EMAIL_DOMAIN,
   agentIdentity,
@@ -19,6 +21,8 @@ export interface CodeRunContext extends CodeRunTarget {
   branch: string;
   /** Tip of the issue branch in the project repository before the run. */
   base: string | null;
+  /** The clone's git state the run starts from, checked by the HEAD guard before the commit. */
+  start: CloneHead;
 }
 
 /** Sandbox results after which the clone is not committed (it may be over the disk limit). */
@@ -132,7 +136,8 @@ export class CodeRuns {
       'runner',
       `workspace ${info.branch} ${info.created ? 'created' : 'reused'}, server tip ${short(base)}`,
     );
-    return { projectId, issueKey: issue.key, skillsDir, branch: info.branch, base };
+    const start = await this.workspace.cloneHeadState(projectId, issue.key);
+    return { projectId, issueKey: issue.key, skillsDir, branch: info.branch, base, start };
   }
 
   /**
@@ -188,6 +193,7 @@ export class CodeRuns {
     events: RunEventRecorder,
     redact: (text: string) => string,
   ): Promise<void> {
+    if (await this.headMoved(context, issue, code, redact)) return;
     try {
       const commit = await this.workspace.commitIssueWork(context.projectId, context.issueKey, {
         author: commitAuthor(agent, this.workspace.agentEmailDomain),
@@ -211,6 +217,49 @@ export class CodeRuns {
       return;
     }
     await this.reconcileAndSync(context, agent, code, events, redact);
+  }
+
+  /**
+   * The HEAD guard: true when the agent moved HEAD or the branch in the clone itself (or the
+   * check failed), so nothing is committed or synced. The clone is then set aside, the run's code
+   * error says why and a system comment on the issue tells the agents and the board.
+   */
+  private async headMoved(
+    context: CodeRunContext,
+    issue: IssueDoc,
+    code: RunCode,
+    redact: (text: string) => string,
+  ): Promise<boolean> {
+    const { projectId, issueKey, branch } = context;
+    let guard: { problems: string[]; setAside: string | null };
+    try {
+      guard = await this.workspace.guardCloneHead(projectId, issueKey, context.start);
+    } catch (error) {
+      guard = { problems: [`checking the workspace failed: ${errorText(error)}`], setAside: null };
+    }
+    if (guard.problems.length === 0) return false;
+    const aside = guard.setAside
+      ? `the workspace was moved aside (nothing deleted) and the next run starts from the server's ${branch}`
+      : 'the workspace was left as it is';
+    code.error = redact(
+      `the agent moved HEAD in the workspace (${guard.problems.join('; ')}); nothing was committed or synced, ${aside}`,
+    );
+    const posted = this.database.collections.comments.insertOne({
+      _id: new ObjectId(),
+      issueId: issue._id,
+      author: { type: 'system' },
+      body: redact(
+        `Nothing from the last run was committed: the agent moved HEAD in its working copy ` +
+          `(${guard.problems.join('; ')}). ${aside[0]?.toUpperCase() ?? ''}${aside.slice(1)}. ` +
+          `Do not run git reset, checkout, rebase or commit in the working copy; to base work on ` +
+          `another commit, ask an agent with git integration to move ${branch} with set_branch.`,
+      ),
+      createdAt: new Date(),
+    });
+    await posted.catch((error: unknown) => {
+      code.error = `${code.error ?? ''}; posting the issue comment failed: ${redact(errorText(error))}`;
+    });
+    return true;
   }
 
   /**
@@ -295,6 +344,11 @@ function describeReconcile(result: CloneReconcile, branch: string, events: RunEv
     events.record(
       'runner',
       `workspace ${branch} merged with the server tip ${short(result.server)} (${from})`,
+    );
+  } else if (result.action === 'set_aside' && result.rewound) {
+    events.record(
+      'runner',
+      `workspace ${branch} still holds ${short(result.rewound)}, which ${branch} was rewound away from with set_branch; it was moved to ${result.setAside ?? ''} (nothing deleted, never merged back) and is cloned again from the server tip ${short(result.server)}`,
     );
   } else if (result.action === 'set_aside') {
     events.record(

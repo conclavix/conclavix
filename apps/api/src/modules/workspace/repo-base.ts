@@ -344,4 +344,36 @@ export class RepoBase {
     }
     throw notFound(`Ref ${ref}`);
   }
+
+  /**
+   * Resolve a branch name or a commit id (full or abbreviated, at least 7 hex digits) for a
+   * writing operation. A branch resolves to its tip. A commit id must name a commit that is
+   * reachable from at least one ref below `within` (ref prefixes such as `refs/heads/`), so
+   * objects that no ref of the project points to (left over from a refused merge, for example)
+   * are refused with 404 like unknown ones.
+   */
+  async resolveReachable(
+    projectId: string,
+    ref: string,
+    within: readonly string[] = REACHABLE_FROM,
+  ): Promise<ResolvedRef> {
+    const resolved = await this.resolveRef(projectId, ref);
+    if (resolved.ref === ref && (await this.commitOf(projectId, `refs/heads/${ref}`))) {
+      return resolved;
+    }
+    const containing = await this.text(projectId, [
+      'for-each-ref',
+      '--count=1',
+      '--format=%(refname)',
+      `--contains=${resolved.sha}`,
+      ...within,
+    ]);
+    if (containing.trim() === '') {
+      throw notFound(`Commit ${ref} on a branch of this project`);
+    }
+    return resolved;
+  }
 }
+
+/** Refs a commit id given to a writing operation must be reachable from by default. */
+export const REACHABLE_FROM: readonly string[] = ['refs/heads/', 'refs/backup/'];
