@@ -42,6 +42,8 @@ export interface RetentionOptions {
   days: number;
   log: Pick<Logger, 'info' | 'warn' | 'debug'>;
   now?: () => number;
+  /** Hands a clone left with the agent user back to the runner (the helper's `release`). */
+  reclaim?: (projectId: string, issueKey: string) => Promise<{ ok: boolean; detail: string }>;
 }
 
 /** Bytes a directory tree occupies on disk (allocated blocks), without following symlinks. */
@@ -197,37 +199,8 @@ export class CloneRetention {
     cutoff: number,
     result: SweepResult,
   ): Promise<void> {
-    const path = join(base, projectId, issue.key);
-    let bytes = 0;
-    let moved: string | null = null;
-    // Checked again under the clone's lock, right before the removal. The clone is renamed away
-    // atomically there (removeIssueWorkspace's own rm then finds nothing) and deleted afterwards.
-    const canRemove = async (): Promise<boolean> => {
-      if (!(await this.stillRemovable(issue._id, cutoff))) return false;
-      await assertRemovable(base, path);
-      bytes = await treeBytes(path);
-      const suffix = `${this.now}-${randomBytes(3).toString('hex')}`;
-      moved = join(base, projectId, `.removing-${issue.key}-${suffix}`);
-      await rename(path, moved);
-      return true;
-    };
     try {
-      if (!(await this.stillRemovable(issue._id, cutoff))) {
-        result.kept += 1;
-        return;
-      }
-      const removed = await this.workspace.removeIssueWorkspace(
-        projectId,
-        issue.key,
-        false,
-        canRemove,
-      );
-      if (!removed) {
-        result.kept += 1;
-        return;
-      }
-      if (moved) await rm(moved, { recursive: true, force: true });
-      this.removed(result, { projectId, name: issue.key, kind: 'closed', bytes });
+      await this.removeClosedOnce(base, projectId, issue, cutoff, result);
     } catch (error) {
       if (error instanceof AppError && error.statusCode === 409) {
         result.kept += 1;
@@ -237,8 +210,58 @@ export class CloneRetention {
         );
         return;
       }
-      this.failed(result, projectId, issue.key, error);
+      const code = (error as NodeJS.ErrnoException).code;
+      const reclaim = this.options.reclaim;
+      if ((code !== 'EACCES' && code !== 'EPERM') || !reclaim) {
+        this.failed(result, projectId, issue.key, error);
+        return;
+      }
+      // Still owned by the agent user after a helper that died mid-run: hand it back, retry once.
+      const reclaimed = await reclaim(projectId, issue.key);
+      if (!reclaimed.ok) {
+        this.failed(result, projectId, issue.key, new Error(`reclaim failed: ${reclaimed.detail}`));
+        return;
+      }
+      await this.removeClosedOnce(base, projectId, issue, cutoff, result).catch((retry: unknown) =>
+        this.failed(result, projectId, issue.key, retry),
+      );
     }
+  }
+
+  /**
+   * Remove one closed issue's clone. The issue and its runs are checked again under the clone's
+   * lock, right before the removal; the clone is renamed away atomically there
+   * (removeIssueWorkspace's own rm then finds nothing) and deleted afterwards.
+   */
+  private async removeClosedOnce(
+    base: string,
+    projectId: string,
+    issue: IssueDoc,
+    cutoff: number,
+    result: SweepResult,
+  ): Promise<void> {
+    if (!(await this.stillRemovable(issue._id, cutoff))) {
+      result.kept += 1;
+      return;
+    }
+    const path = join(base, projectId, issue.key);
+    let bytes = 0;
+    let moved: string | null = null;
+    const canRemove = async (): Promise<boolean> => {
+      if (!(await this.stillRemovable(issue._id, cutoff))) return false;
+      await assertRemovable(base, path);
+      bytes = await treeBytes(path);
+      const suffix = `${this.now}-${randomBytes(3).toString('hex')}`;
+      moved = join(base, projectId, `.removing-${issue.key}-${suffix}`);
+      await rename(path, moved);
+      return true;
+    };
+    if (!(await this.workspace.removeIssueWorkspace(projectId, issue.key, false, canRemove))) {
+      result.kept += 1;
+      return;
+    }
+    if (moved) await rm(moved, { recursive: true, force: true });
+    this.removed(result, { projectId, name: issue.key, kind: 'closed', bytes });
   }
 
   /** The issue is still closed since before the cutoff and no run of it is queued or running. */

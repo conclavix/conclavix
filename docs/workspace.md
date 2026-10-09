@@ -410,7 +410,8 @@ clones that are no longer needed, a few minutes after it starts and then hourly:
 - its path is not a real directory directly below `workspaces/<projectId>/` with no symlink on
   the way (symlinked entries are never followed or removed).
 
-A clone is first renamed to `.removing-<KEY>-<time>-<random>` under its lock and deleted
+A clone still owned by the agent user (a helper that died mid-run) is handed back through the
+helper's `release` first, then removed. A clone is first renamed to `.removing-<KEY>-<time>-<random>` under its lock and deleted
 afterwards, so a removal interrupted by a restart never leaves a half-deleted clone at the
 issue's path; the next sweep deletes such leftovers. A project directory that cannot be read
 (or whose issue query fails) is logged and skipped; the sweep continues with the others.

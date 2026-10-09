@@ -165,6 +165,51 @@ describe('CloneRetention', () => {
     expect(existsSync(clone)).toBe(false);
   });
 
+  it('reclaims a clone the agent user still owns and retries once', async () => {
+    const done = issue('CVX-1', 'done', 5);
+    const clone = await syncedClone('CVX-1');
+    const calls: string[] = [];
+    const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    const remove = ws.removeIssueWorkspace.bind(ws);
+    let first = true;
+    ws.removeIssueWorkspace = (...args) => {
+      if (first) {
+        first = false;
+        return Promise.reject(denied);
+      }
+      return remove(...args);
+    };
+    const sweeper = new CloneRetention(fakeDatabase([done]), ws, {
+      days: 3,
+      log: silentLog,
+      now: () => NOW,
+      reclaim: (projectId, key) => {
+        calls.push(`${projectId}/${key}`);
+        return Promise.resolve({ ok: true, detail: '' });
+      },
+    });
+    const result = await sweeper.sweep();
+    expect(calls).toEqual([`${PROJECT}/CVX-1`]);
+    expect(result?.removed.map((item) => item.name)).toEqual(['CVX-1']);
+    expect(existsSync(clone)).toBe(false);
+  });
+
+  it('counts an error when the clone cannot be reclaimed', async () => {
+    const done = issue('CVX-1', 'done', 5);
+    const clone = await syncedClone('CVX-1');
+    const denied = Object.assign(new Error('permission denied'), { code: 'EPERM' });
+    ws.removeIssueWorkspace = () => Promise.reject(denied);
+    const sweeper = new CloneRetention(fakeDatabase([done]), ws, {
+      days: 3,
+      log: silentLog,
+      now: () => NOW,
+      reclaim: () => Promise.resolve({ ok: false, detail: 'exit 73' }),
+    });
+    const result = await sweeper.sweep();
+    expect(result?.errors).toBe(1);
+    expect(existsSync(clone)).toBe(true);
+  });
+
   it('does nothing with 0 days', async () => {
     const done = issue('CVX-1', 'done', 400);
     const clone = await syncedClone('CVX-1');

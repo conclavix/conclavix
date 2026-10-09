@@ -59,7 +59,12 @@ async function codingAgents(
   );
   // Timers are unref'd; a sweep in progress at shutdown simply stops with the process.
   scheduleCloneRetention(
-    new CloneRetention(database, workspace, { days: config.CODE_CLONE_RETENTION_DAYS, log }),
+    new CloneRetention(database, workspace, {
+      days: config.CODE_CLONE_RETENTION_DAYS,
+      log,
+      reclaim: (projectId, issueKey) =>
+        releaseClone({ helper, sudo: config.SUDO_BIN }, projectId, issueKey),
+    }),
     log,
   );
   return {
