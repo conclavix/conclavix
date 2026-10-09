@@ -101,7 +101,8 @@ function previous(): void {
 watch([filters, pageSize], restart, { deep: true, immediate: true });
 
 const agentName = (id: string): string => live.state.agents[id]?.name ?? 'unknown agent';
-const issueKey = (id: string): string => live.state.issues[id]?.key ?? '...';
+const issueKey = (id: string | null): string =>
+  id ? (live.state.issues[id]?.key ?? '...') : 'CEO chat';
 const open = (_event: unknown, row: { item: Run }): void => {
   void router.push({ name: 'run', params: { runId: row.item.id } });
 };

@@ -27,7 +27,7 @@ export const CAPABILITY_DESCRIPTIONS: Readonly<Record<Capability, string>> = {
   self: 'Manage the own profile, theme and personal API tokens',
   work: 'Create and change projects, issues, comments, documents and memories; wake agents',
   agents:
-    'Create, change and remove agents; choose which agents work in which project; edit the org chart and the skill library; import skills from directories; manage issue workspaces',
+    'Create, change and remove agents; choose which agents work in which project; edit the org chart and the skill library; import skills from directories; manage issue workspaces; plan with the lead in CEO chats and approve its plans',
   users: 'Invite users, change roles, ban, reset passwords and 2FA, delete users',
   settings:
     'Change instance settings, skill directory sources, project secrets and connections (MFA policy, SMTP and revealing secret values stay owner-only)',
@@ -133,6 +133,15 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, Capability>> = {
   'GET /api/runs': 'read',
   'GET /api/runs/:id': 'read',
   'GET /api/runs/:id/events': 'read',
+  // Chats with the lead: an approved plan makes the lead create a project and work, so talking
+  // to it and approving are admin and owner actions; everyone else reads along.
+  'GET /api/chats': 'read',
+  'GET /api/chats/:id': 'read',
+  'GET /api/chats/:id/plan/revisions': 'read',
+  'POST /api/chats': 'agents',
+  'PATCH /api/chats/:id': 'agents',
+  'POST /api/chats/:id/messages': 'agents',
+  'POST /api/chats/:id/approve': 'agents',
   'GET /api/memories': 'read',
   'GET /api/memories/:id': 'read',
   'POST /api/memories': 'work',

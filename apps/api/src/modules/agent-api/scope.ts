@@ -1,5 +1,14 @@
 import type { ClientSession, ObjectId } from 'mongodb';
-import type { AgentDoc, Collections, Database, IssueDoc, RunDoc } from '../../db.js';
+import type {
+  AgentDoc,
+  ChatDoc,
+  ChatRunDoc,
+  Collections,
+  Database,
+  IssueDoc,
+  IssueRunDoc,
+  RunDoc,
+} from '../../db.js';
 import { isLead } from '../org/lead.js';
 import { delegatesTo } from '../org/links.js';
 import { AppError } from '../../errors.js';
@@ -11,7 +20,7 @@ const forbidden = (message: string): AppError => new AppError(403, 'forbidden', 
 
 /** What a run may touch: its agent, its issue and that issue's project; the lead plans more. */
 export interface RunScope {
-  run: RunDoc;
+  run: IssueRunDoc;
   agent: AgentDoc;
   issue: IssueDoc;
   isLead: boolean;
@@ -22,12 +31,37 @@ export async function loadScope(database: Database, run: RunDoc): Promise<RunSco
   const { collections } = database;
   const [agent, issue] = await Promise.all([
     collections.agents.findOne({ _id: run.agentId }),
-    collections.issues.findOne({ _id: run.issueId }),
+    run.issueId ? collections.issues.findOne({ _id: run.issueId }) : null,
   ]);
   if (!agent || !issue) {
     throw forbidden('the run no longer has an agent or issue');
   }
-  return { run, agent, issue, isLead: await isLead(database, agent._id) };
+  return {
+    run: { ...run, issueId: issue._id },
+    agent,
+    issue,
+    isLead: await isLead(database, agent._id),
+  };
+}
+
+/** What a chat run may touch: its chat, the lead's planning reads and the gated creation tools. */
+export interface ChatScope {
+  run: ChatRunDoc;
+  agent: AgentDoc;
+  chat: ChatDoc;
+}
+
+/** Load the agent and chat of a chat run. */
+export async function loadChatScope(database: Database, run: ChatRunDoc): Promise<ChatScope> {
+  const { collections } = database;
+  const [agent, chat] = await Promise.all([
+    collections.agents.findOne({ _id: run.agentId }),
+    collections.chats.findOne({ _id: run.chatId }),
+  ]);
+  if (!agent || !chat) {
+    throw forbidden('the run no longer has an agent or chat');
+  }
+  return { run, agent, chat };
 }
 
 /** Resolve an issue the run may read: any issue in the run's project, default its own. */

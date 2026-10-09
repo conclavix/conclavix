@@ -35,6 +35,13 @@ const took = computed(() => runDuration(props.run, props.now));
       >
         {{ issue.key }}
       </router-link>
+      <router-link
+        v-if="run.chatId"
+        :to="{ name: 'chat', params: { chatId: run.chatId } }"
+        class="text-body-1"
+      >
+        CEO chat
+      </router-link>
       <span v-if="issue?.title" class="text-body-2 text-medium-emphasis run-header__title">
         {{ issue.title }}
       </span>

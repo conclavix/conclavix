@@ -11,6 +11,8 @@ export const wakeReasonSchema = z.enum([
   'report_closed',
   'subissue_closed',
   'stall_watchdog',
+  'chat',
+  'plan_approved',
 ]);
 
 export const runStatusSchema = z.enum([
@@ -29,6 +31,7 @@ export const manualWakeSchema = z.strictObject({ issueId: idSchema });
 export const listRunsQuerySchema = z.strictObject({
   agentId: idSchema.optional(),
   issueId: idSchema.optional(),
+  chatId: idSchema.optional(),
   status: z
     .string()
     .transform((value) => value.split(','))
@@ -69,10 +72,17 @@ export interface RunCode {
   error: string | null;
 }
 
+/** What a run works on: an issue (the scheduler's wakes) or a board chat with the lead. */
+export type RunKind = 'issue' | 'chat';
+
 export interface Run {
   id: string;
   agentId: string;
-  issueId: string;
+  kind: RunKind;
+  /** Null for chat runs. */
+  issueId: string | null;
+  /** Set for chat runs only. */
+  chatId: string | null;
   reason: WakeReason;
   status: RunStatus;
   costUsd: number;

@@ -143,7 +143,7 @@ describe('scheduler loops, heartbeats and concurrency', () => {
       blockedBy: [blocker.id],
     });
     const runsOfBlocked = () =>
-      fx.dispatcher.runs.filter((run) => run.issueId.toHexString() === blocked.id).length;
+      fx.dispatcher.runs.filter((run) => run.issueId?.toHexString() === blocked.id).length;
     await fx.scheduler.processPendingWakes();
     expect(runsOfBlocked()).toBe(0);
     const wakesOf = () =>
@@ -241,7 +241,7 @@ describe('scheduler loops, heartbeats and concurrency', () => {
       .find({ issueId: { $in: issues.map((issue) => new ObjectId(issue.id)) } })
       .toArray();
     expect(runs).toHaveLength(10);
-    expect(new Set(runs.map((run) => run.issueId.toHexString())).size).toBe(10);
+    expect(new Set(runs.map((run) => run.issueId?.toHexString())).size).toBe(10);
     expect(fx.dispatcher.runs.length + other.dispatcher.runs.length).toBe(10);
   });
 

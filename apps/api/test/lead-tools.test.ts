@@ -7,7 +7,7 @@ import { loadPosition } from '../src/modules/org/position.js';
 import { buildPrompt } from '../src/runner/prompt.js';
 import { createTestContext, type TestContext } from './helpers.js';
 import { callTool, connectAgent, startRunFor } from './mcp-helpers.js';
-import { createFixture, type Fixture } from './scheduler-helpers.js';
+import { createFixture, type Fixture, issueRun } from './scheduler-helpers.js';
 
 const LEAD_TOOLS = ['create_issue', 'get_project_board', 'list_projects'];
 
@@ -118,7 +118,7 @@ describe('lead planning tools and run prompt position', () => {
   it('checks the lead again inside every lead tool call', async () => {
     const issue = await fx.issue({ title: 'Architecture', assigneeAgentId: cto.id });
     const { run } = await startRunFor(ctx, fx, issue.id);
-    const scope = await loadScope(ctx.database, run);
+    const scope = await loadScope(ctx.database, issueRun(run));
     expect(scope.isLead).toBe(false);
     const handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
     const server = {

@@ -41,7 +41,9 @@ export interface FailedRun {
   runId: string;
   agentId: string;
   agentName: string;
-  issueId: string;
+  /** Null for chat runs. */
+  issueId: string | null;
+  chatId: string | null;
   issueKey: string | null;
   status: string;
   error: string | null;

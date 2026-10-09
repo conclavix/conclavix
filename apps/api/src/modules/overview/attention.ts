@@ -54,28 +54,35 @@ export async function pausedAgents(
         since: agent.updatedAt,
       };
       const last = await collections.runs.findOne(
-        { agentId: agent._id, status: { $in: [...FINISHED_RUN_STATUSES] } },
+        // Loop detection only pauses on issue runs; chat runs never pause an agent.
+        {
+          agentId: agent._id,
+          issueId: { $type: 'objectId' },
+          status: { $in: [...FINISHED_RUN_STATUSES] },
+        },
         { sort: { finishedAt: -1, _id: -1 }, projection: { issueId: 1, createdAt: 1 } },
       );
-      const notice = last
-        ? await collections.comments.findOne({
-            issueId: last.issueId,
-            'author.type': 'system',
-            body: { $regex: `^${LOOP_PAUSE_PREFIX}` },
-            createdAt: { $gte: last.createdAt },
-          })
-        : null;
-      if (!last || !notice) {
+      const lastIssueId = last?.issueId ?? null;
+      const notice =
+        last && lastIssueId
+          ? await collections.comments.findOne({
+              issueId: lastIssueId,
+              'author.type': 'system',
+              body: { $regex: `^${LOOP_PAUSE_PREFIX}` },
+              createdAt: { $gte: last.createdAt },
+            })
+          : null;
+      if (!last || !lastIssueId || !notice) {
         return { ...base, reason: 'manual', issueId: null, issueKey: null };
       }
       const issue = await collections.issues.findOne(
-        { _id: last.issueId },
+        { _id: lastIssueId },
         { projection: { key: 1 } },
       );
       return {
         ...base,
         reason: 'loop',
-        issueId: last.issueId.toHexString(),
+        issueId: lastIssueId.toHexString(),
         issueKey: issue?.key ?? null,
       };
     }),
@@ -112,17 +119,18 @@ export async function failedRuns(
   ]);
   const keys = await issueKeys(
     collections,
-    docs.map((doc) => doc.issueId),
+    docs.flatMap((doc) => (doc.issueId ? [doc.issueId] : [])),
   );
   const items = docs.map((doc) => {
     const agentId = doc.agentId.toHexString();
-    const issueId = doc.issueId.toHexString();
+    const issueId = doc.issueId?.toHexString() ?? null;
     return {
       runId: doc._id.toHexString(),
       agentId,
       agentName: agents.get(agentId)?.name ?? 'deleted agent',
       issueId,
-      issueKey: keys.get(issueId) ?? null,
+      chatId: doc.chatId?.toHexString() ?? null,
+      issueKey: issueId ? (keys.get(issueId) ?? null) : null,
       status: doc.status,
       error: doc.error,
       finishedAt: doc.finishedAt,

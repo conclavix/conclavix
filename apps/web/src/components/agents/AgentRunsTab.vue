@@ -20,7 +20,8 @@ const timer = setInterval(() => (now.value = Date.now()), 1000);
 onBeforeUnmount(() => clearInterval(timer));
 
 async function resolveIssueKeys(runs: Run[]): Promise<void> {
-  const missing = [...new Set(runs.map((run) => run.issueId))].filter(
+  const ids = runs.flatMap((run) => (run.issueId ? [run.issueId] : []));
+  const missing = [...new Set(ids)].filter(
     (id) => !live.state.issues[id]?.key && !issueKeys.value[id],
   );
   const found = await Promise.all(
@@ -54,7 +55,8 @@ const runs = computed(() => {
   }
   return [...merged.values()].sort((a, b) => (b.id > a.id ? 1 : -1)).slice(0, 50);
 });
-const issueKey = (id: string): string => live.state.issues[id]?.key ?? issueKeys.value[id] ?? '';
+const issueKey = (id: string | null): string =>
+  id ? (live.state.issues[id]?.key ?? issueKeys.value[id] ?? '') : '';
 </script>
 
 <template>
@@ -84,6 +86,12 @@ const issueKey = (id: string): string => live.state.issues[id]?.key ?? issueKeys
               :to="{ name: 'issue', params: { issueKey: issueKey(run.issueId) } }"
             >
               {{ issueKey(run.issueId) }}
+            </router-link>
+            <router-link
+              v-else-if="run.chatId"
+              :to="{ name: 'chat', params: { chatId: run.chatId } }"
+            >
+              CEO chat
             </router-link>
           </td>
           <td>{{ run.reason }}</td>

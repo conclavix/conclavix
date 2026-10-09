@@ -12,7 +12,8 @@ import type { MemoryBucket, MemoryStore } from './store.js';
 
 export interface AgentContext {
   agentId: string;
-  projectId: string;
+  /** The run's project; null for chat runs without a referenced project (no project memory). */
+  projectId: string | null;
 }
 
 export type AgentSearchScope = 'global' | 'project' | 'agent' | 'all';
@@ -28,12 +29,14 @@ export class MemoryService {
   ) {}
 
   readableBuckets(context: AgentContext, scope: AgentSearchScope): MemoryBucket[] {
-    const all: Record<Exclude<AgentSearchScope, 'all'>, MemoryBucket> = {
-      global: { scope: 'global' },
-      project: { scope: 'project', projectId: context.projectId },
-      agent: { scope: 'agent', agentId: context.agentId },
+    const project: MemoryBucket[] =
+      context.projectId === null ? [] : [{ scope: 'project', projectId: context.projectId }];
+    const all: Record<Exclude<AgentSearchScope, 'all'>, MemoryBucket[]> = {
+      global: [{ scope: 'global' }],
+      project,
+      agent: [{ scope: 'agent', agentId: context.agentId }],
     };
-    return scope === 'all' ? Object.values(all) : [all[scope]];
+    return scope === 'all' ? Object.values(all).flat() : all[scope];
   }
 
   agentSearch(
@@ -45,12 +48,15 @@ export class MemoryService {
     return this.store.search({ buckets: this.readableBuckets(context, scope), text: query, limit });
   }
 
-  agentSave(
+  async agentSave(
     context: AgentContext,
     input: { scope: 'project' | 'agent'; title: string; body: string; tags: string[] },
   ): Promise<{ memory: Memory; created: boolean }> {
+    if (input.scope === 'project' && context.projectId === null) {
+      throw unprocessable('this run has no project; save with scope "agent"');
+    }
     const bucket: MemoryBucket =
-      input.scope === 'project'
+      input.scope === 'project' && context.projectId !== null
         ? { scope: 'project', projectId: context.projectId }
         : { scope: 'agent', agentId: context.agentId };
     return this.store.save({

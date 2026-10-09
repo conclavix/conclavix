@@ -22,7 +22,7 @@ const recent = computed(() => live.recentRuns.slice(0, RECENT));
 const agentName = (id?: string): string => (id && live.state.agents[id]?.name) || 'unknown agent';
 const agentAvatar = (id?: string): string | null =>
   (id && live.state.agents[id]?.avatarUrl) || null;
-const issueOf = (id?: string) => (id ? live.state.issues[id] : undefined);
+const issueOf = (id?: string | null) => (id ? live.state.issues[id] : undefined);
 
 watch(
   selected,

@@ -61,7 +61,11 @@ export interface Board {
 export interface Run {
   id: string;
   agentId: string;
-  issueId: string;
+  /** 'chat' for runs answering a CEO chat; missing on runs from older API responses. */
+  kind?: 'issue' | 'chat';
+  /** Null for chat runs. */
+  issueId: string | null;
+  chatId?: string | null;
   reason: string;
   status: string;
   costUsd: number;

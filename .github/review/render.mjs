@@ -167,6 +167,30 @@ export function renderSummary({ review, findings, blocking, meta, metrics, resol
   return body.length > MAX_BODY ? `${body.slice(0, MAX_BODY)}\n\n[truncated]` : body;
 }
 
+/** Review body for a head whose change equals an earlier reviewed head. */
+export function renderCarried({ meta, blocking, review }) {
+  const from = meta.carried_from;
+  const short = (sha) => String(sha).slice(0, 7);
+  const lines = [
+    `## Review: ${blocking > 0 ? 'changes required' : 'no blocking findings'} (carried over)`,
+    '',
+    `Diff unchanged since \`${short(from.head)}\`, verdict carried over (reviewed at \`${short(from.reviewed_head)}\`). Head \`${short(meta.head_sha)}\`, merge base \`${short(meta.merge_base)}\`.`,
+    `Blocking: **${blocking}**. No new review ran for this head; the findings of that review still apply.`,
+  ];
+  const blockingList = review.findings.filter((f) => f.severity === 'blocking');
+  if (blockingList.length > 0) lines.push('', '### Blocking', '', ...blockingList.map(findingRow));
+  const scope = review.scope_findings.filter((s) => s.severity === 'blocking');
+  if (scope.length > 0) {
+    lines.push('', '### Blocking scope', '');
+    for (const s of scope) {
+      const file = s.file ? ` \`${sanitize(s.file, 300)}\`` : '';
+      lines.push(`- ${s.kind.replace('_', ' ')}${file}: ${sanitize(s.description, 1000)}`);
+    }
+  }
+  const body = lines.join('\n');
+  return body.length > MAX_BODY ? `${body.slice(0, MAX_BODY)}\n\n[truncated]` : body;
+}
+
 export function metricsLine(m) {
   const cost = typeof m.total_cost_usd === 'number' ? `$${m.total_cost_usd.toFixed(2)}` : 'n/a';
   const minutes = typeof m.duration_ms === 'number' ? (m.duration_ms / 60000).toFixed(1) : 'n/a';

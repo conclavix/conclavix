@@ -20,7 +20,7 @@ describe('stall watchdog', () => {
     const issue = await fx.issue({ title: 'work', assigneeAgentId: agent.id, ...payload });
     await fx.scheduler.processPendingWakes();
     const run = fx.dispatcher.runs.at(-1);
-    if (run?.issueId.toHexString() === issue.id) {
+    if (run?.issueId?.toHexString() === issue.id) {
       await fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd: 0 });
       // The run did its step; the watchdog only nudges after progress.
       await ctx.database.collections.runs.updateOne(

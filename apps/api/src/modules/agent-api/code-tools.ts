@@ -7,7 +7,8 @@ import {
   type CommitSummary,
   type FileDiff,
 } from '@conclavix/core';
-import type { Database } from '../../db.js';
+import type { ObjectId } from 'mongodb';
+import type { AgentDoc, Database } from '../../db.js';
 import { AppError, notFound } from '../../errors.js';
 import { agentDisabledInProject, projectAccessChecker } from '../projects/agent-access.js';
 import { GitError } from '../workspace/git.js';
@@ -431,11 +432,22 @@ export function registerCodeTools(
   scope: RunScope,
   reader: RepoReader,
 ): void {
+  const target = { agent: scope.agent, projectId: scope.issue.projectId };
+  registerProjectCodeTools(server, database, target, reader);
+}
+
+/** The code tools bound to one project and agent; chat runs use them for a referenced project. */
+export function registerProjectCodeTools(
+  server: McpServer,
+  database: Database,
+  target: { agent: AgentDoc; projectId: ObjectId },
+  reader: RepoReader,
+): void {
   const { collections } = database;
   const projectId = async (): Promise<string> => {
-    const { project, isEnabled } = await projectAccessChecker(collections, scope.issue.projectId);
+    const { project, isEnabled } = await projectAccessChecker(collections, target.projectId);
     if (!project) throw notFound('Project');
-    if (!isEnabled(scope.agent)) throw agentDisabledInProject(scope.agent, project);
+    if (!isEnabled(target.agent)) throw agentDisabledInProject(target.agent, project);
     return project._id.toHexString();
   };
   const context: CodeToolContext = { server, reader, projectId };

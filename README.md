@@ -46,6 +46,8 @@ LiteLLM is optional; with one, each agent can get its own key so spend is tracke
 - An org canvas where you draw `delegates` and `reports` links between agents. One agent is the
   lead; a new project gets a planning issue for the lead unless you turn that off.
 - Per-project agent access: each agent has a default, each project can override it.
+- A [CEO chat](docs/ceo-chat.md): discuss a plan with the lead, approve it, and the lead creates
+  the project and its initial planning issue.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/org-dark.png">
@@ -277,6 +279,7 @@ Instance name, MFA policy, model list and SMTP can also be changed in the board 
 | [Agent collaboration](docs/agent-collaboration.md) | Issue trees, delegation, board decisions, who is woken when  |
 | [Agents per project](docs/project-agents.md)       | Enabling and disabling agents per project                    |
 | [Skill directories](docs/skill-directories.md)     | Importing skills from external directories                   |
+| [CEO chat](docs/ceo-chat.md)                       | Planning with the lead, plan approval, chat runs and limits  |
 
 ## Contributing
 

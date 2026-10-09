@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import type { Database } from '../../db.js';
+import { isChatRun, type Database } from '../../db.js';
+import { registerChatTools } from './chat-tools.js';
 import { resolveRunToken } from '../runs/tokens.js';
-import { loadScope } from './scope.js';
+import { loadChatScope, loadScope } from './scope.js';
 import { registerAgentTools } from './tools.js';
 import { registerMemoryTools } from './memory-tools.js';
 import { registerCodeTools } from './code-tools.js';
@@ -34,14 +35,22 @@ export function registerAgentApi(
     if (!run) {
       return reply.status(401).send(unauthorized);
     }
-    const scope = await loadScope(database, run);
     const server = new McpServer({ name: 'conclavix', version });
-    registerAgentTools(server, database, scope);
-    registerMemoryTools(server, memories, scope);
-    if (workspace) {
-      registerCodeTools(server, database, scope, workspace);
-      if (scope.agent.gitIntegration === true) {
-        registerGitTools(server, database, scope, workspace, audit);
+    if (isChatRun(run)) {
+      const scope = await loadChatScope(database, run);
+      registerChatTools(server, database, scope, memories, audit, workspace);
+    } else {
+      const scope = await loadScope(database, run);
+      registerAgentTools(server, database, scope);
+      registerMemoryTools(server, memories, () => ({
+        agentId: scope.agent._id.toHexString(),
+        projectId: scope.issue.projectId.toHexString(),
+      }));
+      if (workspace) {
+        registerCodeTools(server, database, scope, workspace);
+        if (scope.agent.gitIntegration === true) {
+          registerGitTools(server, database, scope, workspace, audit);
+        }
       }
     }
     const transport = new StreamableHTTPServerTransport({ enableJsonResponse: true });

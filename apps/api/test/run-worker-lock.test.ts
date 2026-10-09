@@ -103,7 +103,7 @@ describe('workspace run locking', () => {
           [runs[3]._id, 70_000],
         ]);
         expect(materializeSkills).toHaveBeenCalledTimes(2);
-        expect(vi.mocked(adapter.run).mock.calls.map(([input]) => input.issue.key)).toEqual([
+        expect(vi.mocked(adapter.run).mock.calls.map(([input]) => input.issue?.key)).toEqual([
           'PROJ-1',
           'OTHER-1',
         ]);
@@ -112,7 +112,7 @@ describe('workspace run locking', () => {
         else first.reject(new Error('adapter failed'));
         await Promise.all([active, ...queued]);
       }
-      expect(vi.mocked(adapter.run).mock.calls.map(([input]) => input.issue.key)).toEqual([
+      expect(vi.mocked(adapter.run).mock.calls.map(([input]) => input.issue?.key)).toEqual([
         'PROJ-1',
         'OTHER-1',
         'PROJ-2',

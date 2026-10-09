@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { CommentRepository } from '../src/modules/comments/repository.js';
 import { pauseOnLoop } from '../src/modules/scheduler/loop-detection.js';
 import { createTestContext, type TestContext } from './helpers.js';
-import { createFixture, type Fixture } from './scheduler-helpers.js';
+import { createFixture, type Fixture, issueRun } from './scheduler-helpers.js';
 
 const logs = vi.hoisted(() => ({ error: vi.fn() }));
 vi.mock('pino', () => ({ default: () => ({ error: logs.error, info: vi.fn() }) }));
@@ -162,8 +162,8 @@ describe('scheduler failure handling', () => {
     expect(
       await ctx.database.collections.comments.countDocuments({ issueId: new ObjectId(issue.id) }),
     ).toBe(0);
-    expect(await pauseOnLoop(ctx.database, run, 1, new Date())).toBe(true);
-    expect(await pauseOnLoop(ctx.database, run, 1, new Date())).toBe(false);
+    expect(await pauseOnLoop(ctx.database, issueRun(run), 1, new Date())).toBe(true);
+    expect(await pauseOnLoop(ctx.database, issueRun(run), 1, new Date())).toBe(false);
     expect(
       await ctx.database.collections.comments.countDocuments({ issueId: new ObjectId(issue.id) }),
     ).toBe(1);
@@ -188,7 +188,7 @@ describe('scheduler failure handling', () => {
     expect(await fx.scheduler.processPendingWakes()).toEqual({ run: 0, skip: 0, defer: 2 });
     const other = await createFixture(ctx, { batchSize: 2 });
     expect(await other.scheduler.processPendingWakes()).toEqual({ run: 1, skip: 0, defer: 0 });
-    expect(other.dispatcher.runs[0]?.issueId.toHexString()).toBe(ready.id);
+    expect(other.dispatcher.runs[0]?.issueId?.toHexString()).toBe(ready.id);
     expect(await fx.pendingWakes()).toBe(2);
     for (const run of fx.dispatcher.runs) {
       await fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd: 0 });
