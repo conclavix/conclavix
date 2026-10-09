@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import { ApiError, AuthError, api, tokenStore } from '../api/client';
 import type { MfaPolicy } from '../api/profile';
 import type { ThemeLayer } from '../theme/resolve';
+import { useSidebarStore } from './sidebar';
 import { useThemeStore } from './theme';
 
 export interface Me {
@@ -19,7 +20,7 @@ export interface Me {
   avatarUrl?: string | null;
   createdAt?: string;
   /** The user's stored theme layer; absent for the board token. */
-  preferences?: { theme?: ThemeLayer };
+  preferences?: { theme?: ThemeLayer; sidebar?: string };
 }
 
 export type SignInResult = 'ok' | 'mfa' | 'invalid' | 'limited';
@@ -41,6 +42,19 @@ function syncTheme(me: Me | null): void {
   );
 }
 
+/** Signed in as a user: the profile's sidebar choice applies and new choices are saved to it. */
+function syncSidebar(me: Me | null): void {
+  const sidebar = useSidebarStore();
+  if (me?.kind !== 'user') {
+    sidebar.setPersister(null);
+    return;
+  }
+  sidebar.applyPreference(me.preferences?.sidebar);
+  sidebar.setPersister((mode) =>
+    api('/me', { method: 'PATCH', body: JSON.stringify({ preferences: { sidebar: mode } }) }),
+  );
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const me = ref<Me | null>(null);
   const loaded = ref(false);
@@ -55,6 +69,7 @@ export const useAuthStore = defineStore('auth', () => {
       me.value = null;
     }
     syncTheme(me.value);
+    syncSidebar(me.value);
     loaded.value = true;
     return me.value;
   }
@@ -106,6 +121,7 @@ export const useAuthStore = defineStore('auth', () => {
     await post('/auth/sign-out');
     me.value = null;
     syncTheme(null);
+    syncSidebar(null);
   }
 
   return { me, loaded, names, signedIn, load, loadNames, signIn, verify, signOut, patchMe };

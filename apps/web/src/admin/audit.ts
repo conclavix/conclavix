@@ -25,6 +25,7 @@ export const KNOWN_ACTIONS = [
   'user.mfa_reset',
   'user.deleted',
   'settings.changed',
+  'settings.smtp_tested',
   'token.created',
   'token.revoked',
   'agent.project_default_changed',

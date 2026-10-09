@@ -3,7 +3,10 @@ import type {
   SettingGroup,
   SettingsPatch,
   SettingsValues,
+  SmtpFailureKind,
   SmtpPatch,
+  SmtpTestRequest,
+  SmtpTestResult,
   SmtpValues,
 } from './api';
 
@@ -153,7 +156,7 @@ function required(draft: string, stored: string | null, max: number, min = 1): s
   return null;
 }
 
-function validateSmtp(smtp: SmtpDraft, stored: SmtpValues): Record<string, string> {
+export function validateSmtp(smtp: SmtpDraft, stored: SmtpValues): Record<string, string> {
   const port = Number(smtp.port);
   const checks: [string, string | null][] = [
     ['host', required(smtp.host, stored.host, 253)],
@@ -163,4 +166,36 @@ function validateSmtp(smtp: SmtpDraft, stored: SmtpValues): Record<string, strin
     ['pass', smtp.pass.length > 1024 ? 'At most 1024 characters' : null],
   ];
   return Object.fromEntries(checks.filter((check): check is [string, string] => !!check[1]));
+}
+
+/**
+ * The body for a test mail: unsaved SMTP edits travel along so they can be tried before saving
+ * (an empty password field keeps the stored one), an empty recipient means "send it to me".
+ */
+export function smtpTestBody(draft: SmtpDraft, values: SmtpValues, to: string): SmtpTestRequest {
+  const recipient = to.trim();
+  const smtp = smtpPatch(draft, values);
+  return { ...(recipient ? { to: recipient } : {}), ...(smtp ? { smtp } : {}) };
+}
+
+const FAILURE_TITLES: Record<SmtpFailureKind, string> = {
+  connection: 'Connection failed',
+  tls: 'TLS failed',
+  auth: 'Login rejected',
+  sender: 'Sender rejected',
+  recipient: 'Recipient rejected',
+  message: 'Message rejected',
+  unknown: 'Sending failed',
+};
+
+/** Title and text for the result alert of a test mail. */
+export function describeSmtpTest(result: SmtpTestResult): { title: string; text: string } {
+  const which = result.unsaved ? 'the unsaved values' : 'the saved settings';
+  if (result.ok) {
+    return {
+      title: `Test mail sent to ${result.to}`,
+      text: `The server accepted it using ${which}. Check the inbox (and the spam folder).`,
+    };
+  }
+  return { title: FAILURE_TITLES[result.kind], text: `${result.message} Tried ${which}.` };
 }

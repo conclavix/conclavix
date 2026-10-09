@@ -26,6 +26,15 @@ export const updateSettingsSchema = z
   .partial()
   .refine((value) => Object.keys(value).length > 0, 'at least one field is required');
 
+/**
+ * A test mail: `smtp` holds unsaved form values that apply over the stored settings for this one
+ * send (the password keeps its write-only rules); `to` defaults to the requesting user's address.
+ */
+export const smtpTestSchema = z.strictObject({
+  to: z.email().max(254).optional(),
+  smtp: smtpPatchSchema.optional(),
+});
+
 export const SETTING_GROUPS = ['instanceName', 'mfaPolicy', 'models', 'smtp'] as const;
 /**
  * Groups only owners may change. `smtp` decides where password-reset mail goes, so an admin who
@@ -33,5 +42,6 @@ export const SETTING_GROUPS = ['instanceName', 'mfaPolicy', 'models', 'smtp'] as
  */
 export const OWNER_ONLY_SETTINGS = ['mfaPolicy', 'smtp'] as const;
 
+export type SmtpTestInput = z.infer<typeof smtpTestSchema>;
 export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
 export type SettingGroup = (typeof SETTING_GROUPS)[number];

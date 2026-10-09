@@ -28,6 +28,8 @@ describe('settings view gating', () => {
   let app: App;
   let root: HTMLDivElement;
   let requests: { method: string; url: string; body: unknown }[];
+  let smtpResult: object;
+  let smtpStatus: number;
 
   async function mount(role: string) {
     const pinia = createPinia();
@@ -43,6 +45,14 @@ describe('settings view gating', () => {
 
   beforeEach(() => {
     requests = [];
+    smtpStatus = 200;
+    smtpResult = {
+      ok: true,
+      to: 'me@example.com',
+      unsaved: false,
+      messageId: '<id@test>',
+      response: '250 2.0.0 Ok: queued as ABC',
+    };
     vi.stubGlobal('visualViewport', undefined);
     vi.stubGlobal(
       'ResizeObserver',
@@ -57,6 +67,9 @@ describe('settings view gating', () => {
       vi.fn(async (url: string, init: RequestInit = {}) => {
         const method = init.method ?? 'GET';
         requests.push({ method, url, body: init.body ? JSON.parse(String(init.body)) : null });
+        if (url.endsWith('/smtp/test')) {
+          return new Response(JSON.stringify(smtpResult), { status: smtpStatus });
+        }
         return new Response(JSON.stringify(settings()), { status: 200 });
       }),
     );
@@ -104,5 +117,75 @@ describe('settings view gating', () => {
       url: '/api/settings',
       body: { instanceName: 'Renamed' },
     });
+  });
+
+  const button = (text: string) =>
+    [...root.querySelectorAll('button')].find((element) => element.textContent?.trim() === text);
+  const type = async (label: string, value: string) => {
+    const field = input(label);
+    field.value = value;
+    field.dispatchEvent(new Event('input'));
+    await flush();
+  };
+
+  it('offers the SMTP test only to owners', async () => {
+    await mount('admin');
+    expect(button('Send test mail')).toBeUndefined();
+  });
+
+  it('sends a test mail with the saved settings to the owner by default', async () => {
+    await mount('owner');
+    expect(root.textContent).toContain('Uses the saved settings.');
+    button('Send test mail')?.click();
+    await flush();
+    expect(requests.at(-1)).toEqual({ method: 'POST', url: '/api/settings/smtp/test', body: {} });
+    const result = root.querySelector('[data-testid="smtp-test-result"]');
+    expect(result?.textContent).toContain('Test mail sent to me@example.com');
+    expect(result?.textContent).toContain('queued as ABC');
+  });
+
+  it('tests unsaved values and a typed recipient without saving, and shows failures', async () => {
+    smtpResult = {
+      ok: false,
+      to: 'ops@example.com',
+      unsaved: true,
+      kind: 'auth',
+      message: 'The SMTP server rejected the login (check user and password).',
+      response: '535 5.7.8 Authentication failed',
+    };
+    await mount('owner');
+    await type('Host', 'smtp.new');
+    await type('Password', 'typed-pass');
+    await type('Recipient', ' ops@example.com ');
+    expect(root.textContent).toContain('Uses the unsaved values above without saving them.');
+    button('Send test mail')?.click();
+    await flush();
+    expect(requests.at(-1)).toEqual({
+      method: 'POST',
+      url: '/api/settings/smtp/test',
+      body: { to: 'ops@example.com', smtp: { host: 'smtp.new', pass: 'typed-pass' } },
+    });
+    expect(requests.some((request) => request.method === 'PATCH')).toBe(false);
+    const result = root.querySelector('[data-testid="smtp-test-result"]');
+    expect(result?.textContent).toContain('Login rejected');
+    expect(result?.textContent).toContain('535 5.7.8 Authentication failed');
+    expect(result?.textContent).toContain('Tried the unsaved values.');
+  });
+
+  it('shows an API error such as the rate limit', async () => {
+    smtpStatus = 429;
+    smtpResult = { error: 'rate_limited', message: 'Too many test mails; try again shortly' };
+    await mount('owner');
+    button('Send test mail')?.click();
+    await flush();
+    expect(root.querySelector('[data-testid="smtp-test-result"]')?.textContent).toContain(
+      'Too many test mails',
+    );
+  });
+
+  it('blocks the test while the host is missing', async () => {
+    await mount('owner');
+    await type('Host', '');
+    expect(button('Send test mail')?.disabled).toBe(true);
   });
 });

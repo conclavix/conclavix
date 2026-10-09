@@ -13,6 +13,8 @@ export interface AdapterRunInput {
   timeoutMs: number;
   /** Set for coding agents: the run works in this issue clone inside the sandbox. */
   code?: CodeRunTarget;
+  /** Project secrets for a coding run, by variable name; never passed to read-only runs. */
+  secretEnv?: Record<string, string>;
   onEvent(type: RunEventType, text: string, data?: RunEventData): void;
 }
 

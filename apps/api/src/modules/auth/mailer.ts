@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import type { FastifyBaseLogger } from 'fastify';
-import type { SettingsService } from '../settings/service.js';
+import type SMTPTransport from 'nodemailer/lib/smtp-transport/index.js';
+import type { SettingsService, SmtpSettings } from '../settings/service.js';
 
 export interface Mail {
   to: string;
@@ -11,6 +12,20 @@ export interface Mail {
 export interface Mailer {
   /** Resolve true when the mail was handed to SMTP, false when no SMTP is configured. */
   send(mail: Mail): Promise<boolean>;
+}
+
+/** Nodemailer options for the given SMTP settings; authenticates only when a user is set. */
+export function smtpTransportOptions(
+  smtp: SmtpSettings,
+  extra: SMTPTransport.Options = {},
+): SMTPTransport.Options {
+  return {
+    host: smtp.host ?? undefined,
+    port: smtp.port,
+    secure: smtp.secure,
+    ...(smtp.user ? { auth: { user: smtp.user, pass: smtp.pass ?? '' } } : {}),
+    ...extra,
+  };
 }
 
 /**
@@ -33,12 +48,7 @@ export class SettingsMailer implements Mailer {
       );
       return false;
     }
-    const transport = nodemailer.createTransport({
-      host: smtp.host,
-      port: smtp.port,
-      secure: smtp.secure,
-      ...(smtp.user ? { auth: { user: smtp.user, pass: smtp.pass ?? '' } } : {}),
-    });
+    const transport = nodemailer.createTransport(smtpTransportOptions(smtp));
     await transport.sendMail({
       from: smtp.from,
       to: mail.to,
