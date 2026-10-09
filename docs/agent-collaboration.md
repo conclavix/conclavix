@@ -242,8 +242,10 @@ and not taken by another run, it escalates once:
    `create_subissue`) gets a notification and is woken (`silent_run`) on the issue it delegated
    from (the one recorded at delegation, else the parent) if that issue is still assigned to it:
    right away when it is `todo`/`in_progress`; an `in_review` issue that waits for sub-issues is
-   moved back to `in_progress` first, as when a sub-issue closes. An issue waiting for a board
-   decision (`awaitingBoard`) is left alone; the notification is all the delegator gets then.
+   moved back to `in_progress` first, as when a sub-issue closes. When the delegator cannot be
+   woken there (its issue is closed, reassigned, waiting for a board decision or blocked, or the
+   delegator is paused or disabled in the project), it keeps the notification and the issue is
+   handed to the board as in the next point, so the escalation always reaches someone.
 3. **No delegator** (the board created or assigned the issue, the agent delegated to itself, or
    the delegator no longer exists): the issue moves to `in_review`, where the overview lists it
    among the issues waiting for the board. It is not a board decision (`awaitingBoard` stays

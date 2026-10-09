@@ -165,7 +165,7 @@ describe('silent run escalation', () => {
     ]);
   });
 
-  it('only notifies a delegator that waits for a board decision', async () => {
+  it('notifies a delegator that waits for a board decision and hands the issue to the board', async () => {
     const child = await delegate();
     await ctx.database.collections.issues.updateOne(
       { _id: new ObjectId(epic.id) },
@@ -186,7 +186,12 @@ describe('silent run escalation', () => {
     expect((await issueDoc(epic.id))?.status).toBe('in_review');
     expect(await wakesFor(manager.id)).toHaveLength(0);
     const [comment] = await silentComments(child.id);
-    expect(comment?.body).toContain('Escalated to Manager (who delegated it) as a notification.');
+    expect(comment?.body).toContain('Manager (who delegated it) was notified but cannot be woken');
+    expect((await issueDoc(child.id))?.status).toBe('in_review');
+    const notes = await ctx.database.collections.notifications
+      .find({ agentId: new ObjectId(manager.id), kind: 'silent_run' })
+      .toArray();
+    expect(notes).toHaveLength(1);
   });
 
   it('moves an issue nobody delegated to in_review for the board', async () => {
@@ -213,17 +218,24 @@ describe('silent run escalation', () => {
   });
 
   it('ignores chat runs and issues another run already took', async () => {
+    // A chat run on an issue that would otherwise qualify: only the chat check stops it.
+    const quiet = await fx.issue({ title: 'Quiet task', assigneeAgentId: manager.id });
     const chatRun = {
       _id: new ObjectId(),
       agentId: new ObjectId(manager.id),
-      issueId: null,
+      issueId: new ObjectId(quiet.id),
       chatId: new ObjectId(),
       status: 'succeeded',
-      madeProgress: null,
+      madeProgress: false,
+      createdAt: new Date(),
+      startedAt: new Date(),
     } as unknown as RunDoc;
     expect(await escalateSilentRun(ctx.database, chatRun, 'hi', new Date())).toEqual({
       escalated: false,
     });
+    expect(
+      await escalateSilentRun(ctx.database, { ...chatRun, chatId: null }, 'hi', new Date()),
+    ).toMatchObject({ escalated: true });
 
     const task = await fx.issue({ title: 'Busy task', assigneeAgentId: engineer.id });
     const { run } = await startRunFor(ctx, fx, task.id);

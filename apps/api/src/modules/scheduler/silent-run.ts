@@ -163,11 +163,20 @@ async function act(
     },
     session,
   );
+  if (woken && target.source) {
+    return {
+      action: `Escalated to ${name} (who delegated it), woken on ${target.source.key}.`,
+      woken,
+    };
+  }
+  // A delegator that cannot be woken now (its issue closed, reassigned, waiting for the board, or
+  // the delegator paused) would only see the notification in some later run: the board takes it.
+  await handToBoard(collections, issue, now, session);
   return {
     action:
-      woken && target.source
-        ? `Escalated to ${name} (who delegated it), woken on ${target.source.key}.`
-        : `Escalated to ${name} (who delegated it) as a notification.`,
+      `${name} (who delegated it) was notified but cannot be woken on its issue now, so this ` +
+      'issue moved to in_review for the board. A board comment answers it: the issue goes back ' +
+      'to in_progress and the agent is woken.',
     woken,
   };
 }
