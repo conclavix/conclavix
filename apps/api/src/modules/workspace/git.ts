@@ -76,11 +76,15 @@ export interface GitCallOptions {
   input?: string;
   /** Extra environment variables on top of the minimal git environment. */
   env?: Record<string, string>;
+  /** Exit codes besides 0 that resolve with their output (`git merge-tree` reports conflicts with 1). */
+  allowExitCodes?: readonly number[];
 }
 
 export interface GitResult {
   stdout: Buffer;
   truncated: boolean;
+  /** 0, or one of `allowExitCodes`. */
+  exitCode: number;
 }
 
 export const DEFAULT_TIMEOUT_MS = 15_000;
@@ -110,13 +114,13 @@ export class Git {
         (error, stdout, stderr) => {
           const err = stderr.toString('utf8').slice(0, 2000);
           if (!error) {
-            resolve({ stdout, truncated: false });
+            resolve({ stdout, truncated: false, exitCode: 0 });
             return;
           }
           const code = (error as NodeJS.ErrnoException).code;
           if (code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
             if (options.allowTruncate) {
-              resolve({ stdout: stdout.subarray(0, maxBytes), truncated: true });
+              resolve({ stdout: stdout.subarray(0, maxBytes), truncated: true, exitCode: 0 });
               return;
             }
             reject(
@@ -138,6 +142,10 @@ export class Git {
             return;
           }
           const exitCode = typeof code === 'number' ? code : null;
+          if (exitCode !== null && options.allowExitCodes?.includes(exitCode)) {
+            resolve({ stdout, truncated: false, exitCode });
+            return;
+          }
           reject(
             new GitError(`git ${commandOf(args)} failed with ${exitCode}`, exitCode, err, 'exit'),
           );

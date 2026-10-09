@@ -86,7 +86,10 @@ function page<T>(items: T[], offset: number, limit: number) {
 }
 
 /** A git failure becomes a tool error without git's own message or stderr. */
-async function gitGuarded(work: () => Promise<unknown>): Promise<ToolResult> {
+export async function gitGuarded(
+  work: () => Promise<unknown>,
+  what = 'reading the repository',
+): Promise<ToolResult> {
   return guarded(async () => {
     try {
       return await work();
@@ -94,8 +97,8 @@ async function gitGuarded(work: () => Promise<unknown>): Promise<ToolResult> {
       if (error instanceof GitError) {
         const message =
           error.reason === 'timeout' || error.reason === 'output_limit'
-            ? 'reading the repository hit a time or size limit; narrow the request'
-            : 'reading the repository failed';
+            ? `${what} hit a time or size limit; narrow the request`
+            : `${what} failed`;
         throw new AppError(502, 'repository_unavailable', message, { reason: error.reason });
       }
       throw error;
@@ -429,12 +432,8 @@ export function registerCodeTools(
   scope: RunScope,
   reader: RepoReader,
 ): void {
-  registerProjectCodeTools(
-    server,
-    database,
-    { agent: scope.agent, projectId: scope.issue.projectId },
-    reader,
-  );
+  const target = { agent: scope.agent, projectId: scope.issue.projectId };
+  registerProjectCodeTools(server, database, target, reader);
 }
 
 /** The code tools bound to one project and agent; chat runs use them for a referenced project. */

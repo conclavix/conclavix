@@ -52,11 +52,14 @@ export interface SettingsDoc {
   updatedAt: Date;
 }
 
+/** Board-side authors of an audit entry; agents acting through the agent API are added below. */
+type BoardActor = { type: 'user'; userId: string } | { type: 'board' } | { type: 'system' };
+
 export interface AuditDoc {
   _id: ObjectId;
   at: Date;
   action: string;
-  actor: { type: 'user'; userId: string } | { type: 'board' } | { type: 'system' } | null;
+  actor: BoardActor | { type: 'agent'; agentId: string; name: string } | null;
   targetUserId: string | null;
   ip: string | null;
   details: Record<string, unknown>;

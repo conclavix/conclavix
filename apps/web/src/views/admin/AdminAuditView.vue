@@ -38,6 +38,7 @@ const names = computed(() =>
 const actorItems = computed(() => [
   { title: 'Board token', value: 'board' },
   { title: 'System', value: 'system' },
+  { title: 'Agents', value: 'agent' },
   ...users.value.map((user) => ({ title: `${user.name} (${user.email})`, value: user.id })),
 ]);
 

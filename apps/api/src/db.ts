@@ -92,6 +92,8 @@ export interface AgentDoc {
   projectDefault?: ProjectDefault;
   /** Missing on agents stored before coding agents existed; they count as 'none'. */
   codeAccess?: CodeAccess;
+  /** Missing on agents stored before git integration existed; they count as false. */
+  gitIntegration?: boolean;
   createdAt: Date;
   updatedAt: Date;
   avatarEtag?: string | null;

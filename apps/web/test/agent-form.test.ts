@@ -77,8 +77,11 @@ describe('agent form', () => {
       limits: detail.limits,
       projectDefault: 'enabled',
       codeAccess: 'none',
+      gitIntegration: false,
     });
     expect(createPayload(form).instructions).toBe('# Rules');
+    expect(formFromAgent({ ...detail, gitIntegration: true }).gitIntegration).toBe(true);
+    expect(emptyForm().gitIntegration).toBe(false);
     expect(formFromAgent({ ...detail, codeAccess: 'write' }).codeAccess).toBe('write');
     expect(emptyForm().codeAccess).toBe('none');
     expect(formFromAgent({ ...detail, projectDefault: 'disabled' }).projectDefault).toBe(

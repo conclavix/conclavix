@@ -2,7 +2,6 @@ import type { FastifyInstance } from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isChatRun, type Database } from '../../db.js';
-import { AuditLog } from '../audit/audit.js';
 import { registerChatTools } from './chat-tools.js';
 import { resolveRunToken } from '../runs/tokens.js';
 import { loadChatScope, loadScope } from './scope.js';
@@ -10,20 +9,23 @@ import { registerAgentTools } from './tools.js';
 import { registerMemoryTools } from './memory-tools.js';
 import { registerCodeTools } from './code-tools.js';
 import type { MemoryService } from '../memory/service.js';
-import type { RepoReader } from '../workspace/reader.js';
+import { registerGitTools } from './git-tools.js';
+import { AuditLog } from '../audit/audit.js';
+import type { Workspace } from '../workspace/service.js';
 
 const unauthorized = { error: 'unauthorized', message: 'Missing, invalid or expired run token' };
 
 /**
  * Mount the agent API: a stateless MCP endpoint authenticated by a run token. The read-only code
- * tools are served when a project workspace is configured.
+ * tools are served when a project workspace is configured, the git integration tools in addition
+ * to agents with the `gitIntegration` permission.
  */
 export function registerAgentApi(
   app: FastifyInstance,
   database: Database,
   version: string,
   memories: MemoryService,
-  reader: RepoReader | null = null,
+  workspace: Workspace | null = null,
 ): void {
   const audit = new AuditLog(database.collections, app.log);
   app.post('/mcp', async (request, reply) => {
@@ -36,7 +38,7 @@ export function registerAgentApi(
     const server = new McpServer({ name: 'conclavix', version });
     if (isChatRun(run)) {
       const scope = await loadChatScope(database, run);
-      registerChatTools(server, database, scope, memories, audit, reader);
+      registerChatTools(server, database, scope, memories, audit, workspace);
     } else {
       const scope = await loadScope(database, run);
       registerAgentTools(server, database, scope);
@@ -44,8 +46,11 @@ export function registerAgentApi(
         agentId: scope.agent._id.toHexString(),
         projectId: scope.issue.projectId.toHexString(),
       }));
-      if (reader) {
-        registerCodeTools(server, database, scope, reader);
+      if (workspace) {
+        registerCodeTools(server, database, scope, workspace);
+        if (scope.agent.gitIntegration === true) {
+          registerGitTools(server, database, scope, workspace, audit);
+        }
       }
     }
     const transport = new StreamableHTTPServerTransport({ enableJsonResponse: true });
