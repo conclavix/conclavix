@@ -75,6 +75,7 @@ describe('agent API over MCP', () => {
       'memory_search',
       'read_document',
       'reopen_issue',
+      'request_board_decision',
       'set_status',
       'write_document',
     ]);

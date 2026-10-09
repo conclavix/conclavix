@@ -7,7 +7,12 @@ import { lockBoard, placeChangedIssue } from './columns.js';
 
 type Waiting = IssueDoc & { assigneeAgentId: NonNullable<IssueDoc['assigneeAgentId']> };
 
-const waitingFilter = { status: 'in_review', assigneeAgentId: { $ne: null } } as const;
+// An issue awaiting a board decision waits for the board's answer, not for other issues.
+const waitingFilter = {
+  status: 'in_review',
+  assigneeAgentId: { $ne: null },
+  awaitingBoard: null,
+} as const;
 
 /** True when the assignee could run now: it exists, is active and is enabled in the project. */
 async function canRun(
@@ -62,8 +67,7 @@ async function resume(
  * closes it: its parent (`subissue_closed`), and issues whose last open blocker it was
  * (`unblocked`). Each moves to in_progress and its assignee gets one wake; a pending wake for the
  * same agent and issue absorbs further ones, so several closures at once still queue one wake.
- * The waiting agent may also have set in_review for a board decision; it is woken once per
- * closure and sets in_review again if it still needs the board.
+ * An issue awaiting a board decision (`awaitingBoard`) is left alone: the board's answer wakes it.
  * Returns the resumed issues: their wake is already queued, so the post-commit unblocked wakes
  * must leave them out, or a wake picked up in between would be followed by a second run.
  */
