@@ -340,10 +340,11 @@ describe('board decisions', () => {
   });
 
   it('keeps an issue awaiting the board in_review when a sub-issue or its blocker closes', async () => {
+    (await ask({ question: 'Postgres or Mongo?' })).close();
     const child = await fx.issue({ title: 'Benchmark both', parentId: issue.id });
     const blocker = await fx.issue({ title: 'Collect numbers' });
     await fx.patch(issue.key, { blockedBy: [blocker.id] });
-    (await ask({ question: 'Postgres or Mongo?' })).close();
+    expect((await issueDoc())?.blockedBy.map(String)).toEqual([blocker.id]);
     await fx.patch(child.key, { status: 'done' });
     await fx.patch(blocker.key, { status: 'done' });
     const doc = await issueDoc();
