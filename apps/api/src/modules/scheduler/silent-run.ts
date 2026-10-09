@@ -8,7 +8,7 @@ import {
   type RunDoc,
 } from '../../db.js';
 import { lockBoard, placeChangedIssue } from '../issues/columns.js';
-import { resumeWaitingIssue } from '../issues/resume.js';
+import { assigneeCanRunNow, resumeWaitingIssue } from '../issues/resume.js';
 import { notify } from '../org/notifications.js';
 import { isActionable, requestWake } from './wakes.js';
 
@@ -34,12 +34,15 @@ export function quoteFinalText(text: string | null | undefined): string {
 
 /**
  * True when a finished run left something behind: progress (status change, document revision,
- * sub-issue, reopening, synced commit), a commit in the clone, or a comment of the agent on the
- * issue while it ran.
+ * sub-issue, reopening, synced commit), a commit in the clone, a commit or sync error of the
+ * runner (the work may sit uncommitted in the clone), or a comment of the agent on the issue while
+ * it ran.
  */
 export async function leftTrace(collections: Collections, run: RunDoc): Promise<boolean> {
   if (run.madeProgress !== false || !run.issueId) return true;
-  if (run.code && (run.code.commit !== null || run.code.agentCommits > 0)) return true;
+  // A commit, or work the runner could not commit (its error is on the run and in the log).
+  const code = run.code;
+  if (code && (code.commit !== null || code.agentCommits > 0 || code.error !== null)) return true;
   const comment = await collections.comments.findOne(
     {
       issueId: run.issueId,
@@ -101,6 +104,8 @@ async function wakeDelegator(
   const { agent, source } = target;
   if (!source) return false;
   if (isActionable(source)) {
+    // A paused or disabled delegator, or a blocked source, would have the wake skipped.
+    if (!(await assigneeCanRunNow(collections, source, session))) return false;
     await requestWake(collections, agent._id, source._id, 'silent_run', session);
     return true;
   }

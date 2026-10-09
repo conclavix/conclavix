@@ -194,6 +194,46 @@ describe('silent run escalation', () => {
     expect(notes).toHaveLength(1);
   });
 
+  it('hands the issue to the board when the delegator is paused', async () => {
+    const child = await delegate();
+    await ctx.database.collections.agents.updateOne(
+      { _id: new ObjectId(manager.id) },
+      { $set: { status: 'paused' } },
+    );
+    await runOnce(child.id);
+    expect(await wakesFor(manager.id)).toHaveLength(0);
+    expect((await issueDoc(child.id))?.status).toBe('in_review');
+    const [comment] = await silentComments(child.id);
+    expect(comment?.body).toContain('was notified but cannot be woken');
+  });
+
+  it('does not count a run whose work the runner could not commit as silent', async () => {
+    const task = await fx.issue({ title: 'Commit failed', assigneeAgentId: engineer.id });
+    await runOnce(task.id, {}, async (run) => {
+      await ctx.database.collections.runs.updateOne(
+        { _id: run._id },
+        {
+          $set: {
+            code: {
+              branch: 'cvx/X-1',
+              base: null,
+              head: null,
+              commit: null,
+              agentCommits: 0,
+              files: 0,
+              insertions: 0,
+              deletions: 0,
+              synced: false,
+              error: 'commit failed: disk full',
+            },
+          },
+        },
+      );
+    });
+    expect(await silentComments(task.id)).toHaveLength(0);
+    expect((await issueDoc(task.id))?.status).toBe('todo');
+  });
+
   it('moves an issue nobody delegated to in_review for the board', async () => {
     const task = await fx.issue({ title: 'Board task', assigneeAgentId: engineer.id });
     await runOnce(task.id, { finalText: '' });

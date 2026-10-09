@@ -17,7 +17,7 @@ const waitingFilter = {
 /** True when the assignee could run now: it exists, is active and is enabled in the project. */
 async function canRun(
   collections: Collections,
-  issue: Waiting,
+  issue: Pick<Waiting, 'assigneeAgentId' | 'projectId'>,
   session: ClientSession,
 ): Promise<boolean> {
   const agent = await collections.agents.findOne(
@@ -31,6 +31,27 @@ async function canRun(
 }
 
 /**
+ * True when a wake for the issue's assignee would become a run: the assignee could run (canRun)
+ * and the issue has no open blocker. The wake gates would otherwise skip it.
+ */
+export async function assigneeCanRunNow(
+  collections: Collections,
+  issue: IssueDoc,
+  session: ClientSession,
+): Promise<boolean> {
+  const assigneeAgentId = issue.assigneeAgentId;
+  if (!assigneeAgentId) return false;
+  const openBlockers = await collections.issues.countDocuments(
+    { _id: { $in: issue.blockedBy }, status: { $nin: [...CLOSED_ISSUE_STATUSES] } },
+    { session },
+  );
+  return (
+    openBlockers === 0 &&
+    canRun(collections, { assigneeAgentId, projectId: issue.projectId }, session)
+  );
+}
+
+/**
  * Move an in_review issue to in_progress (its board column follows) and wake its assignee.
  * An assignee that could not run keeps the issue in_review, so the board still sees it.
  */
@@ -40,12 +61,8 @@ async function resume(
   reason: WakeReason,
   session: ClientSession,
 ): Promise<boolean> {
-  const openBlockers = await collections.issues.countDocuments(
-    { _id: { $in: issue.blockedBy }, status: { $nin: [...CLOSED_ISSUE_STATUSES] } },
-    { session },
-  );
   // A blocked issue's wake would be skipped; it stays in review until its last blocker closes.
-  if (openBlockers > 0 || !(await canRun(collections, issue, session))) {
+  if (!(await assigneeCanRunNow(collections, issue, session))) {
     return false;
   }
   const { columns } = await lockBoard(collections, issue.projectId, session);

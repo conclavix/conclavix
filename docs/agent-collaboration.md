@@ -232,8 +232,9 @@ Integrations Agent on its integration issue and Mr. Green on his planning issue 
 A run can end successfully without leaving anything behind, for example when an agent gives up on
 a missing tool and simply stops. The issue stays `todo` and, until the next heartbeat, nobody
 notices. After every **succeeded** issue run the scheduler therefore checks whether it left a
-trace: progress as above, a commit in the clone (synced or not) or a comment of the agent on the
-issue while it ran. If not, and the issue is still `todo` or `in_progress`, assigned to that agent
+trace: progress as above, a commit in the clone (synced or not), a commit or sync error of the
+runner (the work may sit uncommitted in the clone; the error is on the run) or a comment of the
+agent on the issue while it ran. If not, and the issue is still `todo` or `in_progress`, assigned to that agent
 and not taken by another run, it escalates once:
 
 1. A system comment on the issue: `Run <id> ended without a result: ...`, quoting the agent's last
