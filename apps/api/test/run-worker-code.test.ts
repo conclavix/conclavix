@@ -91,6 +91,7 @@ describe('RunWorker with coding agents', () => {
       expect.objectContaining({ key: 'COD-1' }),
       expect.stringMatching(/\.claude\/skills$/),
       expect.anything(),
+      expect.objectContaining({ name: expect.any(String) }),
     );
     expect(fx.seen[0]?.code).toBe(fx.context);
     expect(fx.codeRuns.finish).toHaveBeenCalledTimes(1);

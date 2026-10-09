@@ -13,6 +13,8 @@ export interface Agent {
   projectDefault?: 'enabled' | 'disabled';
   /** 'write': a coding agent working in the issue clone inside the sandbox; missing means none. */
   codeAccess?: 'none' | 'write';
+  /** May merge branches into issue branches and fast-forward main; missing means false. */
+  gitIntegration?: boolean;
 }
 
 export interface OrgNode {

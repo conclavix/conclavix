@@ -168,7 +168,15 @@ describe('CodeRuns.finish', () => {
   const setup = (workspace: Partial<CodeWorkspace>) => {
     const updateOne = vi.fn().mockResolvedValue(undefined);
     const database = { collections: { runs: { updateOne } } } as unknown as Database;
-    const runs = new CodeRuns(database, {} as AuditLog, workspace as CodeWorkspace);
+    const runs = new CodeRuns(
+      database,
+      {} as AuditLog,
+      {
+        agentEmailDomain: 'conclavix.invalid',
+        branchTip: vi.fn().mockResolvedValue(context.base),
+        ...workspace,
+      } as CodeWorkspace,
+    );
     return { runs, updateOne };
   };
   const redact = (text: string) => text.replaceAll('run-token-value', '[redacted]');
@@ -285,6 +293,7 @@ describe('CodeRuns.prepare', () => {
       {
         createIssueWorkspace,
         branchTip: vi.fn().mockResolvedValue(null),
+        reconcileClone: vi.fn().mockResolvedValue({ action: 'none', warnings: [] }),
       } as unknown as CodeWorkspace,
       reclaim,
     );

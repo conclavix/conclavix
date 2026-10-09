@@ -145,7 +145,7 @@ describe('delegation along agent links', () => {
     ).toBe(0);
   });
 
-  it('notifies the delegator instead when its issue is no longer actionable', async () => {
+  it('resumes a delegator that waits in_review and wakes it instead of notifying', async () => {
     const { run, token } = await startRunFor(ctx, fx, epic.id);
     const client = await connectAgent(baseUrl, token);
     const child = (
@@ -154,6 +154,26 @@ describe('delegation along agent links', () => {
     await callTool(client, 'set_status', { status: 'in_review' });
     await client.close();
     await fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd: 0 });
+
+    await fx.patch(child.key, { status: 'cancelled' });
+    expect(
+      await ctx.database.collections.issues.findOne({ _id: new ObjectId(epic.id) }),
+    ).toMatchObject({ status: 'in_progress', columnId: 'in_progress' });
+    expect(await pendingWakesFor(manager.id)).toEqual([
+      expect.objectContaining({ issueId: new ObjectId(epic.id), reason: 'subissue_closed' }),
+    ]);
+    expect(await notificationsFor(manager.id)).toHaveLength(0);
+  });
+
+  it('notifies the delegator instead when its issue is no longer actionable', async () => {
+    const { run, token } = await startRunFor(ctx, fx, epic.id);
+    const client = await connectAgent(baseUrl, token);
+    const child = (
+      await callTool(client, 'create_subissue', { title: 'Build it', assigneeAgentId: engineer.id })
+    ).data as { key: string };
+    await client.close();
+    await fx.scheduler.finishRun(run._id, { status: 'succeeded', costUsd: 0 });
+    await fx.patch(epic.key, { status: 'backlog' });
 
     await fx.patch(child.key, { status: 'cancelled' });
     expect(await pendingWakesFor(manager.id)).toHaveLength(0);

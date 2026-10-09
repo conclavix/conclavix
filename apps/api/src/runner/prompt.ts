@@ -36,13 +36,25 @@ export const SCREENSHOT_HINT = [
   "issue's branch. Supported: png, jpg, gif, webp, svg up to 10 MB.",
 ];
 
+/** How an agent with the git integration permission integrates branches. */
+export const GIT_INTEGRATION_HINT = [
+  'Git integration (you have this permission; it runs on the server, not in a working copy):',
+  '- get_merge_status previews a merge: what the target already contains, which files conflict.',
+  '- merge_branches merges existing branches into cvx/<KEY> of your issue or of an issue assigned',
+  '  to you, one merge commit per source. On a conflict nothing changes and you get the files;',
+  '  have them resolved on one of the branches, then merge again.',
+  '- fast_forward_main moves main to an issue branch that passed review, fast-forward only.',
+  'A merge into your own branch reaches your working copy in your next run, not in this one:',
+  'merge before you edit files the sources also change.',
+];
+
 /** The task prompt for one run; the agent's own instructions go into the system prompt. */
 export function buildPrompt(
   agent: AgentDoc,
   issue: IssueDoc,
   reason: string,
   position: OrgPosition,
-  options: { code?: boolean } = {},
+  options: { code?: boolean; git?: boolean } = {},
 ): string {
   return [
     `You are ${agent.name}${agent.title ? `, ${agent.title}` : ''} (role: ${agent.role}) in a Conclavix organisation.`,
@@ -61,10 +73,12 @@ export function buildPrompt(
     '   order dependent sub-issues with blockedBy. Read what your sub-issues produced with',
     '   list_documents and read_document; send one back on its branch with reopen_issue.',
     '4. Comment on progress or questions with add_comment.',
-    '5. Set the status to in_review when you need the board (its comment moves it back to',
-    '   in_progress and wakes you), or done when the issue is finished.',
+    '5. Set the status to in_review when you need the board, or done when the issue is finished.',
+    '   A board comment, a sub-issue that closes or your last blocker closing moves an in_review',
+    '   issue back to in_progress and wakes you; set in_review again if you still need the board.',
     '6. Before you stop, memory_save what will still matter later (decisions, pitfalls, rules), not progress.',
     ...(options.code ? ['', ...SCREENSHOT_HINT] : []),
+    ...(options.git ? ['', ...GIT_INTEGRATION_HINT] : []),
     '',
     'Stop when this step is done. You will be woken again when something changes.',
   ].join('\n');
