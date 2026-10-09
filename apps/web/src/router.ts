@@ -45,6 +45,13 @@ export const router = createRouter({
     },
     { path: '/org', name: 'org', component: () => import('./views/OrgView.vue') },
     { path: '/memory', name: 'memory', component: () => import('./views/MemoryView.vue') },
+    { path: '/chats', name: 'chats', component: () => import('./views/ChatsView.vue') },
+    {
+      path: '/chats/:chatId',
+      name: 'chat',
+      component: () => import('./views/ChatView.vue'),
+      props: true,
+    },
     { path: '/runs', name: 'runs', component: () => import('./views/RunsView.vue') },
     {
       path: '/runs/:runId',

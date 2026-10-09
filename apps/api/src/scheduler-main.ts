@@ -2,6 +2,7 @@ import { credentialWarnings, loadConfig } from '@conclavix/core';
 import pino from 'pino';
 import { connectDatabase } from './db.js';
 import { Scheduler } from './modules/scheduler/scheduler.js';
+import { processQueues } from './modules/scheduler/passes.js';
 import { QueueDispatcher, redisConnection } from './runner/queue.js';
 
 async function main(): Promise<void> {
@@ -36,10 +37,7 @@ async function main(): Promise<void> {
       lastStallSweep = now;
       log.info(await scheduler.sweepStalls(), 'stall watchdog sweep');
     }
-    const counts = await scheduler.processPendingWakes();
-    if (counts.run + counts.skip > 0) {
-      log.info(counts, 'wakes processed');
-    }
+    await processQueues(scheduler, log);
   };
 
   const loop = async (): Promise<void> => {

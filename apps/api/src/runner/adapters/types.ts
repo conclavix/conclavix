@@ -6,7 +6,8 @@ import type { RunMcpServer } from '../run-connections.js';
 export interface AdapterRunInput {
   run: RunDoc;
   agent: AgentDoc;
-  issue: IssueDoc;
+  /** Null for chat runs. */
+  issue: IssueDoc | null;
   prompt: string;
   workspace: string;
   mcpUrl: string;

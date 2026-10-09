@@ -29,15 +29,18 @@ export async function recentActivity(
       .toArray(),
     collections.issues.find().sort({ createdAt: -1 }).limit(limit).toArray(),
   ]);
-  const ids: ObjectId[] = [...runs, ...comments].map((doc) => doc.issueId);
+  // Chat runs have no issue.
+  const ids: ObjectId[] = [...runs, ...comments].flatMap((doc) =>
+    doc.issueId ? [doc.issueId] : [],
+  );
   const keys = await issueKeys(collections, ids);
   for (const issue of [...closed, ...created]) {
     keys.set(issue._id.toHexString(), issue.key);
   }
   const agentName = (id: ObjectId): string => agents.get(id.toHexString())?.name ?? 'deleted agent';
-  const issue = (id: ObjectId) => ({
-    issueId: id.toHexString(),
-    issueKey: keys.get(id.toHexString()) ?? null,
+  const issue = (id: ObjectId | null) => ({
+    issueId: id?.toHexString() ?? null,
+    issueKey: id ? (keys.get(id.toHexString()) ?? null) : null,
   });
 
   const items: ActivityItem[] = [

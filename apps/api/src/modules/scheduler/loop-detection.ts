@@ -4,7 +4,7 @@ import {
   FINISHED_RUN_STATUSES,
   idleLimitFromLegacy,
 } from '@conclavix/core';
-import type { AgentDoc, Collections, Database, RunDoc } from '../../db.js';
+import type { AgentDoc, Collections, Database, IssueRunDoc, RunDoc } from '../../db.js';
 
 /**
  * The agent's idle-run limit. Agents not yet migrated still carry the former hourly limit, which
@@ -78,7 +78,7 @@ export async function idleStreak(
  */
 export async function pauseOnLoop(
   database: Database,
-  run: RunDoc,
+  run: IssueRunDoc,
   threshold: number,
   now: Date,
 ): Promise<boolean> {

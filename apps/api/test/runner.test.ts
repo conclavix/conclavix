@@ -12,7 +12,7 @@ import { QueueDispatcher, redisConnection, startQueueWorker } from '../src/runne
 import { RunEventRecorder } from '../src/runner/events.js';
 import { RunWorker } from '../src/runner/run-worker.js';
 import { createTestContext, type TestContext } from './helpers.js';
-import { createFixture, type Fixture } from './scheduler-helpers.js';
+import { createFixture, type Fixture, issueRun } from './scheduler-helpers.js';
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-claude.mjs', import.meta.url));
 const REDIS = process.env['TEST_REDIS_URL'] ?? 'redis://127.0.0.1:6390';
@@ -168,7 +168,8 @@ describe('runner', () => {
       tokenHash: null,
     });
     expect(
-      (await ctx.database.collections.issues.findOne({ _id: run.issueId }))?.checkoutRunId,
+      (await ctx.database.collections.issues.findOne({ _id: issueRun(run).issueId }))
+        ?.checkoutRunId,
     ).toBeNull();
   });
 
@@ -178,7 +179,9 @@ describe('runner', () => {
     const run = await queuedRun();
     await workerFor('success').process(run._id);
     expect(await runDoc(run._id)).toMatchObject({ status: 'succeeded' });
-    const comment = await ctx.database.collections.comments.findOne({ issueId: run.issueId });
+    const comment = await ctx.database.collections.comments.findOne({
+      issueId: issueRun(run).issueId,
+    });
     expect(comment?.body).toContain('secret=undefined');
     expect(comment?.body).toContain('toolsearch=false');
   });
@@ -229,9 +232,9 @@ describe('runner', () => {
       workerFor('success').process(run._id),
     ]);
     expect(results.filter((result) => result !== null)).toHaveLength(1);
-    expect(await ctx.database.collections.comments.countDocuments({ issueId: run.issueId })).toBe(
-      1,
-    );
+    expect(
+      await ctx.database.collections.comments.countDocuments({ issueId: issueRun(run).issueId }),
+    ).toBe(1);
   });
 
   it('recovers runs whose runner vanished and re-dispatches stuck queued runs', async () => {
@@ -251,7 +254,8 @@ describe('runner', () => {
       error: 'runner lost the run',
     });
     expect(
-      (await ctx.database.collections.issues.findOne({ _id: lost.issueId }))?.checkoutRunId,
+      (await ctx.database.collections.issues.findOne({ _id: issueRun(lost).issueId }))
+        ?.checkoutRunId,
     ).toBeNull();
     expect(fx.dispatcher.runs.slice(before).some((run) => run._id.equals(stuck._id))).toBe(true);
   });

@@ -38,10 +38,14 @@ async function fetchLog(state: LiveState, runId: string): Promise<void> {
 }
 
 /** Fetches issues the board has not seen yet, e.g. for old runs in the history. */
-function issueLoader(state: LiveState): (ids: string[]) => Promise<void> {
+function issueLoader(
+  state: LiveState,
+): (ids: readonly (string | null | undefined)[]) => Promise<void> {
   const pendingIssues = new Set<string>();
   return async (ids) => {
-    const missing = [...new Set(ids)].filter((id) => !state.issues[id] && !pendingIssues.has(id));
+    // Chat runs have no issue.
+    const known = ids.filter((id): id is string => typeof id === 'string');
+    const missing = [...new Set(known)].filter((id) => !state.issues[id] && !pendingIssues.has(id));
     missing.forEach((id) => pendingIssues.add(id));
     await Promise.all(
       missing.map(async (id) => {

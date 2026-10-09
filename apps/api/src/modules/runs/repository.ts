@@ -8,7 +8,9 @@ import { assertAgentEnabledInProject } from '../projects/agent-access.js';
 const toRun = (doc: RunDoc): Run => ({
   id: doc._id.toHexString(),
   agentId: doc.agentId.toHexString(),
-  issueId: doc.issueId.toHexString(),
+  kind: doc.chatId ? 'chat' : 'issue',
+  issueId: doc.issueId?.toHexString() ?? null,
+  chatId: doc.chatId?.toHexString() ?? null,
   reason: doc.reason,
   status: doc.status,
   costUsd: doc.costUsd,
@@ -41,6 +43,9 @@ export class RunRepository {
     }
     if (query.issueId) {
       filter.issueId = new ObjectId(query.issueId);
+    }
+    if (query.chatId) {
+      filter.chatId = new ObjectId(query.chatId);
     }
     if (query.status) {
       filter.status = { $in: query.status };

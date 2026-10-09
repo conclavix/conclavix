@@ -2,7 +2,7 @@ import { ObjectId } from 'mongodb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTestContext, type TestContext } from './helpers.js';
 import { callTool, connectAgent, startRunFor } from './mcp-helpers.js';
-import { createFixture, type Fixture } from './scheduler-helpers.js';
+import { createFixture, type Fixture, issueRun } from './scheduler-helpers.js';
 
 type Ref = { id: string; key: string };
 
@@ -122,7 +122,7 @@ describe('reports links that wake their target', () => {
     expect(
       fx.dispatcher.runs
         .slice(before)
-        .map((run) => `${run.agentId.toHexString()}:${run.issueId.toHexString()}`)
+        .map((run) => `${run.agentId.toHexString()}:${issueRun(run).issueId.toHexString()}`)
         .sort(),
     ).toEqual([`${integrator.id}:${integration.id}`, `${lead.id}:${plan.id}`].sort());
   });

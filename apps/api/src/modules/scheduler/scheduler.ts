@@ -1,7 +1,15 @@
 import pino from 'pino';
 import { ObjectId, type ClientSession } from 'mongodb';
 import { CLOSED_ISSUE_STATUSES, type FinishedRunStatus } from '@conclavix/core';
-import { LOCKS, lock, type Database, type IssueDoc, type RunDoc, type WakeDoc } from '../../db.js';
+import {
+  LOCKS,
+  isChatRun,
+  lock,
+  type Database,
+  type IssueDoc,
+  type RunDoc,
+  type WakeDoc,
+} from '../../db.js';
 import { conflict, notFound, unprocessable } from '../../errors.js';
 import { Redactor, errorKind, redactOrWithhold } from '../../runner/redact.js';
 import { generateRunToken } from '../runs/tokens.js';
@@ -10,6 +18,8 @@ import { pauseOnLoop, pauseThreshold, runMadeProgress } from './loop-detection.j
 import { sweepStalls, type StallSweep } from './stall-watchdog.js';
 import { ACTIONABLE_STATUSES, requestWake } from './wakes.js';
 import { disabledAssignments } from '../projects/agent-access.js';
+import { releaseChatRun } from '../chats/turns.js';
+import { processChatTurns, type ChatTurnCounts } from '../chats/scheduling.js';
 
 /**
  * Receives runs the scheduler created; the runner queue implements it.
@@ -231,11 +241,7 @@ export class Scheduler {
         { session },
       );
       if (failed.modifiedCount === 1) {
-        await this.collections.issues.updateOne(
-          { _id: run.issueId, checkoutRunId: run._id },
-          { $set: { checkoutRunId: null } },
-          { session },
-        );
+        await this.release(run, 'the run could not be dispatched', now, session);
       }
     });
   }
@@ -265,8 +271,11 @@ export class Scheduler {
       if (current.status !== 'queued' && current.status !== 'running') {
         throw conflict(`run already finished with status ${current.status}`);
       }
-      const issue = await this.collections.issues.findOne({ _id: current.issueId }, { session });
-      const madeProgress = runMadeProgress(current, issue?.progress);
+      const issue = current.issueId
+        ? await this.collections.issues.findOne({ _id: current.issueId }, { session })
+        : null;
+      // Chat runs work on no issue, so they make no progress and are no idle runs either.
+      const madeProgress = isChatRun(current) ? null : runMadeProgress(current, issue?.progress);
       const finished = await this.collections.runs.findOneAndUpdate(
         { _id: runId },
         {
@@ -283,26 +292,58 @@ export class Scheduler {
         },
         { returnDocument: 'after', session },
       );
-      await this.collections.issues.updateOne(
-        { _id: current.issueId, checkoutRunId: runId },
-        { $set: { checkoutRunId: null } },
-        { session },
-      );
+      await this.release(current, finished?.error ?? null, now, session);
       return finished;
     });
     if (!run) {
       throw notFound('Run');
     }
-    const agent = await this.collections.agents.findOne({ _id: run.agentId });
-    if (agent) {
+    // Chat runs are started by the board; they never count towards loop detection.
+    const agent = isChatRun(run)
+      ? null
+      : await this.collections.agents.findOne({ _id: run.agentId });
+    if (agent && run.issueId) {
       await pauseOnLoop(
         this.database,
-        run,
+        { ...run, issueId: run.issueId },
         pauseThreshold(agent, this.options.idleRunsAfterBackoff),
         now,
       );
     }
     return run;
+  }
+
+  /** Give the run's issue checkout back, or free its chat for the next turn. */
+  private async release(
+    run: RunDoc,
+    error: string | null,
+    now: Date,
+    session: ClientSession,
+  ): Promise<void> {
+    if (isChatRun(run)) {
+      await releaseChatRun(this.collections, run, error, now, session);
+      return;
+    }
+    if (!run.issueId) return;
+    await this.collections.issues.updateOne(
+      { _id: run.issueId, checkoutRunId: run._id },
+      { $set: { checkoutRunId: null } },
+      { session },
+    );
+  }
+
+  /**
+   * Turn pending chat turns (a board message, an approved plan) into chat runs of the lead; see
+   * processChatTurns in the chats module.
+   */
+  processChatTurns(now = new Date()): Promise<ChatTurnCounts> {
+    return processChatTurns(
+      this.database,
+      this.dispatcher,
+      this.options.batchSize,
+      (run, error) => this.failDispatch(run, error, now),
+      now,
+    );
   }
 
   /** Fail runs whose runner vanished, and re-dispatch queued runs that never reached a worker. */

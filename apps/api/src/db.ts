@@ -18,10 +18,8 @@ import type {
   IssueStatus,
   MemoryAuthor,
   NotificationKind,
-  Preferences,
   ProjectDefault,
   CodeAccess,
-  Role,
   ProjectStatus,
   RunEventData,
   RunCode,
@@ -35,10 +33,22 @@ import type {
 import type { ApiTokenDoc, SettingsDoc } from './db/settings.js';
 import type { DecisionCollections, DecisionDoc, IssueDecisionFields } from './db/decisions.js';
 import type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
+import type { AuditDoc, SessionDoc, UserDoc } from './db/users.js';
+import type { ChatDoc, ChatMessageDoc, ChatPlanRevisionDoc } from './db/chats.js';
 import { vaultCollections, type VaultCollections } from './db/vault.js';
 
 export type { ApiTokenDoc, SettingsDoc, SmtpSettingsDoc } from './db/settings.js';
 export type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
+export type { AuditDoc, SessionDoc, UserDoc } from './db/users.js';
+export type {
+  ChatDoc,
+  ChatMessageDoc,
+  ChatPlanRevisionDoc,
+  ChatRunDoc,
+  ChatTurnDoc,
+  IssueRunDoc,
+} from './db/chats.js';
+export { isChatRun } from './db/chats.js';
 
 export interface ProjectDoc {
   _id: ObjectId;
@@ -134,7 +144,10 @@ export interface WakeDoc {
 export interface RunDoc {
   _id: ObjectId;
   agentId: ObjectId;
-  issueId: ObjectId;
+  /** Null for chat runs, which belong to a board chat instead of an issue. */
+  issueId: ObjectId | null;
+  /** Set for chat runs; absent on issue runs (and on all runs stored before chats existed). */
+  chatId?: ObjectId | null;
   reason: WakeReason;
   status: RunStatus;
   costUsd: number;
@@ -280,41 +293,6 @@ export interface LockDoc {
   wakeCursor?: ObjectId | null;
 }
 
-/** The better-auth user document, read and updated natively for roles and bans. */
-export interface UserDoc {
-  _id: ObjectId;
-  email: string;
-  name: string;
-  emailVerified: boolean;
-  role: Role;
-  banned: boolean;
-  twoFactorEnabled?: boolean;
-  preferences?: Partial<Preferences>;
-  avatarEtag?: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface SessionDoc {
-  _id: ObjectId;
-  userId: ObjectId;
-  token: string;
-  expiresAt: Date;
-}
-
-/** Board-side authors of an audit entry; agents acting through the agent API are added below. */
-type BoardActor = { type: 'user'; userId: string } | { type: 'board' } | { type: 'system' };
-
-export interface AuditDoc {
-  _id: ObjectId;
-  at: Date;
-  action: string;
-  actor: BoardActor | { type: 'agent'; agentId: string; name: string } | null;
-  targetUserId: string | null;
-  ip: string | null;
-  details: Record<string, unknown>;
-}
-
 export interface Collections extends DecisionCollections, VaultCollections {
   projects: Collection<ProjectDoc>;
   agents: Collection<AgentDoc>;
@@ -340,6 +318,9 @@ export interface Collections extends DecisionCollections, VaultCollections {
   orgLayout: Collection<LayoutDoc>;
   notifications: Collection<NotificationDoc>;
   skillSources: Collection<SkillSourceDoc>;
+  chats: Collection<ChatDoc>;
+  chatMessages: Collection<ChatMessageDoc>;
+  chatPlanRevisions: Collection<ChatPlanRevisionDoc>;
 }
 
 export interface Database {
@@ -416,6 +397,9 @@ export async function connectDatabase(uri: string): Promise<Database> {
       orgLayout: db.collection<LayoutDoc>('org_layout'),
       notifications: db.collection<NotificationDoc>('notifications'),
       skillSources: db.collection<SkillSourceDoc>('skill_sources'),
+      chats: db.collection<ChatDoc>('board_chats'),
+      chatMessages: db.collection<ChatMessageDoc>('chat_messages'),
+      chatPlanRevisions: db.collection<ChatPlanRevisionDoc>('chat_plan_revisions'),
       ...vaultCollections(db),
       decisions: db.collection<DecisionDoc>('decisions'),
     };

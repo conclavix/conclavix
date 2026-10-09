@@ -8,7 +8,7 @@ import { ClaudeCliAdapter } from '../src/runner/adapters/claude-cli.js';
 import { RunWorker } from '../src/runner/run-worker.js';
 import { secretsFromEnv } from '../src/runner/secrets.js';
 import { createTestContext, type TestContext } from './helpers.js';
-import { createFixture, type Fixture } from './scheduler-helpers.js';
+import { createFixture, type Fixture, issueRun } from './scheduler-helpers.js';
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-claude.mjs', import.meta.url));
 
@@ -26,7 +26,9 @@ describe('per-agent LLM gateway keys', () => {
     if (!run) throw new Error('expected a run');
     await worker.process(run._id);
     const done = await ctx.database.collections.runs.findOne({ _id: run._id });
-    const comment = await ctx.database.collections.comments.findOne({ issueId: run.issueId });
+    const comment = await ctx.database.collections.comments.findOne({
+      issueId: issueRun(run).issueId,
+    });
     return { run: done, body: comment?.body ?? '' };
   };
 

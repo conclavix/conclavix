@@ -56,12 +56,15 @@ export function registerNotificationTools(
   );
 }
 
-interface LeadToolContext {
+interface LeadReadContext {
   server: McpServer;
   database: Database;
-  scope: RunScope;
   assertLead(): Promise<void>;
   activeProject(key: string): Promise<ProjectDoc>;
+}
+
+interface LeadToolContext extends LeadReadContext {
+  scope: RunScope;
 }
 
 /** Reading projects and their boards across the organisation. */
@@ -70,7 +73,7 @@ function registerProjectReadTools({
   database,
   assertLead,
   activeProject,
-}: LeadToolContext): void {
+}: LeadReadContext): void {
   const { collections } = database;
   server.registerTool(
     'list_projects',
@@ -196,21 +199,16 @@ function registerCreateIssueTool({
   );
 }
 
-/**
- * Planning tools for the lead only: they are registered for the lead's runs and every call checks
- * again that the run's agent is still the lead.
- */
-export function registerLeadTools(server: McpServer, database: Database, scope: RunScope): void {
-  const context: LeadToolContext = {
+function leadContext(server: McpServer, database: Database, agentId: ObjectId) {
+  return {
     server,
     database,
-    scope,
     assertLead: async () => {
-      if (!(await isLead(database, scope.agent._id))) {
+      if (!(await isLead(database, agentId))) {
         throw forbidden('only the lead agent can plan across projects');
       }
     },
-    activeProject: async (key) => {
+    activeProject: async (key: string) => {
       const project = await database.collections.projects.findOne({ key });
       if (!project) {
         throw notFound('Project');
@@ -221,6 +219,23 @@ export function registerLeadTools(server: McpServer, database: Database, scope: 
       return project;
     },
   };
+}
+
+/**
+ * Planning tools for the lead only: they are registered for the lead's runs and every call checks
+ * again that the run's agent is still the lead.
+ */
+export function registerLeadTools(server: McpServer, database: Database, scope: RunScope): void {
+  const context: LeadToolContext = { ...leadContext(server, database, scope.agent._id), scope };
   registerProjectReadTools(context);
   registerCreateIssueTool(context);
+}
+
+/** list_projects and get_project_board for a lead's chat run, which has no issue. */
+export function registerLeadReadTools(
+  server: McpServer,
+  database: Database,
+  agentId: ObjectId,
+): void {
+  registerProjectReadTools(leadContext(server, database, agentId));
 }
