@@ -19,7 +19,7 @@ import {
   removeLeftovers,
   shareTree,
 } from './repo-base.js';
-import { RepoMerger } from './merge.js';
+import { MediaReader } from './media.js';
 
 export { DEFAULT_LIMITS, type WorkspaceLimits, type ResolvedRef } from './repo-base.js';
 
@@ -62,7 +62,7 @@ export async function findUnsafeEntry(root: string, budget: number): Promise<str
   return null;
 }
 
-export class Workspace extends RepoMerger {
+export class Workspace extends MediaReader {
   /**
    * The `.git` directory of an issue clone, checked before the server reads from it: a real
    * directory (no symlink, no gitfile) without `commondir` or object alternates, holding only

@@ -22,6 +22,15 @@ import { recordChatReply } from '../modules/chats/turns.js';
 import { Redactor, errorKind, redactOrWithhold, type KnownSecret } from './redact.js';
 import { loadAgentSkills, materializeSkills } from './skills.js';
 import type { CodeRunContext, CodeRuns } from './code-run.js';
+import type { AuditLog } from '../modules/audit/audit.js';
+import type { SecretBox } from '../modules/settings/secret-box.js';
+import {
+  loadRunSecrets,
+  recordSecretUse,
+  secretEnv,
+  secretsToRedact,
+  type RunSecret,
+} from './run-secrets.js';
 
 const log = pino({ name: 'runner' });
 
@@ -57,6 +66,10 @@ export interface RunWorkerOptions {
   adapters: Partial<Record<string, Adapter>>;
   /** Secret values the runner holds; they are scrubbed from the run log and the run error. */
   knownSecrets?: readonly KnownSecret[];
+  /** Opens project secrets (docs/secrets.md); without it, runs of agents that have some fail. */
+  secretBox?: SecretBox | null;
+  /** Records which runs received which project secrets. */
+  audit?: AuditLog;
 }
 
 const CODE_UNAVAILABLE: AdapterResult = {
@@ -129,8 +142,19 @@ export class RunWorker {
       }
       throw error;
     }
+    // Project secrets reach coding runs only; their values join the redactor before any event.
+    let secrets: RunSecret[] = [];
+    let secretsError: string | null = null;
+    if (writes) {
+      try {
+        secrets = await this.loadSecrets(runId);
+      } catch (error) {
+        secretsError = error instanceof Error ? error.message : String(error);
+      }
+    }
     const redactor = new Redactor([
       ...(this.options.knownSecrets ?? []),
+      ...secretsToRedact(secrets),
       { name: 'RUN_TOKEN', value: token },
     ]);
     const events = new RunEventRecorder(collections, runId, redactor);
@@ -138,12 +162,13 @@ export class RunWorker {
       redactOrWithhold(redactor, text, (error) =>
         log.error({ runId: runId.toHexString(), errorKind: errorKind(error) }, 'redaction failed'),
       );
-    const result = await this.execute(runId, token, events, workspace, redact, writes).catch(
-      (error: unknown): AdapterResult => {
-        events.recordFinal(`runner error: ${String(error)}`);
-        return { status: 'failed', costUsd: 0, error: String(error) };
-      },
-    );
+    const run = secretsError
+      ? Promise.resolve<AdapterResult>({ status: 'failed', costUsd: 0, error: secretsError })
+      : this.execute(runId, token, events, workspace, redact, writes, secrets);
+    const result = await run.catch((error: unknown): AdapterResult => {
+      events.recordFinal(`runner error: ${String(error)}`);
+      return { status: 'failed', costUsd: 0, error: String(error) };
+    });
     events.recordFinal(`finished: ${result.status}, cost ${result.costUsd.toFixed(4)} USD`);
     try {
       await events.finish();
@@ -165,6 +190,39 @@ export class RunWorker {
           }),
     });
     return result;
+  }
+
+  /** Note and audit the secrets a coding run is about to receive; none for read-only runs. */
+  private async passSecrets(
+    context: CodeRunContext | null,
+    secrets: readonly RunSecret[],
+    run: RunDoc,
+    issue: IssueDoc,
+    events: RunEventRecorder,
+  ): Promise<{ secretEnv?: Record<string, string> }> {
+    if (!context || secrets.length === 0) return {};
+    const names = secrets.map((secret) => secret.envName).join(' ');
+    events.record('runner', `project secrets in the environment: ${names}`);
+    await recordSecretUse(this.database.collections, this.options.audit, secrets, {
+      runId: run._id,
+      agentId: run.agentId,
+      projectId: issue.projectId,
+    });
+    return { secretEnv: secretEnv(secrets) };
+  }
+
+  /** The project secrets assigned to the run's agent in the run's project. */
+  private async loadSecrets(runId: ObjectId): Promise<RunSecret[]> {
+    const { collections } = this.database;
+    const run = await collections.runs.findOne({ _id: runId });
+    const issue = run?.issueId ? await collections.issues.findOne({ _id: run.issueId }) : null;
+    if (!run || !issue) return [];
+    return loadRunSecrets(
+      collections,
+      this.options.secretBox ?? null,
+      issue.projectId,
+      run.agentId,
+    );
   }
 
   /**
@@ -213,6 +271,7 @@ export class RunWorker {
     workspace: string,
     redact: (text: string) => string,
     writes: boolean,
+    secrets: readonly RunSecret[],
   ): Promise<AdapterResult> {
     const run = await this.database.collections.runs.findOne({ _id: runId });
     if (!run) {
@@ -221,7 +280,7 @@ export class RunWorker {
     if (isChatRun(run)) {
       return this.executeChat(run, token, events, workspace, redact);
     }
-    return this.executeIssue(run, token, events, workspace, redact, writes);
+    return this.executeIssue(run, token, events, workspace, redact, writes, secrets);
   }
 
   private async executeIssue(
@@ -231,6 +290,7 @@ export class RunWorker {
     workspace: string,
     redact: (text: string) => string,
     writes: boolean,
+    secrets: readonly RunSecret[],
   ): Promise<AdapterResult> {
     const { collections } = this.database;
     const agent = await collections.agents.findOne({ _id: run.agentId });
@@ -259,6 +319,8 @@ export class RunWorker {
       : null;
     const where = context ? `the sandbox on ${context.branch}` : workspace;
     events.record('runner', `starting ${agent.adapter.type} for ${issue.key} in ${where}`);
+    // Project secrets go to coding runs only (docs/secrets.md).
+    const secretInput = await this.passSecrets(context, secrets, run, issue, events);
     const result = await adapter.run({
       run,
       agent,
@@ -275,6 +337,7 @@ export class RunWorker {
       token,
       timeoutMs: this.options.timeoutMs,
       ...(context ? { code: context } : {}),
+      ...secretInput,
       onEvent: (type, text, data) => events.record(type, text, data),
     });
     if (context && codeRuns) {

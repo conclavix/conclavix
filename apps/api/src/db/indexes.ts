@@ -1,4 +1,5 @@
 import type { Collections } from '../db.js';
+import { ensureSecretIndexes } from './secrets.js';
 
 const NOTIFICATION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
@@ -63,6 +64,7 @@ export async function ensureIndexes(collections: Collections): Promise<void> {
     { unique: true, collation: CASE_INSENSITIVE },
   );
   await collections.agents.createIndex({ skillIds: 1 });
+  await ensureSecretIndexes(collections);
   await collections.wakes.createIndex(
     { agentId: 1, issueId: 1 },
     { unique: true, partialFilterExpression: { processedAt: null } },

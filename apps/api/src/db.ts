@@ -30,19 +30,14 @@ import type {
   WakeDeferReason,
   WakeSkipReason,
 } from '@conclavix/core';
+import type { ApiTokenDoc, SettingsDoc } from './db/settings.js';
 import type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
-import type { ApiTokenDoc, AuditDoc, SessionDoc, SettingsDoc, UserDoc } from './db/users.js';
+import type { AuditDoc, SessionDoc, UserDoc } from './db/users.js';
 import type { ChatDoc, ChatMessageDoc, ChatPlanRevisionDoc } from './db/chats.js';
 
+export type { ApiTokenDoc, SettingsDoc, SmtpSettingsDoc } from './db/settings.js';
 export type { SkillProvenanceDoc, SkillSourceDoc } from './db/skill-sources.js';
-export type {
-  ApiTokenDoc,
-  AuditDoc,
-  SessionDoc,
-  SettingsDoc,
-  SmtpSettingsDoc,
-  UserDoc,
-} from './db/users.js';
+export type { AuditDoc, SessionDoc, UserDoc } from './db/users.js';
 export type {
   ChatDoc,
   ChatMessageDoc,
@@ -324,6 +319,7 @@ export interface Collections {
   chats: Collection<ChatDoc>;
   chatMessages: Collection<ChatMessageDoc>;
   chatPlanRevisions: Collection<ChatPlanRevisionDoc>;
+  secrets: Collection<import('./db/secrets.js').SecretDoc>;
 }
 
 export interface Database {
@@ -403,6 +399,7 @@ export async function connectDatabase(uri: string): Promise<Database> {
       chats: db.collection<ChatDoc>('board_chats'),
       chatMessages: db.collection<ChatMessageDoc>('chat_messages'),
       chatPlanRevisions: db.collection<ChatPlanRevisionDoc>('chat_plan_revisions'),
+      secrets: db.collection('secrets'),
     };
     await ensureIndexes(collections);
     return {

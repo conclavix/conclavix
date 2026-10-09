@@ -45,6 +45,7 @@ function fixture(codeAccess: 'none' | 'write', adapterType = 'claude_cli') {
       },
       issues: { findOne: vi.fn().mockResolvedValue(issue) },
       runEvents: { insertMany: vi.fn().mockResolvedValue(undefined) },
+      secrets: { find: () => ({ sort: () => ({ toArray: async () => [] }) }) },
     },
   } as unknown as Database;
   const scheduler = {

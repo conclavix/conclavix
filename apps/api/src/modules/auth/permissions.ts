@@ -30,7 +30,7 @@ export const CAPABILITY_DESCRIPTIONS: Readonly<Record<Capability, string>> = {
     'Create, change and remove agents; choose which agents work in which project; edit the org chart and the skill library; import skills from directories; manage issue workspaces; plan with the lead in CEO chats and approve its plans',
   users: 'Invite users, change roles, ban, reset passwords and 2FA, delete users',
   settings:
-    'Change instance settings and skill directory sources (MFA policy and SMTP stay owner-only)',
+    'Change instance settings, skill directory sources and project secrets (MFA policy, SMTP and revealing secret values stay owner-only)',
   audit: 'Read the security audit log',
 };
 
@@ -62,8 +62,15 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, Capability>> = {
   'GET /api/projects/:id/tree': 'read',
   'GET /api/projects/:id/file': 'read',
   'GET /api/projects/:id/raw': 'read',
+  'GET /api/projects/:id/media': 'read',
   'GET /api/projects/:id/compare': 'read',
   'GET /api/projects/:id/archive': 'read',
+  // Project secrets: admins manage them and see metadata; revealing a value is owner-only.
+  'GET /api/projects/:id/secrets': 'settings',
+  'POST /api/projects/:id/secrets': 'settings',
+  'PATCH /api/projects/:id/secrets/:secretId': 'settings',
+  'DELETE /api/projects/:id/secrets/:secretId': 'settings',
+  'POST /api/projects/:id/secrets/:secretId/reveal': 'settings',
   // Issue workspaces: admin and owner only.
   'POST /api/issues/:ref/workspace': 'agents',
   'POST /api/issues/:ref/workspace/sync': 'agents',
@@ -147,6 +154,7 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, Capability>> = {
   'POST /api/users/:id/reset-2fa': 'users',
   'GET /api/settings': 'settings',
   'PATCH /api/settings': 'settings',
+  'POST /api/settings/smtp/test': 'settings',
   'GET /api/audit': 'audit',
   'GET /api/roles': 'users',
 };
