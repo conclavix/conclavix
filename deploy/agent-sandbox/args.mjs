@@ -137,8 +137,22 @@ const MODEL = /^[A-Za-z0-9][\w.:/@[\]-]{0,119}$/;
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const SERVER_NAME = /^[a-z][a-z0-9-]{0,39}$/;
 const HEADER_NAME = /^[A-Za-z0-9-]{1,64}$/;
-/** Header values of connection servers: only a reference claude expands from the environment. */
-const HEADER_REFERENCE = /^\$\{CONCLAVIX_MCP_HEADER_([1-9]|[12][0-9]|3[0-2])\}$/;
+/**
+ * Header values of connection servers: only a reference claude expands from the environment,
+ * optionally behind one authorization scheme and a single space (`Bearer ${CONCLAVIX_MCP_HEADER_1}`).
+ * The runner writes the scheme literally because Claude Code expands a variable holding
+ * `Bearer <credential>` to an empty string under its subprocess env scrub (docs/connections.md).
+ */
+const HEADER_REFERENCE = /^(?:([A-Za-z]+) )?\$\{CONCLAVIX_MCP_HEADER_([1-9]|[12][0-9]|3[0-2])\}$/;
+const AUTH_SCHEMES = new Set(['bearer', 'basic', 'token']);
+
+/** A connection header value as the runner writes it (apps/api/src/runner/run-connections.ts). */
+export function headerValueValid(value) {
+  if (typeof value !== 'string') return false;
+  const match = HEADER_REFERENCE.exec(value);
+  return match !== null && (match[1] === undefined || AUTH_SCHEMES.has(match[1].toLowerCase()));
+}
+
 const MAX_SERVERS = 9;
 const MAX_HEADERS = 8;
 
@@ -158,7 +172,7 @@ function boardServerValid(server) {
 
 /**
  * A connection's server: http(s) without credentials in the URL, header values only as
- * references, so no secret ever stands in argv.
+ * references (with at most an authorization scheme in front), so no secret ever stands in argv.
  */
 function connectionServerValid(server) {
   // claude would expand ${NAME} in the URL from the run's environment.
@@ -172,10 +186,7 @@ function connectionServerValid(server) {
   const entries = Object.entries(headers);
   return (
     entries.length <= MAX_HEADERS &&
-    entries.every(
-      ([name, value]) =>
-        HEADER_NAME.test(name) && typeof value === 'string' && HEADER_REFERENCE.test(value),
-    )
+    entries.every(([name, value]) => HEADER_NAME.test(name) && headerValueValid(value))
   );
 }
 

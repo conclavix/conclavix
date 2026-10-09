@@ -20,7 +20,10 @@ export const MAX_MCP_HEADER_ENV = 32;
 export const MAX_MCP_SERVERS = 8;
 export const MAX_ALLOW_ADDRESSES = 16;
 
-/** An external MCP server in a run's config; header values are `${VARIABLE}` references. */
+/**
+ * An external MCP server in a run's config; header values are `${VARIABLE}` references, optionally
+ * behind an authorization scheme (`Bearer ${VARIABLE}`).
+ */
 export interface RunMcpServer {
   name: string;
   url: string;
@@ -49,11 +52,47 @@ export const noConnections = (): RunConnections => ({
   used: [],
 });
 
+/**
+ * Authorization schemes written literally into the MCP config, in front of the reference. Under
+ * CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (coding runs) Claude Code expands a variable whose value looks
+ * like `Bearer <credential>` or `Basic <credential>` to an empty string, so only the credential may
+ * be in the variable; `Token` is split the same way for consistency. Other first words stay in the
+ * variable: they can be part of the secret, and the root helper allows no other literal text.
+ * The root helper accepts the same list (deploy/agent-sandbox/args.mjs).
+ */
+const AUTH_SCHEME = /^(Bearer|Basic|Token)[ \t]+(\S.*)$/i;
+
+/**
+ * Splits `<scheme> <credential>` for the schemes above (any case, any run of blanks between). The
+ * scheme keeps its spelling; a value without one, or a scheme alone, comes back whole.
+ */
+export function splitAuthScheme(value: string): { scheme: string | null; credential: string } {
+  const match = AUTH_SCHEME.exec(value);
+  return match
+    ? { scheme: match[1] ?? null, credential: match[2] ?? '' }
+    : { scheme: null, credential: value };
+}
+
 /** Credential values and, for `Bearer x` style values, the token alone. */
 export function knownValues(name: string, key: string, value: string): KnownSecret[] {
   const label = `${name}:${key}`;
-  const token = /^(?:Bearer|Basic|Token)\s+(\S.*)$/i.exec(value)?.[1];
-  return [{ name: label, value }, ...(token ? [{ name: label, value: token }] : [])];
+  const { scheme, credential } = splitAuthScheme(value);
+  return [{ name: label, value }, ...(scheme ? [{ name: label, value: credential }] : [])];
+}
+
+/**
+ * The MCP config value for one header and what its variable holds: `Bearer ${VARIABLE}` with the
+ * credential alone in the variable, or `${VARIABLE}` with the whole value.
+ */
+export function headerReference(
+  variable: string,
+  value: string,
+): { reference: string; envValue: string } {
+  const { scheme, credential } = splitAuthScheme(value);
+  const reference = `\${${variable}}`;
+  return scheme
+    ? { reference: `${scheme} ${reference}`, envValue: credential }
+    : { reference, envValue: value };
 }
 
 interface Loaded {
@@ -170,8 +209,9 @@ export async function loadRunConnections(
     names.forEach((header, index) => {
       const variable = `${MCP_HEADER_ENV_PREFIX}${taken + index + 1}`;
       const value = loaded.headers[header] ?? '';
-      result.env[variable] = value;
-      headers[header] = `\${${variable}}`;
+      const { reference, envValue } = headerReference(variable, value);
+      result.env[variable] = envValue;
+      headers[header] = reference;
       result.known.push(...knownValues(doc.name, header, value));
     });
     result.servers.push({ name: doc.name, url: loaded.url.toString(), headers });

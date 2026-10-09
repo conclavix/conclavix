@@ -258,9 +258,11 @@ describe('connections', () => {
     );
     const docs = coder.servers.find((server) => server.name === 'docs');
     expect(docs).toBeDefined();
-    const [variable] = Object.values(docs?.headers ?? {});
-    expect(variable).toMatch(/^\$\{CONCLAVIX_MCP_HEADER_\d+\}$/);
-    expect(coder.env[variable?.slice(2, -1) ?? '']).toBe(`Bearer ${TOKEN}`);
+    const [reference] = Object.values(docs?.headers ?? {});
+    // The scheme stands in the config, the variable holds the credential alone.
+    expect(reference).toMatch(/^Bearer \$\{CONCLAVIX_MCP_HEADER_\d+\}$/);
+    expect(coder.env[reference?.slice('Bearer ${'.length, -1) ?? '']).toBe(TOKEN);
+    expect(Object.values(coder.env)).not.toContain(`Bearer ${TOKEN}`);
     expect(coder.servers.map((server) => server.name)).not.toContain('other-project');
     expect(coder.privateAddresses).toEqual(['127.0.0.1']);
     expect(coder.known.map((entry) => entry.value)).toEqual(
