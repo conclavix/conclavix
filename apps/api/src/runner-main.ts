@@ -62,6 +62,7 @@ async function codingAgents(
     new CloneRetention(database, workspace, {
       days: config.CODE_CLONE_RETENTION_DAYS,
       log,
+      audit: new AuditLog(database.collections, log),
       reclaim: (projectId, issueKey) =>
         releaseClone({ helper, sudo: config.SUDO_BIN }, projectId, issueKey),
     }),

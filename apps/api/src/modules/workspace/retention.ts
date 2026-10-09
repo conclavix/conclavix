@@ -5,6 +5,7 @@ import { issueKeySchema } from '@conclavix/core';
 import { ObjectId } from 'mongodb';
 import type { Logger } from 'pino';
 import type { Database, IssueDoc } from '../../db.js';
+import type { AuditLog } from '../audit/audit.js';
 import { AppError } from '../../errors.js';
 import { isMissing } from './repo-base.js';
 import type { Workspace } from './service.js';
@@ -44,6 +45,8 @@ export interface RetentionOptions {
   now?: () => number;
   /** Hands a clone left with the agent user back to the runner (the helper's `release`). */
   reclaim?: (projectId: string, issueKey: string) => Promise<{ ok: boolean; detail: string }>;
+  /** Records `issue.workspace_removed` for each removed issue clone, like the API's removal. */
+  audit?: Pick<AuditLog, 'record'>;
 }
 
 /** Bytes a directory tree occupies on disk (allocated blocks), without following symlinks. */
@@ -262,6 +265,15 @@ export class CloneRetention {
     }
     if (moved) await rm(moved, { recursive: true, force: true });
     this.removed(result, { projectId, name: issue.key, kind: 'closed', bytes });
+    await this.options.audit
+      ?.record({
+        action: 'issue.workspace_removed',
+        actor: { type: 'system' },
+        details: { projectId, issueKey: issue.key, force: false, reason: 'retention', bytes },
+      })
+      .catch((error: unknown) =>
+        this.options.log.warn({ projectId, clone: issue.key, err: error }, 'audit entry failed'),
+      );
   }
 
   /** The issue is still closed since before the cutoff and no run of it is queued or running. */

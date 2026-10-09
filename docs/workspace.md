@@ -418,7 +418,8 @@ issue's path; the next sweep deletes such leftovers. A project directory that ca
 
 The branch `cvx/<KEY>` stays in the project repository. When the issue is reopened, its next
 coding run (or `POST /api/issues/:ref/workspace`) clones the branch afresh. Each removal is
-logged (`removed issue clone`, with the size in bytes) and each sweep ends with
+logged (`removed issue clone`, with the size in bytes), each removed issue clone is audited as
+`issue.workspace_removed` (system actor, `reason: retention`) and each sweep ends with
 `clone retention sweep finished` (removed, bytes freed, kept, errors) in the runner log. The
 runner removes the clones as `cvx-runner`; that works because the tree is shared through the
 group `cvx-code` (directories `2770`), also for clones the API created.

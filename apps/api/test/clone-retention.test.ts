@@ -108,8 +108,25 @@ describe('CloneRetention', () => {
       [done, cancelled, open, recent, running, unsynced, legacy],
       [running._id],
     );
-    const result = await retention(database).sweep();
+    const audited: unknown[] = [];
+    const result = await new CloneRetention(database, ws, {
+      days: 3,
+      log: silentLog,
+      now: () => NOW,
+      audit: {
+        record: (entry) => {
+          audited.push(entry);
+          return Promise.resolve();
+        },
+      },
+    }).sweep();
 
+    expect(audited).toHaveLength(3);
+    expect(audited[0]).toMatchObject({
+      action: 'issue.workspace_removed',
+      actor: { type: 'system' },
+      details: { projectId: PROJECT, force: false, reason: 'retention' },
+    });
     expect(result?.removed.map((clone) => `${clone.kind}:${clone.name}`).sort()).toEqual([
       'closed:CVX-1',
       'closed:CVX-2',
