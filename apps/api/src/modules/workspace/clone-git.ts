@@ -14,7 +14,8 @@ import { OBJECT_ID } from './repo-base.js';
 
 /**
  * The only configuration an issue clone keeps when the runner commits in it; whatever an agent
- * wrote to `.git/config` (filters, includes, fsmonitor, hooks path, worktree) is replaced.
+ * wrote to `.git/config` (filters, includes, fsmonitor, hooks path, worktree) is replaced. No
+ * automatic gc: it could expire reflog entries during a run, which the HEAD guard reads.
  */
 export const CLONE_CONFIG = [
   '[core]',
@@ -25,6 +26,8 @@ export const CLONE_CONFIG = [
   '\tsymlinks = true',
   '\tautocrlf = false',
   '\tsharedRepository = 0660',
+  '[gc]',
+  '\tauto = 0',
   '',
 ].join('\n');
 

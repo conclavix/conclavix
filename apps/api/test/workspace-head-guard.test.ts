@@ -133,6 +133,21 @@ describe('rewound branches and the HEAD guard', () => {
     expect(kept).toContain(`conflict/${ISSUE}/`);
   });
 
+  it('refuses a sync that would bring a rewound head back, also after a run commit', async () => {
+    writeFileSync(join(clone, 'c.txt'), 'c\n');
+    commitAll(clone, 'run commit on the old head');
+    await ws.setIssueBranch(PROJECT, ISSUE, { commit: first, allowRewind: true });
+    await expect(ws.syncIssueBranch(PROJECT, ISSUE, false)).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringMatching(/rewound away from/),
+    });
+    expect(server()).toBe(first);
+    const bareRefs = git(root.dir, `--git-dir=${ws.repoDir(PROJECT)}`, 'for-each-ref');
+    expect(bareRefs).not.toContain('refs/conclavix/');
+    const forced = await ws.syncIssueBranch(PROJECT, ISSUE, true);
+    expect(forced).toMatchObject({ updated: true, forced: true, after: head() });
+  });
+
   it('commits nothing after the agent ran git reset --mixed, and sets the clone aside', async () => {
     const { prepare, finish, comments } = runner();
     const context = await prepare();

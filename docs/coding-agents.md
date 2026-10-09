@@ -237,8 +237,11 @@ or synced`, the run log has it as a `code:` event, and a system comment on the i
   conflict branch in its error. A merge can also land between this check and the sync; a
   refused fast-forward or compare-and-swap is then retried after another reconciliation, up to
   three rounds.
-- Then `syncIssueBranch` fetches `cvx/<KEY>` into the project repository (fast-forward only; a
-  rewritten branch is not forced and the run records the refusal). A clone that is removed and
+- Then `syncIssueBranch` fetches `cvx/<KEY>` into a temporary ref of the project repository and
+  moves the branch with compare-and-swap against the tip it read (fast-forward only; a rewritten
+  branch is not forced and the run records the refusal). A clone that still contains a head the
+  branch was rewound away from is refused as well (409), also when the rewind lands between the
+  reconciliation and the sync; the retry then reconciles and sets the clone aside. A clone that is removed and
   created again starts from the server's `cvx/<KEY>`, not from `main`.
 - Before a run in an existing clone, the runner does the same reconciliation when the server
   branch differs from the clone: a clone ahead of it stays (the sync after the run brings it

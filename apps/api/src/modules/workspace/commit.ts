@@ -353,8 +353,8 @@ export class CodeWorkspace extends Workspace {
   ): Promise<string | null> {
     for (const head of await this.rewoundHeads(projectId, branch, server)) {
       if (head === clone) return head;
-      const contained = await git.isAncestor(head, clone).catch(() => false);
-      if (contained) return head;
+      // A head missing from the clone's objects cannot be in it; other failures propagate.
+      if ((await git.commit(head)) && (await git.isAncestor(head, clone))) return head;
     }
     return null;
   }
