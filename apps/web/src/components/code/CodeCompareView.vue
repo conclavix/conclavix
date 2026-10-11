@@ -47,7 +47,11 @@ void compare();
 
 const request = computed(() =>
   result.value
-    ? { from: result.value.fromSha ?? '', to: result.value.toSha, mode: mode.value }
+    ? {
+        from: result.value.fromSha ?? '',
+        to: result.value.toSha,
+        mode: result.value.mode === 'direct' ? ('direct' as const) : ('merge-base' as const),
+      }
     : null,
 );
 </script>

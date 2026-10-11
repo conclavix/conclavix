@@ -1,4 +1,4 @@
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { diffQuerySchema, downloadContentType, type FileQuery } from '@conclavix/core';
 import { parse } from '../../validation.js';
@@ -47,6 +47,8 @@ export function streamTracker(app: FastifyInstance): (stream: Readable) => void 
 /**
  * Send any file of the repository as a download: always an attachment, octet-stream unless it is
  * a raster image, video or PDF, streamed from git with a known length. The ETag is the blob id.
+ * A HEAD request gets the same answer without starting git, so the UI can check a download
+ * (413, 404) before the browser navigates to it.
  */
 export async function sendDownload(
   request: FastifyRequest,
@@ -65,13 +67,13 @@ export async function sendDownload(
   if (matchesEtag(request.headers['if-none-match'], blob.oid)) {
     return reply.status(304).send();
   }
+  reply.header('content-length', String(blob.size)).type(downloadContentType(query.path));
+  // Fastify keeps our Content-Length on HEAD only for a stream body; an empty one starts no git.
+  if (request.method === 'HEAD') return reply.send(Readable.from([]));
   const stream = blob.open();
   stream.on('error', (error) => request.log.error({ err: error }, 'file download failed'));
   track(stream);
-  return reply
-    .header('content-length', String(blob.size))
-    .type(downloadContentType(query.path))
-    .send(stream);
+  return reply.send(stream);
 }
 
 interface IdParams {

@@ -44,7 +44,9 @@ async function run(work: () => Promise<void>): Promise<void> {
 const shaOf = () => props.file?.sha ?? props.tree?.sha ?? props.refName;
 
 const downloadPath = (path: string) =>
-  run(() => downloadFile(downloadUrl(props.projectId, shaOf(), path), nameOf(path)));
+  run(() =>
+    downloadFile(downloadUrl(props.projectId, shaOf(), path), nameOf(path), { check: true }),
+  );
 
 const zipFolder = (path: string) =>
   run(() =>

@@ -85,6 +85,23 @@ describe('file downloads and folder archives', () => {
     expect(response.json().error).toBe('file_too_large');
   });
 
+  it('answers HEAD with the download headers and the same refusals', async () => {
+    const head = (path: string) =>
+      fx.ctx.app.inject({
+        method: 'HEAD',
+        url: `/api/projects/${fx.projectId}/raw?ref=${enc(fx.branch)}&path=${enc(path)}&download=1`,
+        headers: { cookie: fx.cookies.viewer },
+      });
+    const ok = await head('assets/data.zip');
+    expect(ok.statusCode).toBe(200);
+    expect(ok.headers['content-type']).toBe('application/octet-stream');
+    expect(ok.headers['content-length']).toBe(String(ZIP_V2.length));
+    expect(ok.headers['content-disposition']).toMatch(/^attachment;/);
+    expect(ok.rawPayload).toHaveLength(0);
+    expect((await head('assets/big.bin')).statusCode).toBe(413);
+    expect((await head('missing.txt')).statusCode).toBe(404);
+  });
+
   it.each([
     ['path=..%2Fsecret&download=1', 400],
     ['path=%2Fetc%2Fpasswd&download=1', 400],

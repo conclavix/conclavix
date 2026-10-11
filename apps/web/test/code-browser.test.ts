@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, h, nextTick, type App } from 'vue';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { createVuetify } from 'vuetify';
-import type { BranchInfo, FileDiff, TreeEntry } from '@conclavix/core';
+import type { TreeEntry } from '@conclavix/core';
 import { archiveUrl, codeApi, downloadUrl } from '../src/code/api';
 import {
   ancestorsOf,
@@ -15,6 +15,7 @@ import {
 } from '../src/code/browse';
 import { parsePatch } from '../src/code/logic';
 import ProjectCodeTab from '../src/components/code/ProjectCodeTab.vue';
+import { SHA_A, SHA_B, file, respond } from './code-fixtures';
 
 const downloads = vi.hoisted(() => [] as { url: string; name: string }[]);
 vi.mock('../src/code/download', async (importOriginal) => ({
@@ -23,20 +24,6 @@ vi.mock('../src/code/download', async (importOriginal) => ({
     downloads.push({ url, name });
   }),
 }));
-
-const SHA_A = 'a'.repeat(40);
-const SHA_B = 'b'.repeat(40);
-
-const file = (path: string, extra: object = {}) => ({
-  ref: 'cvx/CVX-1',
-  sha: SHA_B,
-  path,
-  size: 10,
-  binary: false,
-  tooLarge: false,
-  content: 'x\n',
-  ...extra,
-});
 
 describe('file browser logic', () => {
   it('classifies files and labels entries', () => {
@@ -125,95 +112,6 @@ describe('file browser logic', () => {
     expect(dispositionName(null)).toBeNull();
   });
 });
-
-const branch = (name: string): BranchInfo => ({
-  name,
-  sha: SHA_A,
-  ahead: 0,
-  behind: 0,
-  isDefault: name === 'main',
-  issueKey: null,
-  lastCommit: {
-    sha: SHA_A,
-    shortSha: 'aaaaaaa',
-    subject: 'Start',
-    authorName: 'Agent',
-    committedAt: '2026-10-05T10:00:00Z',
-  },
-});
-
-const diffFile = (path: string, extra: Partial<FileDiff> = {}): FileDiff => ({
-  path,
-  oldPath: null,
-  status: 'modified',
-  binary: false,
-  additions: 1,
-  deletions: 1,
-  patch: '@@ -1 +1 @@\n-a\n+b',
-  truncated: false,
-  ...extra,
-});
-
-const ENTRIES: TreeEntry[] = [
-  { name: 'src', path: 'src', type: 'tree', mode: '040000', size: null },
-  { name: 'data.zip', path: 'data.zip', type: 'blob', mode: '100644', size: 2048 },
-];
-
-function respond(url: string): unknown {
-  if (url.includes('/branches')) return { items: [branch('main'), branch('cvx/CVX-1')] };
-  if (url.includes('/tree')) {
-    const path = new URL(url, 'http://x').searchParams.get('path') ?? '';
-    return { ref: 'cvx/CVX-1', sha: SHA_B, path, entries: path === '' ? ENTRIES : [] };
-  }
-  if (url.includes('/file')) return file('data.zip', { binary: true, content: null, size: 2048 });
-  if (url.includes('/commits/')) {
-    return {
-      sha: SHA_B,
-      shortSha: 'bbbbbbb',
-      parents: [SHA_A],
-      authorName: 'Agent',
-      authorEmail: 'agent@example.com',
-      authoredAt: '2026-10-05T10:00:00Z',
-      committerName: 'Agent',
-      committedAt: '2026-10-05T10:00:00Z',
-      subject: 'Change things',
-      body: '',
-      diff: {
-        files: [
-          diffFile('data.zip', { binary: true, patch: null }),
-          diffFile('long.txt', { truncated: true }),
-        ],
-        truncated: true,
-      },
-    };
-  }
-  if (url.includes('/commits')) {
-    return {
-      items: [{ ...(respond('/commits/x') as object), body: undefined, diff: undefined }],
-      nextSkip: null,
-    };
-  }
-  if (url.includes('/diff')) {
-    return {
-      mode: url.includes('commit=') ? 'commit' : 'merge-base',
-      from: 'main',
-      to: 'cvx/CVX-1',
-      fromSha: SHA_A,
-      toSha: SHA_B,
-      mergeBase: SHA_A,
-      diffBase: SHA_A,
-      ahead: 2,
-      behind: 1,
-      commits: [],
-      path: null,
-      diff: {
-        files: [diffFile('long.txt', { patch: '@@ -1 +1 @@\n-whole\n+file' })],
-        truncated: false,
-      },
-    };
-  }
-  return null;
-}
 
 describe('file browser in the Code tab', () => {
   let app: App | undefined;

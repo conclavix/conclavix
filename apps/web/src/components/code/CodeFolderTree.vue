@@ -11,21 +11,24 @@ const emit = defineEmits<{ open: [path: string] }>();
 const children = reactive(new Map<string, string[]>());
 const open = reactive(new Set<string>());
 const loading = reactive(new Set<string>());
+/** Folders whose listing failed; they stay expandable and the next expand tries again. */
+const failed = reactive(new Set<string>());
 let loadedFor = '';
 
 const subfolders = (listing: TreeListing) =>
   listing.entries.filter((entry) => entry.type === 'tree').map((entry) => entry.path);
 
-/** Load the subfolders of `dir` once; a failed load shows the folder as empty. */
+/** Load the subfolders of `dir` once; a failure is marked on the folder and not cached. */
 async function load(dir: string): Promise<void> {
   if (children.has(dir) || loading.has(dir) || !props.listing) return;
   const key = loadedFor;
   loading.add(dir);
+  failed.delete(dir);
   try {
     const listing = await codeApi.tree(props.projectId, props.listing.sha, dir);
     if (key === loadedFor) children.set(dir, subfolders(listing));
   } catch {
-    if (key === loadedFor) children.set(dir, []);
+    if (key === loadedFor) failed.add(dir);
   } finally {
     loading.delete(dir);
   }
@@ -40,6 +43,7 @@ watch(
       loadedFor = key;
       children.clear();
       open.clear();
+      failed.clear();
     }
     children.set(listing.path, subfolders(listing));
     const ancestors = ancestorsOf(listing.path);
@@ -53,7 +57,7 @@ const rows = computed(() => folderRows(children, open));
 const current = computed(() => props.listing?.path ?? '');
 
 function toggle(path: string): void {
-  if (open.has(path)) {
+  if (open.has(path) && !failed.has(path)) {
     open.delete(path);
     return;
   }
@@ -64,6 +68,17 @@ function toggle(path: string): void {
 
 <template>
   <v-list density="compact" nav class="code-folder-tree" data-test="folder-tree">
+    <v-alert
+      v-if="failed.has('')"
+      type="error"
+      variant="tonal"
+      density="compact"
+      class="mb-1"
+      data-test="folder-root-failed"
+    >
+      The folder tree could not be loaded.
+      <v-btn size="small" variant="text" @click="load('')">Retry</v-btn>
+    </v-alert>
     <v-list-item
       :prepend-icon="mdiSourceRepository"
       title="root"
@@ -92,6 +107,13 @@ function toggle(path: string): void {
         <v-icon :icon="mdiFolderOutline" size="small" color="primary" class="mr-1" />
       </template>
       <v-list-item-title class="code-font">{{ row.name }}</v-list-item-title>
+      <v-list-item-subtitle
+        v-if="failed.has(row.path)"
+        class="text-error"
+        data-test="folder-failed"
+      >
+        Could not load; expand to retry
+      </v-list-item-subtitle>
     </v-list-item>
   </v-list>
 </template>

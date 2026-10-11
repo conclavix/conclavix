@@ -22,11 +22,15 @@ const props = defineProps<{
 const full = ref<FileDiff | null>(null);
 const loading = ref(false);
 const error = ref('');
+/** Bumped whenever the file changes, so an answer for an earlier comparison is dropped. */
+let generation = 0;
 watch(
-  () => props.file,
+  () => [props.file, props.request],
   () => {
+    generation += 1;
     full.value = null;
     error.value = '';
+    loading.value = false;
   },
 );
 
@@ -37,16 +41,19 @@ const sign = (kind: string) => (kind === 'add' ? '+' : kind === 'del' ? '-' : ' 
 
 async function loadFull(): Promise<void> {
   if (!props.request) return;
+  const asked = ++generation;
+  const path = props.file.path;
   loading.value = true;
   error.value = '';
   try {
-    const result = await codeApi.diff(props.projectId, props.request, props.file.path);
-    full.value = result.diff.files.find((file) => file.path === props.file.path) ?? null;
+    const result = await codeApi.diff(props.projectId, props.request, path);
+    if (asked !== generation) return;
+    full.value = result.diff.files.find((file) => file.path === path) ?? null;
     if (!full.value) error.value = 'The full diff of this file is not available.';
   } catch (cause) {
-    error.value = describeError(cause);
+    if (asked === generation) error.value = describeError(cause);
   } finally {
-    loading.value = false;
+    if (asked === generation) loading.value = false;
   }
 }
 
@@ -63,9 +70,9 @@ const versions = computed(() => {
 
 function download(version: { sha: string; path: string }): void {
   const name = version.path.slice(version.path.lastIndexOf('/') + 1);
-  downloadFile(downloadUrl(props.projectId, version.sha, version.path), name).catch(
-    (cause: unknown) => (error.value = describeError(cause)),
-  );
+  downloadFile(downloadUrl(props.projectId, version.sha, version.path), name, {
+    check: true,
+  }).catch((cause: unknown) => (error.value = describeError(cause)));
 }
 </script>
 
