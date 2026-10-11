@@ -1,6 +1,6 @@
 import { createPinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApp, h, nextTick, type App } from 'vue';
+import { createApp, h, nextTick, ref, type App } from 'vue';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { createVuetify } from 'vuetify';
 import type { TreeEntry } from '@conclavix/core';
@@ -164,13 +164,18 @@ describe('file browser in the Code tab', () => {
     document.body.innerHTML = '';
   });
 
+  const project = ref('p1');
+
   async function mount(path: string, width = 1400) {
+    project.value = 'p1';
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
     router = createRouter({
       history: createMemoryHistory(),
       routes: [{ path: '/projects/:projectKey', component: { render: () => null } }],
     });
-    app = createApp({ render: () => h(ProjectCodeTab, { projectId: 'p1', projectKey: 'CVX' }) });
+    app = createApp({
+      render: () => h(ProjectCodeTab, { projectId: project.value, projectKey: 'CVX' }),
+    });
     app.use(createPinia()).use(router).use(createVuetify());
     await router.push(path);
     app.mount(host);
@@ -238,5 +243,13 @@ describe('file browser in the Code tab', () => {
     expect(requests).toContain('/api/projects/p1/diff?from=main&to=cvx%2FCVX-1&mode=direct');
     await click('[data-test="diff-layout-split"]');
     expect(host.querySelector('[data-test="diff-split"]')).not.toBeNull();
+  });
+
+  it('compares again when the project changes', async () => {
+    await mount('/projects/CVX?branch=cvx/CVX-1');
+    await click('[data-test="code-view-compare"]');
+    project.value = 'p2';
+    await flush();
+    expect(requests).toContain('/api/projects/p2/diff?from=main&to=cvx%2FCVX-1&mode=merge-base');
   });
 });

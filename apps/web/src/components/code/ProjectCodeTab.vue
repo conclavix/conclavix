@@ -213,7 +213,7 @@ async function download(): Promise<void> {
     />
     <CodeCommitsView
       v-else-if="view === 'commits'"
-      :key="`commits-${generation}`"
+      :key="`commits-${projectId}-${generation}`"
       :project-id="projectId"
       :branch="branch"
       :selected="queryString('commit')"
@@ -221,7 +221,7 @@ async function download(): Promise<void> {
     />
     <CodeCompareView
       v-else
-      :key="`compare-${generation}`"
+      :key="`compare-${projectId}-${generation}`"
       :project-id="projectId"
       :branch="branch"
       :branches="branches"
