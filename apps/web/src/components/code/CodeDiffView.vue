@@ -1,9 +1,23 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
-import type { Diff } from '../../code/api';
-import { diffStats, fileTitle, initiallyOpen, parsePatch } from '../../code/logic';
+import { computed, ref, watch } from 'vue';
+import { useDisplay } from 'vuetify';
+import type { Diff, DiffRequest } from '../../code/api';
+import { diffStats, fileTitle, initiallyOpen } from '../../code/logic';
+import CodeDiffFile from './CodeDiffFile.vue';
 
-const props = defineProps<{ diff: Diff }>();
+const props = withDefaults(
+  defineProps<{
+    diff: Diff;
+    projectId?: string;
+    /** The commit the diff starts at (null: the empty tree) and the one it ends at. */
+    fromSha?: string | null;
+    toSha?: string;
+    /** How to ask for one file's whole diff; without it truncated files only say so. */
+    request?: DiffRequest | null;
+  }>(),
+  { projectId: '', fromSha: null, toSha: '', request: null },
+);
+
 const open = ref<string[]>([]);
 watch(
   () => props.diff,
@@ -12,6 +26,27 @@ watch(
   },
   { immediate: true },
 );
+
+const LAYOUT_KEY = 'conclavix.diffLayout';
+const readLayout = (): 'unified' | 'split' => {
+  try {
+    return localStorage.getItem(LAYOUT_KEY) === 'split' ? 'split' : 'unified';
+  } catch {
+    return 'unified';
+  }
+};
+const { mdAndUp } = useDisplay();
+const layout = ref(readLayout());
+watch(layout, (value) => {
+  try {
+    localStorage.setItem(LAYOUT_KEY, value);
+  } catch {
+    // Without storage the choice lasts for this view only.
+  }
+});
+/** Side by side only where there is room for two columns. */
+const split = computed(() => mdAndUp.value && layout.value === 'split');
+const stats = computed(() => diffStats(props.diff.files));
 
 const STATUS_COLORS: Record<string, string> = {
   added: 'success',
@@ -25,11 +60,23 @@ const STATUS_COLORS: Record<string, string> = {
 
 <template>
   <div data-test="diff-view">
-    <div class="d-flex align-center ga-3 mb-2 text-body-2">
-      <span>{{ diffStats(diff.files).files }} files changed</span>
-      <span class="text-success">+{{ diffStats(diff.files).additions }}</span>
-      <span class="text-error">-{{ diffStats(diff.files).deletions }}</span>
+    <div class="d-flex align-center flex-wrap ga-3 mb-2 text-body-2">
+      <span>{{ stats.files }} files changed</span>
+      <span class="text-success">+{{ stats.additions }}</span>
+      <span class="text-error">-{{ stats.deletions }}</span>
       <v-spacer />
+      <v-btn-toggle
+        v-if="mdAndUp"
+        v-model="layout"
+        density="compact"
+        variant="outlined"
+        mandatory
+        divided
+        data-test="diff-layout"
+      >
+        <v-btn value="unified" size="small">Unified</v-btn>
+        <v-btn value="split" size="small" data-test="diff-layout-split">Side by side</v-btn>
+      </v-btn-toggle>
       <v-btn size="small" variant="text" @click="open = diff.files.map((f) => f.path)">
         Expand all
       </v-btn>
@@ -48,45 +95,27 @@ const STATUS_COLORS: Record<string, string> = {
       >
         <v-expansion-panel-title>
           <div class="d-flex align-center ga-2 w-100 overflow-hidden">
-            <v-chip size="x-small" :color="STATUS_COLORS[file.status]" label>
+            <v-chip size="x-small" :color="STATUS_COLORS[file.status]" label class="flex-shrink-0">
               {{ file.status }}
             </v-chip>
             <span class="text-truncate code-font">{{ fileTitle(file) }}</span>
             <v-spacer />
-            <span v-if="!file.binary" class="text-caption">
+            <span v-if="file.binary" class="text-caption text-medium-emphasis">binary</span>
+            <span v-else class="text-caption text-no-wrap">
               <span class="text-success">+{{ file.additions }}</span>
               <span class="text-error ml-1">-{{ file.deletions }}</span>
             </span>
           </div>
         </v-expansion-panel-title>
         <v-expansion-panel-text class="code-panel">
-          <p v-if="file.binary" class="text-medium-emphasis pa-3">Binary file changed.</p>
-          <p v-else-if="!file.patch && !file.truncated" class="text-medium-emphasis pa-3">
-            No textual changes (mode or rename only).
-          </p>
-          <div v-else class="code-scroll">
-            <table class="code-table">
-              <tbody>
-                <tr
-                  v-for="(line, index) in parsePatch(file.patch)"
-                  :key="index"
-                  :class="`diff-${line.kind}`"
-                >
-                  <td class="code-num">{{ line.oldLine ?? '' }}</td>
-                  <td class="code-num">{{ line.newLine ?? '' }}</td>
-                  <td class="code-line">
-                    <span class="diff-sign">{{
-                      line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : ' '
-                    }}</span
-                    >{{ line.text }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <p v-if="file.truncated" class="text-caption text-medium-emphasis pa-2">
-              The rest of this file's diff is not shown.
-            </p>
-          </div>
+          <CodeDiffFile
+            :file="file"
+            :split="split"
+            :project-id="projectId"
+            :from-sha="fromSha"
+            :to-sha="toSha"
+            :request="projectId ? request : null"
+          />
         </v-expansion-panel-text>
       </v-expansion-panel>
     </v-expansion-panels>

@@ -102,3 +102,52 @@
   background: repeating-conic-gradient(rgba(127, 127, 127, 0.15) 0 25%, transparent 0 50%) 0 0 /
     16px 16px;
 }
+.code-video {
+  max-width: 100%;
+  max-height: 70vh;
+}
+.code-branch-select {
+  flex: 1 1 240px;
+  max-width: 420px;
+}
+.code-last-commit {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.code-ref-field {
+  flex: 1 1 180px;
+  max-width: 320px;
+}
+.code-row {
+  cursor: pointer;
+}
+.code-row:hover {
+  background: rgba(var(--v-theme-on-surface), 0.04);
+}
+.code-name-cell {
+  word-break: break-all;
+}
+.code-tree-card {
+  max-height: 75vh;
+  overflow: auto;
+}
+.diff-split {
+  table-layout: fixed;
+}
+.diff-num-col {
+  width: 3.5em;
+}
+.diff-half {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.diff-empty {
+  background: rgba(var(--v-theme-on-surface), 0.03);
+}
+@media (max-width: 599.98px) {
+  .code-branch-select,
+  .code-ref-field {
+    max-width: none;
+    flex-basis: 100%;
+  }
+}

@@ -3,7 +3,9 @@ import type {
   BranchInfo,
   CommitDetail,
   CommitPage,
+  DiffMode,
   FileContent,
+  RefDiff,
   TreeListing,
 } from '@conclavix/core';
 import { api } from '../api/client';
@@ -15,8 +17,10 @@ export type {
   CommitPage,
   CommitSummary,
   Diff,
+  DiffMode,
   FileContent,
   FileDiff,
+  RefDiff,
   TreeEntry,
   TreeListing,
 } from '@conclavix/core';
@@ -43,11 +47,20 @@ export const codeApi = {
     api<CommitDetail>(`${base(projectId)}/commits/${encodeURIComponent(sha)}`),
   compare: (projectId: string, branch: string) =>
     api<BranchComparison>(`${base(projectId)}/compare${query({ branch })}`),
+  diff: (projectId: string, request: DiffRequest, path?: string) =>
+    api<RefDiff>(`${base(projectId)}/diff${query({ ...request, path })}`),
 };
 
-/** The URL of the ZIP download of `ref`. */
-export const archiveUrl = (projectId: string, ref: string): string =>
-  `/api${base(projectId)}/archive${query({ ref })}`;
+/** What a diff compares: one commit, or two refs from their merge base or directly. */
+export type DiffRequest = { commit: string } | { from: string; to: string; mode: DiffMode };
+
+/** The URL of the ZIP download of `ref`, or of the folder `path` in it. */
+export const archiveUrl = (projectId: string, ref: string, path?: string): string =>
+  `/api${base(projectId)}/archive${query({ ref, path: path || undefined })}`;
+
+/** The URL that downloads the file at `path` in `ref` as an attachment. */
+export const downloadUrl = (projectId: string, ref: string, path: string): string =>
+  `/api${base(projectId)}/raw${query({ ref, path, download: 1 })}`;
 
 /** The URL of an image at `ref` served raw by the API. */
 export const rawUrl = (projectId: string, ref: string, path: string): string =>
