@@ -78,7 +78,8 @@ describe('diffs for review', () => {
   });
 
   it('caps the lines of the whole diff', async () => {
-    const capped = await createBrowseFixture('CAP', { maxPatchLines: 60 });
+    // Below the 50 lines of one file, so only the whole-diff cap can cut long.txt this short.
+    const capped = await createBrowseFixture('CAP', { maxPatchLines: 30 });
     try {
       const response = await capped.get(
         `/api/projects/${capped.projectId}/diff?to=${encodeURIComponent(capped.branch)}`,
@@ -88,7 +89,10 @@ describe('diffs for review', () => {
         (sum, file) => sum + (file.patch?.split('\n').length ?? 0),
         0,
       );
-      expect(total).toBeLessThanOrEqual(60);
+      expect(total).toBeLessThanOrEqual(30);
+      const file = (path: string) => result.diff.files.find((entry) => entry.path === path);
+      expect(file('long.txt')?.patch?.split('\n')).toHaveLength(30);
+      expect(file('src/app.ts')).toMatchObject({ patch: null, truncated: true });
       expect(result.diff.truncated).toBe(true);
     } finally {
       await capped.cleanup();
