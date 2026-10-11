@@ -43,10 +43,12 @@ async function loadFull(): Promise<void> {
   if (!props.request) return;
   const asked = ++generation;
   const path = props.file.path;
+  const oldPath =
+    props.file.oldPath && props.file.oldPath !== path ? props.file.oldPath : undefined;
   loading.value = true;
   error.value = '';
   try {
-    const result = await codeApi.diff(props.projectId, props.request, path);
+    const result = await codeApi.diff(props.projectId, props.request, path, oldPath);
     if (asked !== generation) return;
     full.value = result.diff.files.find((file) => file.path === path) ?? null;
     if (!full.value) error.value = 'The full diff of this file is not available.';

@@ -86,7 +86,7 @@ owner only (`agents` capability).
 | `GET /api/projects/:id/raw?ref&path&download=1`               | Any file as an attachment (see [Downloads](#downloads))       |
 | `GET /api/projects/:id/media?kind&branch&q&sort&limit&offset` | Media files of all branches (see [Media tab](#media-tab))     |
 | `GET /api/projects/:id/compare?branch`                        | Branch against `main`: merge base, commits, diff              |
-| `GET /api/projects/:id/diff?commit&from&to&mode&path`         | Diff for review (see [Diffs](#diffs))                         |
+| `GET /api/projects/:id/diff?commit&from&to&mode&path&oldPath` | Diff for review (see [Diffs](#diffs))                         |
 | `GET /api/projects/:id/archive?ref=main`                      | ZIP from `git archive`, `<KEY>-<ref>-<shortsha>.zip`          |
 | `GET /api/projects/:id/archive?ref&path`                      | ZIP of one folder, rooted at it, `<KEY>-<ref>-<folder>.zip`   |
 | `POST /api/issues/:ref/workspace`                             | Create (201) or return (200) the issue's clone and branch     |
@@ -179,7 +179,8 @@ the diff starts at and the diff itself) in one of three modes:
 
 `from`, `to` and `commit` take a branch, a tag or a commit id that a branch or tag reaches; other
 objects are a 404 like unknown refs, names git rejects a 400. `path` restricts the diff to one
-file or directory and gives that file the limits of the whole diff, which is how the Code tab's
+file or directory (with `oldPath` also the previous name of a renamed file, so the rename is kept)
+and gives that file the limits of the whole diff, which is how the Code tab's
 "Show full file diff" works. Binary files are listed with `binary: true` and no patch; the Code tab
 links both versions to the download route.
 

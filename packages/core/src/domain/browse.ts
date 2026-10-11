@@ -46,7 +46,8 @@ const diffPathSchema = repoPathSchema.refine((value) => value !== '', 'must not 
 /**
  * `GET /diff`: either one commit against its first parent (`commit`), or `from` (default main)
  * against `to`, from their merge base (`merge-base`, like a pull request) or directly. `path`
- * restricts the diff to one file or directory and lifts the per-file size limit.
+ * restricts the diff to one file or directory and lifts the per-file size limit; `oldPath` adds
+ * the previous name of a renamed file, so git still sees the rename.
  */
 export const diffQuerySchema = z
   .strictObject({
@@ -55,12 +56,16 @@ export const diffQuerySchema = z
     to: refSchema.optional(),
     mode: z.enum(DIFF_MODES).default('merge-base'),
     path: diffPathSchema.optional(),
+    oldPath: diffPathSchema.optional(),
   })
   .refine((value) => (value.commit === undefined) !== (value.to === undefined), {
     message: 'give either commit or to',
   })
   .refine((value) => value.commit === undefined || value.from === undefined, {
     message: 'from does not apply to a commit diff',
+  })
+  .refine((value) => value.oldPath === undefined || value.path !== undefined, {
+    message: 'oldPath needs path',
   });
 
 export type DiffQuery = z.infer<typeof diffQuerySchema>;

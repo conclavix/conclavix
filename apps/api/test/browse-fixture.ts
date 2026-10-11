@@ -55,6 +55,8 @@ function writeBase(clone: string): void {
   writeFileSync(join(clone, 'assets', 'big.bin'), Buffer.alloc(MAX_DOWNLOAD + 1, 1));
   writeFileSync(join(clone, 'Übersicht "Plan".txt'), 'plan\n');
   writeFileSync(join(clone, 'long.txt'), lines(120, 'old'));
+  mkdirSync(join(clone, 'moved'), { recursive: true });
+  writeFileSync(join(clone, 'moved', 'before.txt'), lines(10, 'line'));
 }
 
 /**
@@ -109,6 +111,11 @@ export async function createBrowseFixture(
   writeFileSync(join(clone, 'src', 'app.ts'), 'export const a = 2;\n');
   writeFileSync(join(clone, 'assets', 'data.zip'), ZIP_V2);
   writeFileSync(join(clone, 'long.txt'), lines(120, 'new'));
+  git(clone, 'mv', 'moved/before.txt', 'moved/after.txt');
+  writeFileSync(
+    join(clone, 'moved', 'after.txt'),
+    lines(10, 'line').replace('line 9', 'line nine'),
+  );
   const head = commitAll(clone, 'Change the branch');
   await ctx.request({ method: 'POST', url: `/api/issues/${issueKey}/workspace/sync`, payload: {} });
 

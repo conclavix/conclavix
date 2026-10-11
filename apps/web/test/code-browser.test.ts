@@ -187,13 +187,13 @@ describe('file browser in the Code tab', () => {
     expect(requests.filter((url) => url.includes('/tree'))).toHaveLength(1);
   });
 
-  it('downloads a file of the listing by commit and zips a folder by branch', async () => {
+  it('downloads a file and zips a folder at the commit of the listing', async () => {
     await mount('/projects/CVX?branch=cvx/CVX-1');
     await click('[data-test="row-download"]');
     await click('[data-test="row-zip"]');
     expect(downloads).toEqual([
       { url: downloadUrl('p1', SHA_B, 'data.zip'), name: 'data.zip' },
-      { url: archiveUrl('p1', 'cvx/CVX-1', 'src'), name: 'CVX-src.zip' },
+      { url: archiveUrl('p1', SHA_B, 'src'), name: 'CVX-src.zip' },
     ]);
   });
 
@@ -209,7 +209,7 @@ describe('file browser in the Code tab', () => {
   it('zips the open folder from the breadcrumb bar', async () => {
     await mount('/projects/CVX?branch=cvx/CVX-1&path=src');
     await click('[data-test="folder-zip"]');
-    expect(downloads).toEqual([{ url: archiveUrl('p1', 'cvx/CVX-1', 'src'), name: 'CVX-src.zip' }]);
+    expect(downloads).toEqual([{ url: archiveUrl('p1', SHA_B, 'src'), name: 'CVX-src.zip' }]);
   });
 
   it('shows a commit diff with binary downloads and the full diff of a cut file', async () => {

@@ -47,8 +47,8 @@ export const codeApi = {
     api<CommitDetail>(`${base(projectId)}/commits/${encodeURIComponent(sha)}`),
   compare: (projectId: string, branch: string) =>
     api<BranchComparison>(`${base(projectId)}/compare${query({ branch })}`),
-  diff: (projectId: string, request: DiffRequest, path?: string) =>
-    api<RefDiff>(`${base(projectId)}/diff${query({ ...request, path })}`),
+  diff: (projectId: string, request: DiffRequest, path?: string, oldPath?: string) =>
+    api<RefDiff>(`${base(projectId)}/diff${query({ ...request, path, oldPath })}`),
 };
 
 /** What a diff compares: one commit, or two refs from their merge base or directly. */

@@ -76,7 +76,7 @@ export class RepoBrowser extends RepoReader {
    * `to`, from their merge base or directly, optionally restricted to one path.
    */
   async refDiff(projectId: string, query: DiffQuery): Promise<RefDiff> {
-    const paths = query.path === undefined ? [] : [query.path];
+    const paths = [query.path, query.oldPath].filter((path): path is string => path !== undefined);
     const full = query.path !== undefined;
     if (query.commit !== undefined) {
       return this.commitDiff(projectId, query.commit, paths, full);

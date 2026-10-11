@@ -110,4 +110,32 @@ describe('file browser failure handling', () => {
     expect(host.textContent).toContain('direct');
     expect(host.textContent).not.toContain('whole');
   });
+
+  it('asks for the full diff of a renamed file with its old path', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        return new Response(JSON.stringify(respond('/diff')), { status: 200 });
+      }),
+    );
+    const file = diffFile('new.txt', { oldPath: 'old.txt', status: 'renamed', truncated: true });
+    app = createApp({
+      render: () =>
+        h(CodeDiffFile, {
+          file,
+          split: false,
+          projectId: 'p1',
+          fromSha: SHA_A,
+          toSha: SHA_B,
+          request: { commit: SHA_B },
+        }),
+    });
+    app.use(createVuetify()).mount(host);
+    await flush();
+    host.querySelector<HTMLElement>('[data-test="diff-full"]')?.click();
+    await flush();
+    expect(urls).toEqual([`/api/projects/p1/diff?commit=${SHA_B}&path=new.txt&oldPath=old.txt`]);
+  });
 });

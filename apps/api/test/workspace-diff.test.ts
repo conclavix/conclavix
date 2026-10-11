@@ -31,7 +31,7 @@ describe('diffs for review', () => {
       diffBase: fx.base,
     });
     expect(result.commits.map((commit) => commit.sha)).toEqual([fx.head]);
-    expect(paths(result)).toEqual(['assets/data.zip', 'long.txt', 'src/app.ts']);
+    expect(paths(result)).toEqual(['assets/data.zip', 'long.txt', 'moved/after.txt', 'src/app.ts']);
     const binary = result.diff.files.find((file) => file.path === 'assets/data.zip');
     expect(binary).toMatchObject({ binary: true, patch: null });
   });
@@ -47,11 +47,22 @@ describe('diffs for review', () => {
       ahead: 1,
       behind: 1,
     });
-    expect(paths(mergeBase)).toEqual(['assets/data.zip', 'long.txt', 'src/app.ts']);
+    expect(paths(mergeBase)).toEqual([
+      'assets/data.zip',
+      'long.txt',
+      'moved/after.txt',
+      'src/app.ts',
+    ]);
 
     const direct = await ok(`from=main&to=${branch()}&mode=direct`);
     expect(direct).toMatchObject({ mode: 'direct', diffBase: fx.mainOnly });
-    expect(paths(direct)).toEqual(['MAIN.md', 'assets/data.zip', 'long.txt', 'src/app.ts']);
+    expect(paths(direct)).toEqual([
+      'MAIN.md',
+      'assets/data.zip',
+      'long.txt',
+      'moved/after.txt',
+      'src/app.ts',
+    ]);
     expect(direct.diff.files.find((file) => file.path === 'MAIN.md')?.status).toBe('deleted');
   });
 
@@ -75,6 +86,18 @@ describe('diffs for review', () => {
     expect(full.diff.files[0]?.patch?.split('\n').length).toBeGreaterThan(200);
     const commitFull = await ok(`commit=${fx.head}&path=long.txt`);
     expect(commitFull.diff.files[0]?.truncated).toBe(false);
+  });
+
+  it('keeps a rename in the diff of one file when the old path is given', async () => {
+    const renamed = await ok(`commit=${fx.head}&path=moved%2Fafter.txt&oldPath=moved%2Fbefore.txt`);
+    expect(renamed.diff.files).toHaveLength(1);
+    expect(renamed.diff.files[0]).toMatchObject({
+      path: 'moved/after.txt',
+      oldPath: 'moved/before.txt',
+      status: 'renamed',
+    });
+    const alone = await ok(`commit=${fx.head}&path=moved%2Fafter.txt`);
+    expect(alone.diff.files[0]?.status).toBe('added');
   });
 
   it('caps the lines of the whole diff', async () => {
@@ -109,6 +132,7 @@ describe('diffs for review', () => {
     ['to=main&path=..%2Fx', 400],
     ['to=main&path=', 400],
     ['to=main&extra=1', 400],
+    ['to=main&oldPath=a', 400],
   ])('rejects %s', async (query, status) => {
     expect((await diff(query)).statusCode).toBe(status);
   });

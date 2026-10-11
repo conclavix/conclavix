@@ -48,10 +48,11 @@ const downloadPath = (path: string) =>
     downloadFile(downloadUrl(props.projectId, shaOf(), path), nameOf(path), { check: true }),
   );
 
+/** By the listing's commit, so the ZIP holds what is shown even if the branch moved since. */
 const zipFolder = (path: string) =>
   run(() =>
     downloadFile(
-      archiveUrl(props.projectId, props.refName, path),
+      archiveUrl(props.projectId, props.tree?.sha ?? props.refName, path),
       `${props.projectKey}-${nameOf(path) || 'root'}.zip`,
     ),
   );
