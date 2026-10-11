@@ -1,7 +1,7 @@
 import { DEFAULT_BRANCH, issueBranchName } from '@conclavix/core';
 import { AppError, conflict, notFound } from '../../errors.js';
 import { GitError } from './git.js';
-import { RepoReader } from './reader.js';
+import { RepoBrowser } from './browse.js';
 import {
   DEFAULT_AGENT_EMAIL_DOMAIN,
   cleanMessage,
@@ -147,7 +147,7 @@ const refUpdateFailed = (branch: string): AppError =>
  * the repository could configure for itself. Refs move with compare-and-swap `update-ref` only
  * after every step succeeded, so a refused call leaves every branch as it was.
  */
-export class RepoMerger extends RepoReader {
+export class RepoMerger extends RepoBrowser {
   /** Whether `ancestor` is reachable from `descendant` (a commit counts as its own ancestor). */
   protected async isAncestor(
     projectId: string,

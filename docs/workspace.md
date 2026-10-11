@@ -34,10 +34,11 @@ branch into the Code tab.
 
 ## Configuration
 
-| Variable         | Meaning                                           | Default            |
-| ---------------- | ------------------------------------------------- | ------------------ |
-| `WORKSPACE_ROOT` | Directory for repositories and issue clones (API) | `./data/workspace` |
-| `GIT_BIN`        | git executable; 2.41 or newer (`%(ahead-behind)`) | `git`              |
+| Variable               | Meaning                                           | Default            |
+| ---------------------- | ------------------------------------------------- | ------------------ |
+| `WORKSPACE_ROOT`       | Directory for repositories and issue clones (API) | `./data/workspace` |
+| `GIT_BIN`              | git executable; 2.41 or newer (`%(ahead-behind)`) | `git`              |
+| `CODE_DOWNLOAD_MAX_MB` | Largest single file the Code tab downloads (MiB)  | `100`              |
 
 `WORKSPACE_ROOT` is validated at startup (non-empty, no control characters) and resolved to an
 absolute path. The API logs the git version and the root after it starts, and warns if git is
@@ -82,9 +83,12 @@ owner only (`agents` capability).
 | `GET /api/projects/:id/tree?ref&path`                         | Directory entries at a ref                                    |
 | `GET /api/projects/:id/file?ref&path`                         | File content at a ref (`binary`, `tooLarge` flags)            |
 | `GET /api/projects/:id/raw?ref&path`                          | An image, video or PDF at a ref, raw (see [Images](#images))  |
+| `GET /api/projects/:id/raw?ref&path&download=1`               | Any file as an attachment (see [Downloads](#downloads))       |
 | `GET /api/projects/:id/media?kind&branch&q&sort&limit&offset` | Media files of all branches (see [Media tab](#media-tab))     |
 | `GET /api/projects/:id/compare?branch`                        | Branch against `main`: merge base, commits, diff              |
+| `GET /api/projects/:id/diff?commit&from&to&mode&path`         | Diff for review (see [Diffs](#diffs))                         |
 | `GET /api/projects/:id/archive?ref=main`                      | ZIP from `git archive`, `<KEY>-<ref>-<shortsha>.zip`          |
+| `GET /api/projects/:id/archive?ref&path`                      | ZIP of one folder, rooted at it, `<KEY>-<ref>-<folder>.zip`   |
 | `POST /api/issues/:ref/workspace`                             | Create (201) or return (200) the issue's clone and branch     |
 | `POST /api/issues/:ref/workspace/sync`                        | Fetch the issue branch into the bare repository (`{force}`)   |
 | `DELETE /api/issues/:ref/workspace?force`                     | Remove the clone; the branch stays                            |
@@ -108,6 +112,8 @@ and retries do not repeat it),
 | Binary detection         | NUL byte in the first 8000 bytes (as git)        |
 | Patch text of one diff   | 2 MiB, then `truncated`                          |
 | Patch text of one file   | 256 KiB, then `truncated`                        |
+| Patch lines              | 5000 per file, 50 000 per diff, then `truncated` |
+| File downloaded          | `CODE_DOWNLOAD_MAX_MB` (100 MiB), else 413       |
 | Files in one diff        | 1000                                             |
 | File list of one diff    | 4 MiB of `--raw`/`--numstat`, then `truncated`   |
 | Branches listed          | 200                                              |
@@ -141,6 +147,41 @@ Media tab and Markdown can show them. `ref` and `path` are validated exactly lik
 - `X-Content-Type-Options: nosniff` and a `sandbox` CSP, so an SVG opened on its own cannot run
   scripts.
 - Same capability as every other read route (`read`), by session cookie or token.
+
+### Downloads
+
+`GET /api/projects/:id/raw?ref&path&download=1` sends any file of a ref, whatever its type:
+
+- `Content-Disposition: attachment; filename="<ascii>"; filename*=UTF-8''<name>` (RFC 6266 and
+  RFC 5987), so the browser saves it and never renders it.
+- `Content-Type` is the media type for raster images, videos and PDFs and
+  `application/octet-stream` for everything else; SVG, HTML and scripts are always octet-stream.
+- `X-Content-Type-Options: nosniff`, the same `sandbox` CSP as above, `ETag` (blob id, 304 on a
+  match), `Content-Length` and the same cache policy. No ranges (`Accept-Ranges: none`).
+- The body is streamed from `git cat-file` without buffering; files above `CODE_DOWNLOAD_MAX_MB`
+  answer 413 before any content is read. `ref` and `path` are validated like the file route, a
+  directory or missing path is a 404.
+
+`GET /api/projects/:id/archive?ref&path` zips one directory: the tree of `path` at the ref, every
+entry under `<folder>/`, named `<KEY>-<ref>-<folder>.zip` (a full commit id is cut to 12 digits).
+A tree carries no commit time, so the entries get the time of the download. It is audited as
+`project.archive_downloaded` with the `path`.
+
+### Diffs
+
+`GET /api/projects/:id/diff` answers a `RefDiff` (commits, ahead/behind, merge base, the commit
+the diff starts at and the diff itself) in one of three modes:
+
+- `commit=<id>`: the commit against its first parent (the empty tree for a root commit).
+- `from=<ref>&to=<ref>&mode=merge-base` (default, `from` defaults to `main`): the changes of `to`
+  since it split from `from`, like a pull request.
+- `mode=direct`: the tree of `from` against the tree of `to`.
+
+`from`, `to` and `commit` take a branch, a tag or a commit id that a branch or tag reaches; other
+objects are a 404 like unknown refs, names git rejects a 400. `path` restricts the diff to one
+file or directory and gives that file the limits of the whole diff, which is how the Code tab's
+"Show full file diff" works. Binary files are listed with `binary: true` and no patch; the Code tab
+links both versions to the download route.
 
 **Screenshots in issue documents and comments.** Agents commit screenshots under
 `docs/screenshots/<module>/` and embed them in documents, comments and run results with a

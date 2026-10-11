@@ -93,7 +93,7 @@ export function parseBranches(output: string): BranchInfo[] {
   );
 }
 
-interface RawTreeEntry {
+export interface RawTreeEntry {
   mode: string;
   type: TreeEntryType;
   oid: string;
@@ -224,9 +224,44 @@ export function cutText(text: string, maxBytes: number): { text: string; cut: bo
   return { text: lastBreak > 0 ? head.slice(0, lastBreak) : head, cut: true };
 }
 
+/** Keep at most `maxLines` lines of `text`. */
+export function cutLines(text: string, maxLines: number): { text: string; cut: boolean } {
+  let index = -1;
+  for (let line = 0; line < maxLines; line += 1) {
+    index = text.indexOf('\n', index + 1);
+    if (index < 0) return { text, cut: false };
+  }
+  return { text: text.slice(0, Math.max(0, index)), cut: true };
+}
+
+const lineCount = (text: string): number => text.split('\n').length;
+
 export interface DiffLimits {
   maxFiles: number;
   maxFilePatchBytes: number;
+  /** Patch lines of one file, and of all files together; unlimited when unset. */
+  maxFilePatchLines?: number;
+  maxPatchLines?: number;
+}
+
+/**
+ * The hunks of one patch section within the byte and line limits; `linesLeft` is what the whole
+ * diff may still show.
+ */
+function limitedHunks(
+  section: string,
+  limits: DiffLimits,
+  linesLeft: number,
+): { patch: string | null; cut: boolean } {
+  const hunks = hunksOf(section);
+  if (hunks === null) return { patch: null, cut: false };
+  if (linesLeft <= 0) return { patch: null, cut: true };
+  const bytes = cutText(hunks, limits.maxFilePatchBytes);
+  const lines = cutLines(
+    bytes.text,
+    Math.min(limits.maxFilePatchLines ?? Number.POSITIVE_INFINITY, linesLeft),
+  );
+  return { patch: lines.text, cut: bytes.cut || lines.cut };
 }
 
 /** Combine raw changes, numstat and the patch sections into per-file diffs. */
@@ -238,6 +273,7 @@ export function buildFileDiffs(
   limits: DiffLimits,
 ): { files: FileDiff[]; truncated: boolean } {
   let truncated = patchTruncated || raw.length > limits.maxFiles;
+  let linesLeft = limits.maxPatchLines ?? Number.POSITIVE_INFINITY;
   const files = raw.slice(0, limits.maxFiles).map((change, index): FileDiff => {
     const stat = stats[index] ?? { binary: false, additions: 0, deletions: 0 };
     const section = sections[index];
@@ -247,14 +283,10 @@ export function buildFileDiffs(
     if (section === undefined) {
       fileTruncated = patchTruncated && !stat.binary;
     } else if (!stat.binary) {
-      const hunks = hunksOf(section);
-      if (hunks !== null) {
-        const cut = cutText(hunks, limits.maxFilePatchBytes);
-        patch = cut.text;
-        fileTruncated = cut.cut || (patchTruncated && isLastSection);
-      } else {
-        fileTruncated = patchTruncated && isLastSection;
-      }
+      const limited = limitedHunks(section, limits, linesLeft);
+      patch = limited.patch;
+      if (patch !== null) linesLeft -= lineCount(patch);
+      fileTruncated = limited.cut || (patchTruncated && isLastSection);
     }
     if (fileTruncated) truncated = true;
     return {
