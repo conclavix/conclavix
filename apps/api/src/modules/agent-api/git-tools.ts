@@ -18,6 +18,7 @@ import {
   oneLine,
 } from '../workspace/merge.js';
 import type { Workspace } from '../workspace/service.js';
+import { MAX_SQUASH_PATHS } from '../workspace/squash.js';
 import { gitGuarded } from './code-tools.js';
 import { forbidden, type RunScope } from './scope.js';
 
@@ -137,9 +138,71 @@ const actorOf = (scope: RunScope) => ({
   name: scope.agent.name,
 });
 
+interface MergeInput {
+  target: string;
+  sources: string[];
+  base?: string | undefined;
+  message?: string | undefined;
+  squash: boolean;
+  paths?: string[] | undefined;
+}
+
+/** Run merge_branches: no-ff merges, or one squash commit; audits a moved branch. */
+async function runMerge(context: GitToolContext, input: MergeInput) {
+  const { scope, workspace, audit } = context;
+  if (input.paths && !input.squash) {
+    throw new AppError(400, 'invalid_paths', 'paths limits a squash; set squash: true');
+  }
+  const projectId = await checkedProject(context);
+  const issue = await issueOfBranch(context, input.target, true);
+  const common = {
+    sources: input.sources,
+    ...(input.base ? { base: input.base } : {}),
+    author: agentIdentity(scope.agent, workspace.agentEmailDomain),
+    trailers: [
+      `Conclavix-Issue: ${issue.key}`,
+      `Conclavix-Run: ${scope.run._id.toHexString()}`,
+      `Conclavix-Agent: ${oneLine(scope.agent.name)}`,
+    ],
+  };
+  const merge = input.squash
+    ? await workspace.squashIntoIssueBranch(projectId, issue.key, {
+        ...common,
+        message: input.message ?? '',
+        ...(input.paths ? { paths: input.paths } : {}),
+      })
+    : await workspace.mergeIntoIssueBranch(projectId, issue.key, {
+        ...common,
+        ...(input.message ? { message: input.message } : {}),
+      });
+  if (merge.before !== merge.after) {
+    await audit.record({
+      action: 'branch.merged',
+      actor: actorOf(scope),
+      details: {
+        projectId,
+        runId: scope.run._id.toHexString(),
+        issueKey: scope.issue.key,
+        target: merge.target,
+        created: merge.created,
+        before: merge.before,
+        after: merge.after,
+        sources: merge.merges.map((step) => step.source),
+        ...(input.squash ? { squash: true, paths: input.paths ?? null } : {}),
+      },
+    });
+  }
+  const own = issue._id.equals(scope.issue._id);
+  return {
+    ...merge,
+    workingCopy: own
+      ? 'your working copy in this run does not contain the merge; the runner merges it with your work after the run, and your next run starts from it'
+      : 'the next run on that issue starts from the merged branch',
+  };
+}
+
 function registerMergeTool(context: GitToolContext): void {
-  const { server, scope, workspace, audit } = context;
-  server.registerTool(
+  context.server.registerTool(
     'merge_branches',
     {
       description:
@@ -148,6 +211,10 @@ function registerMergeTool(context: GitToolContext): void {
         'to you, of a sub-issue below either, or of an issue delegated from the same issue as ' +
         'yours. sources: existing branches, merged in order, each with its own ' +
         'merge commit by you (no fast-forward); sources the target already contains are skipped. ' +
+        'squash: true instead adds ONE commit on the target tip with the merged tree of all ' +
+        'sources (sources do not become parents) and your message as the whole commit message ' +
+        '(subject line up to 100 characters; Conclavix-* trailers are added for you); paths ' +
+        '(squash only) refuses with out_of_scope if anything outside those directories changes. ' +
         `A missing target is created from base (default ${DEFAULT_BRANCH}; a branch or a commit ` +
         'id on a branch); base is ignored when the target exists. On the first conflict nothing changes and the answer lists the ' +
         'conflicting files: resolve them on one of the branches and merge again. Merging into ' +
@@ -172,48 +239,23 @@ function registerMergeTool(context: GitToolContext): void {
           .string()
           .max(MAX_MERGE_MESSAGE)
           .optional()
-          .describe('Body of each merge commit, below the generated subject'),
+          .describe(
+            'Without squash: body of each merge commit, below the generated subject. With squash ' +
+              '(required): the commit message, e.g. "feat(feedback): add the Feedback module"',
+          ),
+        squash: z
+          .boolean()
+          .default(false)
+          .describe('One commit with the merged tree on the target tip instead of merge commits'),
+        paths: z
+          .array(z.string().min(1).max(200))
+          .min(1)
+          .max(MAX_SQUASH_PATHS)
+          .optional()
+          .describe('Squash only: directories the change must stay in, e.g. ["modules/feedback"]'),
       },
     },
-    async ({ target, sources, base, message }) =>
-      gitGuarded(async () => {
-        const projectId = await checkedProject(context);
-        const issue = await issueOfBranch(context, target, true);
-        const merge = await workspace.mergeIntoIssueBranch(projectId, issue.key, {
-          sources,
-          ...(base ? { base } : {}),
-          ...(message ? { message } : {}),
-          author: agentIdentity(scope.agent, workspace.agentEmailDomain),
-          trailers: [
-            `Conclavix-Issue: ${issue.key}`,
-            `Conclavix-Run: ${scope.run._id.toHexString()}`,
-            `Conclavix-Agent: ${oneLine(scope.agent.name)}`,
-          ],
-        });
-        if (merge.before !== merge.after) {
-          await audit.record({
-            action: 'branch.merged',
-            actor: actorOf(scope),
-            details: {
-              projectId,
-              runId: scope.run._id.toHexString(),
-              issueKey: scope.issue.key,
-              target: merge.target,
-              created: merge.created,
-              before: merge.before,
-              after: merge.after,
-              sources: merge.merges.map((step) => step.source),
-            },
-          });
-        }
-        const own = issue._id.equals(scope.issue._id);
-        return {
-          ...merge,
-          workingCopy: own
-            ? 'your working copy in this run does not contain the merge; the runner merges it with your work after the run, and your next run starts from it'
-            : 'the next run on that issue starts from the merged branch',
-        };
-      }, 'merging'),
+    async (input) => gitGuarded(() => runMerge(context, input), 'merging'),
   );
 }
 
@@ -277,17 +319,20 @@ function registerStatusTool(context: GitToolContext): void {
         'Preview an integration without changing anything (git integration permission): the ' +
         `target branch against ${DEFAULT_BRANCH} (ahead/behind, whether ${DEFAULT_BRANCH} can be ` +
         'fast-forwarded to it) and, for each source, whether the target already contains it and ' +
-        'which files a merge would conflict in. A missing target is previewed from base.',
+        'which files a merge would conflict in. A missing target is previewed from base. With ' +
+        'squash: true also whether all sources merge one after the other and which files (count ' +
+        'and top-level directories) a squash would change.',
       inputSchema: {
         target: branchSchema.describe(`Branch to inspect, e.g. ${ISSUE_BRANCH_PREFIX}CVX-17`),
         sources: z.array(branchSchema).max(MAX_MERGE_SOURCES).default([]),
         base: commitishSchema.default(DEFAULT_BRANCH),
+        squash: z.boolean().default(false).describe('Also preview a squash of all sources'),
       },
     },
-    async ({ target, sources, base }) =>
+    async ({ target, sources, base, squash }) =>
       gitGuarded(async () => {
         const projectId = await checkedProject(context);
-        return workspace.mergeStatus(projectId, target, sources, base);
+        return workspace.mergeStatus(projectId, target, sources, base, { squash });
       }),
   );
 }

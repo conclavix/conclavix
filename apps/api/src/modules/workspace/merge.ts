@@ -229,7 +229,7 @@ export class RepoMerger extends RepoReader {
   }
 
   /** Validate merge sources: distinct existing branches other than the target. */
-  private async sourceTips(
+  protected async sourceTips(
     projectId: string,
     target: string,
     sources: readonly string[],
@@ -247,6 +247,50 @@ export class RepoMerger extends RepoReader {
     for (const source of sources)
       tips.push({ source, sha: await this.branchSha(projectId, source) });
     return tips;
+  }
+
+  /**
+   * Merge `tips` in order onto `start`: a no-ff commit per source the line does not contain yet
+   * (first parent: the line so far), skipping contained ones. The first conflict throws 409
+   * `merge_conflict` naming its files. Writes objects only, never a ref.
+   */
+  protected async mergeChain(
+    projectId: string,
+    target: string,
+    start: string,
+    tips: readonly { source: string; sha: string }[],
+    commit: { author: CommitIdentity; message: (source: string) => string },
+  ): Promise<{ current: string; merges: MergeStep[] }> {
+    let current = start;
+    const merges: MergeStep[] = [];
+    for (const { source, sha } of tips) {
+      if (await this.isAncestor(projectId, sha, current)) {
+        merges.push({ source, sha, commit: null });
+        continue;
+      }
+      const merged = await this.mergeTrees(projectId, current, sha);
+      if (!merged.clean) {
+        throw new AppError(409, 'merge_conflict', `${source} conflicts with ${target}`, {
+          target,
+          source,
+          conflicts: merged.conflicts,
+          moreConflicts: merged.moreConflicts,
+          mergedCleanlyBefore: merges.filter((step) => step.commit).map((step) => step.source),
+          hint: 'nothing was changed; resolve the conflicts on one of the branches and merge again',
+        });
+      }
+      const message = `${commit.message(source)}\n`;
+      const written = await this.writeCommit(
+        projectId,
+        merged.tree,
+        [current, sha],
+        message,
+        commit.author,
+      );
+      merges.push({ source, sha, commit: written });
+      current = written;
+    }
+    return { current, merges };
   }
 
   /**
@@ -279,36 +323,13 @@ export class RepoMerger extends RepoReader {
         : await this.resolveReachable(projectId, input.base ?? DEFAULT_BRANCH);
       const body = cleanMessage(input.message ?? '');
       const trailers = (input.trailers ?? []).map(oneLine).filter((line) => line !== '');
-      let current = startedFrom.sha;
-      const merges: MergeStep[] = [];
-      for (const { source, sha } of tips) {
-        if (await this.isAncestor(projectId, sha, current)) {
-          merges.push({ source, sha, commit: null });
-          continue;
-        }
-        const merged = await this.mergeTrees(projectId, current, sha);
-        if (!merged.clean) {
-          throw new AppError(409, 'merge_conflict', `${source} conflicts with ${target}`, {
-            target,
-            source,
-            conflicts: merged.conflicts,
-            moreConflicts: merged.moreConflicts,
-            mergedCleanlyBefore: merges.filter((step) => step.commit).map((step) => step.source),
-            hint: 'nothing was changed; resolve the conflicts on one of the branches and merge again',
-          });
-        }
-        const subject = `Merge branch '${source}' into ${target}`;
-        const message = [subject, body, trailers.join('\n')].filter((part) => part !== '');
-        const commit = await this.writeCommit(
-          projectId,
-          merged.tree,
-          [current, sha],
-          `${message.join('\n\n')}\n`,
-          input.author,
-        );
-        merges.push({ source, sha, commit });
-        current = commit;
-      }
+      const { current, merges } = await this.mergeChain(projectId, target, startedFrom.sha, tips, {
+        author: input.author,
+        message: (source) => {
+          const subject = `Merge branch '${source}' into ${target}`;
+          return [subject, body, trailers.join('\n')].filter((part) => part !== '').join('\n\n');
+        },
+      });
       if (before !== current) await this.moveBranch(projectId, target, current, before);
       return {
         target,
