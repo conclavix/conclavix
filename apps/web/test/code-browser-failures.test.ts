@@ -138,4 +138,32 @@ describe('file browser failure handling', () => {
     await flush();
     expect(urls).toEqual([`/api/projects/p1/diff?commit=${SHA_B}&path=new.txt&oldPath=old.txt`]);
   });
+
+  it('loads a folder for a new commit while the old commit is still loading', async () => {
+    const releases: (() => void)[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const sha = new URL(url, 'http://x').searchParams.get('ref');
+        if (sha === SHA_A) await new Promise<void>((resolve) => releases.push(resolve));
+        const name = sha === SHA_A ? 'old' : 'fresh';
+        const entries = [{ name, path: name, type: 'tree', mode: '040000', size: null }];
+        return new Response(JSON.stringify({ ref: sha, sha, path: '', entries }), { status: 200 });
+      }),
+    );
+    const props = reactive({
+      projectId: 'p1',
+      listing: { ref: SHA_A, sha: SHA_A, path: 'src', entries: [] },
+    });
+    app = createApp({ render: () => h(CodeFolderTree, props) });
+    app.use(createVuetify()).mount(host);
+    await flush();
+    props.listing = { ref: SHA_B, sha: SHA_B, path: 'src', entries: [] };
+    await flush();
+    for (const release of releases) release();
+    await flush();
+    const tree = host.querySelector('[data-test="folder-tree"]')?.textContent ?? '';
+    expect(tree).toContain('fresh');
+    expect(tree).not.toContain('old');
+  });
 });

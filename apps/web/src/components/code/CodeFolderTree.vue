@@ -10,7 +10,8 @@ const emit = defineEmits<{ open: [path: string] }>();
 /** Subfolders of every folder loaded so far, for the commit in `loadedFor`. */
 const children = reactive(new Map<string, string[]>());
 const open = reactive(new Set<string>());
-const loading = reactive(new Set<string>());
+/** Folders being loaded, with the commit key they are loaded for. */
+const loading = reactive(new Map<string, string>());
 /** Folders whose listing failed; they stay expandable and the next expand tries again. */
 const failed = reactive(new Set<string>());
 let loadedFor = '';
@@ -20,9 +21,9 @@ const subfolders = (listing: TreeListing) =>
 
 /** Load the subfolders of `dir` once; a failure is marked on the folder and not cached. */
 async function load(dir: string): Promise<void> {
-  if (children.has(dir) || loading.has(dir) || !props.listing) return;
+  if (children.has(dir) || loading.get(dir) === loadedFor || !props.listing) return;
   const key = loadedFor;
-  loading.add(dir);
+  loading.set(dir, key);
   failed.delete(dir);
   try {
     const listing = await codeApi.tree(props.projectId, props.listing.sha, dir);
@@ -30,7 +31,7 @@ async function load(dir: string): Promise<void> {
   } catch {
     if (key === loadedFor) failed.add(dir);
   } finally {
-    loading.delete(dir);
+    if (loading.get(dir) === key) loading.delete(dir);
   }
 }
 
@@ -44,6 +45,7 @@ watch(
       children.clear();
       open.clear();
       failed.clear();
+      loading.clear();
     }
     children.set(listing.path, subfolders(listing));
     const ancestors = ancestorsOf(listing.path);
