@@ -26,6 +26,7 @@ import {
   parseRawDiff,
   splitPatch,
   toTreeEntries,
+  type RawTreeEntry,
 } from './parse.js';
 import {
   DIFF_FLAGS,
@@ -107,9 +108,16 @@ export class RepoReader extends RepoBase {
 
   /**
    * The diff between two resolved commits (or the empty tree), with size limits. `paths`
-   * restricts it to those files or directories (literal pathspecs).
+   * restricts it to those files or directories (literal pathspecs); `full` gives one file the
+   * limits of the whole diff.
    */
-  async diff(projectId: string, from: string, to: string, paths: string[] = []): Promise<Diff> {
+  async diff(
+    projectId: string,
+    from: string,
+    to: string,
+    paths: string[] = [],
+    options: { full?: boolean } = {},
+  ): Promise<Diff> {
     if (!OBJECT_ID.test(from) || !OBJECT_ID.test(to)) throw new Error('unresolved diff range');
     for (const path of paths) {
       assertRepoPath(path);
@@ -139,7 +147,12 @@ export class RepoReader extends RepoBase {
       stats,
       splitPatch(patch.stdout.toString('utf8')),
       patch.truncated,
-      { maxFiles: this.limits.maxDiffFiles, maxFilePatchBytes: this.limits.maxFilePatchBytes },
+      {
+        maxFiles: this.limits.maxDiffFiles,
+        maxFilePatchBytes: options.full ? this.limits.maxPatchBytes : this.limits.maxFilePatchBytes,
+        maxFilePatchLines: options.full ? this.limits.maxPatchLines : this.limits.maxFilePatchLines,
+        maxPatchLines: this.limits.maxPatchLines,
+      },
     );
     return { ...result, truncated: result.truncated || raw.truncated || numstat.truncated };
   }
@@ -156,13 +169,14 @@ export class RepoReader extends RepoBase {
   /**
    * Compare two resolved commits the way a pull request does: merge base, ahead/behind, the
    * commits `head` has that `base` lacks, and the diff from the merge base to `head`, optionally
-   * restricted to `paths`.
+   * restricted to `paths`. `direct` diffs from `base` itself instead of the merge base; `full`
+   * lifts the per-file limits (see `diff`).
    */
   async compareCommits(
     projectId: string,
     base: ResolvedRef,
     head: ResolvedRef,
-    options: { paths?: string[] } = {},
+    options: { paths?: string[]; direct?: boolean; full?: boolean } = {},
   ): Promise<BranchComparison> {
     if (!OBJECT_ID.test(base.sha) || !OBJECT_ID.test(head.sha)) {
       throw new Error('unresolved comparison');
@@ -198,12 +212,22 @@ export class RepoReader extends RepoBase {
       ahead: ahead ?? 0,
       behind: behind ?? 0,
       commits: parseCommitLog(log),
-      diff: await this.diff(projectId, mergeBase ?? EMPTY_TREE, head.sha, options.paths),
+      diff: await this.diff(
+        projectId,
+        options.direct ? base.sha : (mergeBase ?? EMPTY_TREE),
+        head.sha,
+        options.paths,
+        { full: options.full ?? false },
+      ),
     };
   }
 
   /** The ls-tree entry of `path` in commit `sha`, or null when the path does not exist there. */
-  private async entryAt(projectId: string, sha: string, path: string) {
+  protected async entryAt(
+    projectId: string,
+    sha: string,
+    path: string,
+  ): Promise<RawTreeEntry | null> {
     assertRepoPath(path);
     const output = await this.text(projectId, [
       'ls-tree',
@@ -290,7 +314,10 @@ export class RepoReader extends RepoBase {
     return stdout;
   }
 
-  /** A ZIP of `ref` streamed from `git archive`, with every path under `prefix/`. */
+  /**
+   * A ZIP of a commit or tree streamed from `git archive`, with every path under `prefix/`. A tree
+   * (a folder) carries no commit time, so its entries get the current time.
+   */
   async archive(projectId: string, sha: string, prefix: string): Promise<Readable> {
     if (!OBJECT_ID.test(sha) || !/^[A-Za-z0-9._-]+$/.test(prefix)) {
       throw new Error('invalid archive arguments');

@@ -201,16 +201,19 @@ describe('ProjectCodeTab', () => {
         content: '# Demo\n',
       };
     }
-    if (url.includes('/compare')) {
+    if (url.includes('/diff')) {
       return {
-        base: 'main',
-        head: 'cvx/CVX-1',
-        baseSha: 'a',
-        headSha: 'b',
-        mergeBase: 'a',
+        mode: 'merge-base',
+        from: 'main',
+        to: 'cvx/CVX-1',
+        fromSha: 'a'.repeat(40),
+        toSha: 'b'.repeat(40),
+        mergeBase: 'a'.repeat(40),
+        diffBase: 'a'.repeat(40),
         ahead: 1,
         behind: 0,
         commits: [],
+        path: null,
         diff: { files: [fileDiff('README.md', { status: 'added' })], truncated: false },
       };
     }
@@ -281,7 +284,7 @@ describe('ProjectCodeTab', () => {
       '/api/projects/p1/tree?ref=cvx%2FCVX-1&path=',
     ]);
     expect(host.querySelector('[data-test="file-path"]')?.textContent).toBe('README.md');
-    expect(host.querySelector('[data-test="file-viewer"]')?.textContent).toContain('# Demo');
+    expect(host.querySelector('[data-test="file-markdown"] h1')?.textContent).toBe('Demo');
     expect(host.querySelector('[data-test="code-empty"]')).toBeNull();
   });
 
@@ -356,8 +359,8 @@ describe('ProjectCodeTab', () => {
     await mount('/projects/CVX?branch=cvx/CVX-1');
     host.querySelector<HTMLElement>('[data-test="code-view-compare"]')?.click();
     await flush();
-    expect(requests).toContain('/api/projects/p1/compare?branch=cvx%2FCVX-1');
-    expect(host.querySelector('[data-test="compare-view"]')?.textContent).toContain(
+    expect(requests).toContain('/api/projects/p1/diff?from=main&to=cvx%2FCVX-1&mode=merge-base');
+    expect(host.querySelector('[data-test="compare-summary"]')?.textContent).toContain(
       '1 commits ahead',
     );
     expect(host.querySelectorAll('[data-test="diff-file"]')).toHaveLength(1);

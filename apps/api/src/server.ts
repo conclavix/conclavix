@@ -34,6 +34,7 @@ async function main(): Promise<void> {
   const workspace = new Workspace(config.WORKSPACE_ROOT, {
     gitBin: config.GIT_BIN,
     agentEmailDomain: config.AGENT_EMAIL_DOMAIN,
+    limits: { maxDownloadBytes: config.CODE_DOWNLOAD_MAX_MB * 1024 * 1024 },
   });
   const app = await buildApp({
     version: process.env['npm_package_version'] ?? '0.0.0',

@@ -1,13 +1,13 @@
-import type { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
+  archiveQuerySchema,
   commitIdSchema,
   commitLogQuerySchema,
   compareQuerySchema,
   fileQuerySchema,
   mediaContentType,
   mediaQuerySchema,
-  refQuerySchema,
+  rawQuerySchema,
   removeWorkspaceQuerySchema,
   syncBranchSchema,
   treeQuerySchema,
@@ -19,6 +19,13 @@ import type { AuditLog } from '../audit/audit.js';
 import { actorOf } from '../auth/principal.js';
 import { matchesEtag } from '../avatars/routes.js';
 import { findIssueByRef } from '../issues/queries.js';
+import {
+  RAW_CSP,
+  rawCacheControl,
+  registerDiffRoute,
+  sendDownload,
+  streamTracker,
+} from './browse-routes.js';
 import { pageMedia, type MediaScan } from './media.js';
 import { recordIssueWorkspace } from './record.js';
 import type { Workspace } from './service.js';
@@ -39,6 +46,23 @@ interface RefParams {
 export function archiveBaseName(projectKey: string, ref: string, sha: string): string {
   const safeRef = ref.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '') || 'ref';
   return `${projectKey}-${safeRef}-${sha.slice(0, 12)}`;
+}
+
+const safeName = (value: string): string =>
+  value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
+
+/**
+ * Names of a folder ZIP: the file `<KEY>-<ref>-<folder>` (a long commit id cut to 12 digits) and
+ * the root directory inside it, named after the folder.
+ */
+export function folderArchiveNames(
+  projectKey: string,
+  ref: string,
+  path: string,
+): { file: string; root: string } {
+  const root = safeName(path.slice(path.lastIndexOf('/') + 1)) || 'folder';
+  const shortRef = /^[0-9a-f]{13,64}$/.test(ref) ? ref.slice(0, 12) : safeName(ref) || 'ref';
+  return { file: `${projectKey}-${shortRef}-${root}`, root };
 }
 
 interface RouteContext {
@@ -103,9 +127,6 @@ function registerReadRoutes({ app, project }: RouteContext): void {
   });
 }
 
-/** A full commit id: content behind it never changes, so the browser may keep it. */
-const FULL_COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-
 /**
  * The single byte range of a `Range` header for a body of `size` bytes: null to send the whole
  * body (no header, several ranges or another unit), 'unsatisfiable' for a range outside it.
@@ -135,12 +156,14 @@ export function parseByteRange(
  * Raw media from the repository for the Code tab, the Media tab and `repo:` images in Markdown:
  * images and videos inline, PDFs as a download only. The ETag is the blob id, so a file that did
  * not change answers 304 on every branch and commit. A single byte range is honoured, so videos
- * can seek.
+ * can seek. With `download=1` any file is sent as an attachment instead (see `sendDownload`).
  */
 function registerRawRoute({ app, project }: RouteContext): void {
+  const track = streamTracker(app);
   app.get<{ Params: IdParams }>('/api/projects/:id/raw', async (request, reply) => {
     const { ws, id } = await project(request);
-    const query = parse(fileQuerySchema, request.query);
+    const { download, ...query } = parse(rawQuerySchema, request.query);
+    if (download) return sendDownload(request, reply, { ws, id, query, track });
     const contentType = mediaContentType(query.path);
     if (!contentType) {
       throw new AppError(
@@ -152,15 +175,10 @@ function registerRawRoute({ app, project }: RouteContext): void {
     const blob = await ws.blob(id, query.ref, query.path);
     reply
       .header('etag', `"${blob.oid}"`)
-      .header(
-        'cache-control',
-        FULL_COMMIT_ID.test(query.ref)
-          ? 'private, max-age=31536000, immutable'
-          : 'private, no-cache',
-      )
+      .header('cache-control', rawCacheControl(query.ref))
       .header('accept-ranges', 'bytes')
       .header('x-content-type-options', 'nosniff')
-      .header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+      .header('content-security-policy', RAW_CSP);
     if (contentType === 'application/pdf') {
       const name = query.path
         .slice(query.path.lastIndexOf('/') + 1)
@@ -190,27 +208,38 @@ function registerRawRoute({ app, project }: RouteContext): void {
   });
 }
 
-/** The ZIP download of a ref, audited; running downloads are cut off when the app closes. */
+/**
+ * The ZIP download of a ref, or with `path` of one directory in it (rooted at the folder name),
+ * audited; running downloads are cut off when the app closes.
+ */
 function registerArchiveRoute({ app, audit, project }: RouteContext): void {
-  const running = new Set<Readable>();
-  app.addHook('preClose', async () => {
-    for (const stream of running) stream.destroy();
-  });
+  const track = streamTracker(app);
   app.get<{ Params: IdParams }>('/api/projects/:id/archive', async (request, reply) => {
     const { ws, id, key } = await project(request);
-    const { ref } = parse(refQuerySchema, request.query);
+    const { ref, path } = parse(archiveQuerySchema, request.query);
     const resolved = await ws.resolveRef(id, ref);
-    const name = archiveBaseName(key, ref, resolved.sha);
+    let tree = resolved.sha;
+    let name = archiveBaseName(key, ref, resolved.sha);
+    let root = name;
+    if (path !== '') {
+      tree = await ws.directoryTree(id, resolved.sha, path);
+      ({ file: name, root } = folderArchiveNames(key, ref, path));
+    }
     await audit.record({
       action: 'project.archive_downloaded',
       actor: actorOf(request.principal),
       ip: request.ip,
-      details: { projectId: id, projectKey: key, ref, sha: resolved.sha },
+      details: {
+        projectId: id,
+        projectKey: key,
+        ref,
+        sha: resolved.sha,
+        ...(path ? { path } : {}),
+      },
     });
-    const stream = await ws.archive(id, resolved.sha, name);
+    const stream = await ws.archive(id, tree, root);
     stream.on('error', (error) => request.log.error({ err: error }, 'project archive failed'));
-    running.add(stream);
-    stream.on('close', () => running.delete(stream));
+    track(stream);
     return reply
       .header('content-type', 'application/zip')
       .header('content-disposition', `attachment; filename="${name}.zip"`)
@@ -312,6 +341,7 @@ export function registerWorkspaceRoutes(
 
   const context: RouteContext = { app, database, audit, required, project };
   registerReadRoutes(context);
+  registerDiffRoute(app, project);
   registerRawRoute(context);
   registerArchiveRoute(context);
   registerIssueWorkspaceRoutes(context);

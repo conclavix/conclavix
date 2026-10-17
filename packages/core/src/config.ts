@@ -57,6 +57,8 @@ const baseConfigSchema = z.object({
     .refine((value) => !hasControlCharacter(value), 'must not contain control characters')
     .default('./data/workspace'),
   GIT_BIN: z.string().min(1).default('git'),
+  /** Largest single file the Code tab downloads (`GET /raw?download=1`), in MiB. */
+  CODE_DOWNLOAD_MAX_MB: z.coerce.number().int().min(1).max(10240).default(100),
   /** Domain of the no-reply addresses agents commit and merge with: `agent-<id>@<domain>`. */
   AGENT_EMAIL_DOMAIN: z
     .string()

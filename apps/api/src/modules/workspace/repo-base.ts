@@ -2,7 +2,13 @@ import { randomBytes } from 'node:crypto';
 import { chmod, lstat, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Readable } from 'node:stream';
-import { DEFAULT_BRANCH, MAX_RAW_BYTES, issueKeySchema, repoPathSchema } from '@conclavix/core';
+import {
+  DEFAULT_BRANCH,
+  DEFAULT_DOWNLOAD_MAX_BYTES,
+  MAX_RAW_BYTES,
+  issueKeySchema,
+  repoPathSchema,
+} from '@conclavix/core';
 import { AppError, notFound } from '../../errors.js';
 import { Git, GitError } from './git.js';
 import { DEFAULT_AGENT_EMAIL_DOMAIN } from './identity.js';
@@ -21,10 +27,15 @@ export interface WorkspaceLimits {
   maxFileBytes: number;
   /** Largest file the raw route serves. */
   maxRawBytes: number;
+  /** Largest file the download mode of the raw route streams. */
+  maxDownloadBytes: number;
   /** Total patch text of one diff. */
   maxPatchBytes: number;
   /** Patch text of one file within a diff. */
   maxFilePatchBytes: number;
+  /** Patch lines of one diff, and of one file within it. */
+  maxPatchLines: number;
+  maxFilePatchLines: number;
   /** Output of the file list (`--raw`, `--numstat`) of one diff; the list is cut there. */
   maxListBytes: number;
   /** Files listed in one diff. */
@@ -53,8 +64,11 @@ export interface WorkspaceLimits {
 export const DEFAULT_LIMITS: WorkspaceLimits = {
   maxFileBytes: 1024 * 1024,
   maxRawBytes: MAX_RAW_BYTES,
+  maxDownloadBytes: DEFAULT_DOWNLOAD_MAX_BYTES,
   maxPatchBytes: 2 * 1024 * 1024,
   maxFilePatchBytes: 256 * 1024,
+  maxPatchLines: 50_000,
+  maxFilePatchLines: 5000,
   maxListBytes: 4 * 1024 * 1024,
   maxDiffFiles: 1000,
   maxBranches: 200,
